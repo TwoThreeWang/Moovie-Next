@@ -1,0 +1,14 @@
+{{define "content"}}<main class="admin">{{template "admin_nav" .}}
+<div class="chips pad"><a class="chip-l" href="/admin/feedback?status=open"{{if eq .Status "open"}} aria-current="true"{{end}}>待处理</a>
+<a class="chip-l" href="/admin/feedback?status=resolved"{{if eq .Status "resolved"}} aria-current="true"{{end}}>已解决</a>
+<a class="chip-l" href="/admin/feedback?status=rejected"{{if eq .Status "rejected"}} aria-current="true"{{end}}>未采纳</a>
+<a class="chip-l" href="/admin/feedback?status=all"{{if eq .Status "all"}} aria-current="true"{{end}}>全部</a></div>
+<ul class="fb-list pad">{{range .List}}<li class="card-panel">
+<p><span class="tag">{{.KindLabel}}</span><b>{{if .Username}}{{.Username}}{{else}}已注销用户{{end}}</b> <time>{{timeago .CreatedAt}}</time></p>
+<p>{{.Content}}</p>{{if .PageURL}}<p class="dim">相关页面：{{.PageURL}}</p>{{end}}
+<form class="form" method="post" action="/admin/feedback/{{.ID}}">{{template "csrf" $.CSRF}}
+<textarea name="reply" rows="2" maxlength="2000" placeholder="回复（用户能看到）">{{.Reply}}</textarea>
+<div class="form-actions"><select name="status"><option value="open"{{if eq .Status "open"}} selected{{end}}>待处理</option><option value="resolved"{{if eq .Status "resolved"}} selected{{end}}>已解决</option><option value="rejected"{{if eq .Status "rejected"}} selected{{end}}>未采纳</option></select><button class="btn btn-primary">保存</button></div></form></li>
+{{else}}<li class="empty">没有反馈</li>{{end}}</ul>
+{{if .Next}}<nav class="pager"><a class="btn btn-glass" href="{{.Next}}">下一页</a></nav>{{end}}
+</main>{{end}}

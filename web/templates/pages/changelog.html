@@ -1,0 +1,12 @@
+{{define "content"}}<main class="narrow">
+<header class="page-head"><h1 class="page-title">更新记录</h1><p class="hint">所有重要的更新、修改和修复都记录在这里。</p></header>
+<div class="changelog">{{range .Releases}}
+<section class="release{{if .Major}} release-major{{end}}" id="v{{.Version}}">
+<h2 class="release-version">v{{.Version}} <small>{{.Date}}</small></h2>
+<p class="{{if .Major}}release-summary{{else}}release-lead{{end}}"><strong>{{.Lead}}</strong>{{.Summary}}</p>
+{{range .Groups}}<h3>{{index $.Kinds .Kind}}</h3>
+<ul>{{range .Items}}<li><strong>{{.Title}}</strong>：{{.Body}}</li>{{end}}</ul>{{end}}
+</section>{{end}}
+</div>
+{{template "footer" .}}
+</main>{{end}}

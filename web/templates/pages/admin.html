@@ -1,0 +1,34 @@
+{{define "content"}}<main class="admin">{{template "admin_nav" .}}
+<div class="stats pad">
+<div><b>{{.Users}}</b><span>用户</span></div>
+<div><b>{{.MediaTotal}}</b><span>作品</span></div>
+<div><b>{{.MediaComplete}}</b><span>资料完整</span></div>
+<div><b>{{.MediaHidden}}</b><span>已隐藏</span></div>
+<div><b>{{.MediaEmbedded}}</b><span>有向量</span></div>
+<div><b>{{.Shorts}}</b><span>其中短剧（{{.ShortsComplete}} 部资料完整，{{.ShortsWaiting}} 部待抓）</span></div>
+<div><b>{{.OpenFeedback}}</b><span>待处理反馈</span></div>
+<div><b>{{.FingerprintsConfirmed}}</b><span>已确认广告指纹</span></div>
+<div><b>{{.Fingerprints}}</b><span>指纹总数（{{.FingerprintsRejected}} 个已否认）</span></div>
+</div>
+{{if .Trends}}<section class="card-panel trends30"><h2>最近 30 天</h2>
+<div class="spark-grid">{{range .Trends}}<div class="spark-card"><div class="spark-head"><b>{{.Label}}</b><span class="dim">今天 {{.Today}} · 30 天共 {{.Total}}</span></div>
+<div class="spark" role="img" aria-label="{{.Label}}：最近 30 天每天的数量">{{range .Bars}}<i style="--h:{{.}}%"></i>{{end}}</div></div>{{end}}</div></section>{{end}}
+<div class="admin-panels">
+<section class="card-panel"><h2>外部来源</h2>
+<ul class="plain"><li>豆瓣：已启用（主要来源）· 请求节奏：{{.DoubanPace}}{{if .DoubanProxy}} · 通过 DOUBAN_PROXY 出站{{end}}</li><li>TMDB：{{if .TMDB}}已启用{{else}}未配置 TMDB_API_TOKEN，没有剧照和分集信息{{end}}</li><li>AI 语义描述：{{if .AI}}已启用{{else}}未配置 AI_BASE_URL / AI_MODEL，新作品不写描述，也就没有向量{{end}}</li>
+<li>红果短剧：请求节奏：{{.HongguoPace}} · {{if .ShortSync}}每天抓榜单、重点剧目和新上架的短剧，每周抓分类{{else}}定期抓取已关闭（HONGGUO_SYNC=false），只在有人打开时抓单部{{end}}</li>
+<li>向量：{{if .Embedder}}已启用{{else}}未配置 EMBEDDING_BASE_URL，推荐按类型和热门榜生成{{end}}</li>
+<li>发信：{{if .Mail}}已启用{{else}}未配置 SMTP，不能注册和找回密码{{end}}</li>
+<li>Telegram 图床：{{if .Telegram}}已启用，已备份 {{.Mirrored}} 张图片（{{printf "%.1f" .MirroredMB}} MB）{{else}}未配置 TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID，图片每次从原站取{{end}}</li></ul></section>
+<section class="card-panel"><h2>任务队列</h2>
+<p>排队 {{index .Jobs "queued"}} · 运行中 {{index .Jobs "running"}} · 完成 {{index .Jobs "done"}} · 失败 {{index .Jobs "failed"}}</p>
+{{if .Backlog}}<p class="muted">{{.Backlog}}</p>{{end}}
+{{if .ShortBacklog}}<p class="muted">{{.ShortBacklog}}</p>{{end}}
+<div class="form-actions">
+<form method="post" action="/admin/tasks">{{template "csrf" .CSRF}}<input type="hidden" name="task" value="charts"><button class="btn btn-primary">刷新热门榜单</button></form>
+<form method="post" action="/admin/tasks">{{template "csrf" .CSRF}}<input type="hidden" name="task" value="sweep"><button class="btn btn-glass">补全缺失的资料和向量</button></form>
+{{if .ShortSync}}<form method="post" action="/admin/tasks">{{template "csrf" .CSRF}}<input type="hidden" name="task" value="short-lists"><button class="btn btn-glass">刷新短剧榜单和重点剧目</button></form>
+<form method="post" action="/admin/tasks">{{template "csrf" .CSRF}}<input type="hidden" name="task" value="short-sitemaps"><button class="btn btn-glass">收录新上架的短剧</button></form>{{end}}
+</div></section>
+</div>
+</main>{{end}}

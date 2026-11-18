@@ -1,0 +1,14 @@
+{{define "content"}}<main class="admin">{{template "admin_nav" .}}
+<div class="chips pad">{{range .Kinds}}<a class="chip-l" href="/admin/content?type={{.Key}}"{{if eq $.Kind .Key}} aria-current="true"{{end}}>{{.Label}}</a>{{end}}</div>
+<form class="form inline pad" method="get"><input type="hidden" name="type" value="{{.Kind}}"><input name="q" value="{{.Query}}" placeholder="搜内容或用户名"><button class="btn btn-glass">搜索</button></form>
+<form method="post" action="/admin/content/delete" id="content-form" data-confirm="删除选中的内容？{{if ne .Kind "danmaku"}}作者会收到通知。{{end}}">{{template "csrf" .CSRF}}<input type="hidden" name="type" value="{{.Kind}}">
+<div class="table-wrap"><table class="table"><thead><tr><th><input type="checkbox" data-check-all aria-label="全选"></th><th>内容</th><th>作者</th><th>作品</th><th>时间</th></tr></thead><tbody>
+{{range .Items}}<tr><td><input type="checkbox" name="ids" value="{{.ID}}" aria-label="选中"></td>
+<td class="content-text">{{.Text}}{{if .Where}}<div class="dim">{{.Where}}</div>{{end}}</td>
+<td><a href="/admin/users?q={{.Username}}">{{.Username}}</a>{{if eq .Restriction "mute"}} <span class="tag status-open">禁言</span>{{else if eq .Restriction "ban"}} <span class="tag status-rejected">封禁</span>{{end}}</td>
+<td>{{if .MediaID}}<a href="/m/{{.MediaID}}">{{.MediaTitle}}</a>{{else}}{{.MediaTitle}}{{end}}</td><td>{{timeago .At}}</td></tr>
+{{else}}<tr><td colspan="5" class="empty">没有内容</td></tr>{{end}}</tbody></table></div>
+{{if .Items}}<div class="bulk-bar pad"><input name="reason" maxlength="100" placeholder="删除原因（会告诉作者，可以不填）"{{if eq .Kind "danmaku"}} hidden{{end}}><button class="btn btn-glass danger">删除选中的</button>
+<span class="hint">要禁言或封禁某个人，点作者名到用户页操作。</span></div>{{end}}
+</form>
+{{template "admin_pager" .}}</main>{{end}}

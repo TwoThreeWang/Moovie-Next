@@ -1,0 +1,9 @@
+{{define "content"}}<main>
+<header class="page-head"><p class="kicker"><a href="/list">片单</a></p><h1 class="page-title">{{.Collection.Title}}</h1>
+{{if .Collection.Description}}<p class="lead">{{.Collection.Description}}</p>{{end}}<p class="hint">{{.Collection.Count}} 部 · 更新于 {{date .Collection.UpdatedAt}}</p>
+<p><button class="btn btn-glass" type="button" data-share data-card="{{json .Card}}"><svg class="i"><use href="#i-share"/></svg>分享片单</button></p></header>
+{{if .Cards}}<div class="grid">{{range .Cards}}{{template "card" .}}{{end}}</div>{{else}}<p class="empty">这个片单还是空的。</p>{{end}}
+{{if .Related}}<section class="row"><div class="row-head"><h2 class="row-title">相关片单</h2></div>
+<div class="rail rail-banner">{{range .Related}}{{template "collection_card" .}}{{end}}</div></section>{{end}}
+{{template "footer" .}}
+</main>{{end}}

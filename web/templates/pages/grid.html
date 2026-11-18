@@ -1,0 +1,8 @@
+{{define "content"}}<main>
+<header class="page-head">{{if .BackLink}}<p class="kicker"><a href="{{.BackLink}}">{{.BackText}}</a></p>{{end}}<h1 class="page-title">{{.Heading}}</h1>{{if .Lead}}<p class="hint">{{.Lead}}</p>{{end}}</header>
+{{if .Wide}}<div class="grid grid-wide" data-continue-list>{{range .Wide}}{{template "card_wide" .}}{{end}}</div>
+{{else if .Cards}}<div class="grid">{{range .Cards}}{{template "card" .}}{{end}}</div>
+{{else}}<p class="empty" data-empty>{{.Empty}}</p>{{end}}
+{{template "pager" .}}
+{{template "footer" .}}
+</main>{{end}}

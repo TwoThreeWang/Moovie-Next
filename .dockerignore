@@ -1,0 +1,8 @@
+# 构建镜像只需要源码。本地的配置、数据、编译产物都不要带进去。
+.env
+data/
+bin/
+tmp/
+*.test
+deploy/
+web/jstest/

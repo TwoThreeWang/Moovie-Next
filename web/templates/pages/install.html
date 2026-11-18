@@ -1,0 +1,62 @@
+{{define "content"}}<main class="install-page{{if .Bare}} doc{{end}}">
+{{if .Bare}}<a class="nav-brand" href="/"><img class="brand-icon" src="/static/img/apple-touch-icon.png" width="40" height="40" alt=""><span class="brand-t">{{.Site}}</span></a>{{end}}
+<header class="page-head"><h1 class="page-title">添加到桌面</h1></header>
+<div class="install-hero"><img src="/static/img/apple-touch-icon.png" width="72" height="72" loading="lazy" decoding="async" alt="">
+<p>把 {{.Site}} 添加到手机桌面后，点图标就能打开，全屏显示、没有地址栏，用起来和 App 一样。不用下载安装包，也不占多少空间。</p></div>
+
+<section class="card-panel install-done"><h2>你已经在用桌面版了</h2><p class="hint">从桌面图标打开时就是全屏模式。登录账号后，播放源和观看记录会自动同步过来。</p></section>
+
+<div class="install-todo">
+<p class="hint pad" id="detected"></p>
+<div class="chips pad install-tabs" role="tablist">
+<a class="chip-l" href="#ios" data-guide-tab="ios">iPhone / iPad</a>
+<a class="chip-l" href="#android" data-guide-tab="android">安卓手机</a>
+<a class="chip-l" href="#desktop" data-guide-tab="desktop">电脑</a>
+<a class="chip-l" href="#inapp" data-guide-tab="inapp">在微信、QQ 里</a>
+</div>
+
+<section class="card-panel" id="ios" data-guide="ios"><h2>iPhone / iPad</h2>
+<p class="notice" id="ios-other" hidden>你现在用的不是 Safari。iOS 16.4 以上的 Chrome、Edge 也能添加（步骤一样，分享按钮在地址栏右侧）；版本较老的话，请复制网址到 Safari 里打开。</p>
+<ol class="steps">
+<li><div><b>用 Safari 打开本站</b><p>在微信、QQ 里打开的，先点右上角 <span class="key">···</span>，选「在 Safari 中打开」。</p></div></li>
+<li><div><b>点分享按钮</b><p>iPhone 在屏幕底部中间 <span class="key"><svg class="i"><use href="#i-share"/></svg>分享</span>；iPad 在右上角。新版 iOS 地址栏收起时，先点一下底部的地址栏让工具栏出来。</p></div></li>
+<li><div><b>选「添加到主屏幕」</b><p>在弹出的菜单里往下滑就能看到。没有的话，滑到最下面点「编辑操作」，把它加进来。</p></div></li>
+<li><div><b>点右上角「添加」</b><p>桌面上会出现小牛图标，以后从这里打开。</p></div></li>
+<li><div><b>第一次打开：登录一次</b><p>苹果让桌面版和 Safari 分开保存数据，所以桌面版要再登录一次。登录后播放源和观看记录会自动同步过来，不用别的操作。</p></div></li>
+</ol></section>
+
+<section class="card-panel" id="android" data-guide="android" hidden><h2>安卓手机</h2>
+<p><button class="btn btn-primary" type="button" data-install hidden>一键添加到桌面</button></p>
+<p class="notice" id="install-result" hidden>已经添加好了，可以回到桌面找小牛图标打开。</p>
+<ol class="steps">
+<li><div><b>用 Chrome 或手机自带的浏览器打开本站</b><p>在微信、QQ 里打开的，先点右上角 <span class="key">···</span>，选「在浏览器打开」。</p></div></li>
+<li><div><b>打开浏览器菜单</b><p>Chrome 点右上角 <span class="key">⋮</span>；华为、小米、OPPO、vivo 的自带浏览器点底部的 <span class="key">☰</span> 或「菜单」。</p></div></li>
+<li><div><b>选「添加到主屏幕」</b><p>不同浏览器叫法不同，可能是「安装应用」「添加到桌面」「添加快捷方式」。</p></div></li>
+<li><div><b>确认添加</b><p>如果提示没有权限、或者桌面上没出现图标：打开手机的「设置 → 应用 → 浏览器 → 权限」，允许「桌面快捷方式」，再试一次。</p></div></li>
+</ol>
+<p class="hint">安卓上桌面版和浏览器共用登录状态和播放源，添加后直接就能用。</p></section>
+
+<section class="card-panel" id="desktop" data-guide="desktop" hidden><h2>电脑</h2>
+<p><button class="btn btn-primary" type="button" data-install hidden>安装到电脑</button></p>
+<ol class="steps">
+<li><div><b>Chrome、Edge</b><p>地址栏右侧有一个安装图标，点它；或者打开菜单，选「投放、保存和分享 → 将网页作为应用安装」（Edge 是「应用 → 将此站点作为应用安装」）。</p></div></li>
+<li><div><b>Mac 上的 Safari</b><p>macOS 14 以上：菜单栏「文件 → 添加到程序坞」。</p></div></li>
+</ol></section>
+
+<section class="card-panel" id="inapp" data-guide="inapp" hidden><h2>在微信、QQ、微博里打开的</h2>
+<p>这些 App 内置的浏览器不能把网页添加到桌面，也可能限制视频播放。</p>
+<ol class="steps">
+<li><div><b>点右上角 <span class="key">···</span></b><p>有的 App 是右上角的分享图标。</p></div></li>
+<li><div><b>选「在浏览器打开」</b><p>iPhone 上显示为「在 Safari 中打开」。</p></div></li>
+<li><div><b>按上面对应手机的步骤添加</b><p>打开后回到这一页，会自动显示对应的步骤。</p></div></li>
+</ol></section>
+<section class="card-panel"><h2>添加后有什么不同</h2>
+<ul class="benefits">
+<li><b>全屏</b><span>没有地址栏和工具栏，画面更大</span></li>
+<li><b>一键打开</b><span>在桌面上，和其他 App 放在一起</span></li>
+<li><b>启动更快</b><span>图标、样式和脚本存在手机上，不用每次重新下载</span></li>
+<li><b>断网有提示</b><span>没网时显示提示页，不会白屏</span></li>
+</ul></section>
+</div>
+{{template "footer" .}}
+</main>{{end}}

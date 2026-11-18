@@ -1,0 +1,55 @@
+# mihomo（Clash.Meta 内核）配置：把你买的 Clash 订阅变成一个本机代理，只给豆瓣的请求用。
+#
+# 用法：
+#   1. 复制成 config.yaml，把下面 url 换成你的 Clash 订阅链接（这个文件里有订阅地址，不要提交到仓库）。
+#   2. 用 deploy/mihomo/docker-compose.yml 启动：单独的容器、单独的网络，不影响宿主机。
+#   3. 网站和 worker 的容器加入 moovie-egress 网络，设置 DOUBAN_PROXY=http://mihomo:7890，重启。
+#   4. 后台概览的"豆瓣 · 请求节奏"会显示是否还在被限流。
+#
+# 规则只有一条：所有经过它的请求都走订阅里的节点（网站只有豆瓣的请求会经过它）。
+
+mixed-port: 7890          # HTTP 和 SOCKS5 共用这个端口
+# 容器里要监听所有地址，别的容器才连得上；但只接受 Docker 内网的连接（容器没有向宿主机开放端口）。
+bind-address: "*"
+allow-lan: true
+lan-allowed-ips:
+  - 10.0.0.0/8
+  - 172.16.0.0/12
+  - 192.168.0.0/16
+  - 127.0.0.0/8
+# 想再加一道锁：打开下面两行，别的容器就要用 http://用户名:密码@mihomo:7890
+# authentication:
+#   - "moovie:换成一个随机密码"
+external-controller: ""   # 不开管理接口
+mode: rule
+log-level: warning
+ipv6: false
+
+proxy-providers:
+  airport:
+    type: http
+    url: "https://换成你的订阅链接"
+    path: ./providers/airport.yaml
+    interval: 21600       # 每 6 小时更新一次节点列表
+    health-check:
+      enable: true
+      url: https://www.gstatic.com/generate_204   # 用通用地址做健康检查，不额外打扰豆瓣
+      interval: 600
+    # 只用部分节点（可选）：比如只用离国内近、访问豆瓣快的地区
+    # filter: "(?i)香港|台湾|日本|新加坡|HK|TW|JP|SG"
+    # 排除倍率高或者不稳定的节点（可选）
+    # exclude-filter: "(?i)x[3-9]|过期|剩余|官网"
+
+proxy-groups:
+  # 轮流用不同的节点：连续的请求从不同的 IP 出去，单个 IP 的请求频率就低了。
+  # 网站这边仍然会控制总的请求节奏，被限流时自动放慢。
+  - name: douban
+    type: load-balance
+    strategy: round-robin
+    use: [airport]
+    url: https://www.gstatic.com/generate_204
+    interval: 600
+    lazy: true
+
+rules:
+  - MATCH,douban

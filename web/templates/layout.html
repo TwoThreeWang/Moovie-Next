@@ -1,0 +1,49 @@
+{{define "layout"}}<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0a0a0c">
+<meta name="csrf-token" content="{{.CSRF}}">
+<title>{{if and .SEO .SEO.Title}}{{.SEO.Title}}{{else}}{{.Title}}{{end}}{{if ne .Title .Site}} - {{.Site}}{{end}}</title>
+{{if not .SEO}}<meta name="robots" content="noindex">
+{{end}}{{with .SEO}}{{if .NoIndex}}<meta name="robots" content="noindex,follow">
+{{end}}<meta name="description" content="{{.Description}}">
+{{if .Canonical}}<link rel="canonical" href="{{.Canonical}}">
+<meta property="og:url" content="{{.Canonical}}">{{end}}
+<meta property="og:type" content="{{or .Type "website"}}">
+<meta property="og:title" content="{{or .Title $.Title}}">
+<meta property="og:description" content="{{.Description}}">
+<meta property="og:site_name" content="{{$.Site}}">
+<meta property="og:locale" content="zh_CN">
+{{if .Image}}<meta property="og:image" content="{{.Image}}">
+{{if .ImageAlt}}<meta property="og:image:alt" content="{{.ImageAlt}}">
+{{end}}<meta name="twitter:card" content="summary_large_image">{{else}}<meta name="twitter:card" content="summary">{{end}}
+<meta name="applicable-device" content="pc,mobile">
+{{if .JSONLD}}<script type="application/ld+json">{{.JSONLD}}</script>{{end}}
+{{end}}<link rel="icon" href="/static/img/favicon-64.png" type="image/png">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/static/img/apple-touch-icon.png">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="{{.Site}}">
+<meta name="format-detection" content="telephone=no">
+<link rel="stylesheet" href="/static/css/app.css?v={{.AssetV}}">
+<link rel="stylesheet" href="/static/css/site.css?v={{.AssetV}}">
+{{range .CSS}}<link rel="stylesheet" href="/static/css/{{.}}.css?v={{$.AssetV}}">
+{{end}}{{.Head}}<script src="/static/js/htmx.min.js?v={{.AssetV}}" defer></script>
+<script type="module" src="/static/js/app.js?v={{.AssetV}}"></script>
+{{range .Scripts}}<script type="module" src="/static/js/{{.}}?v={{$.AssetV}}"></script>
+{{end}}</head>
+<body class="{{.BodyClass}}{{if .Bare}} bare{{end}}{{if and .Back (not .Bare)}} has-back{{end}}"{{if .User}} data-user="{{.User.ID}}" data-adskip="{{.User.AdSkipEnabled}}"{{end}}>
+{{template "sprite"}}
+{{if not .Bare}}{{template "nav" .}}{{end}}
+{{if and .Back (not .Bare)}}<a class="app-back" href="{{.Back}}" data-back aria-label="返回"><svg class="i"><use href="#i-chev-l"/></svg></a>{{end}}
+{{template "content" .}}
+{{if not .Bare}}{{template "sheet"}}{{end}}
+<dialog class="modal" id="modal"><div id="modal-body"></div></dialog>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+<div class="loading-bar" id="loading-bar" aria-hidden="true"></div>
+</body>
+</html>{{end}}

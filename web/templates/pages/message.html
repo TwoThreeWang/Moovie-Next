@@ -1,0 +1,1 @@
+{{define "content"}}<main class="message"{{if .ClearUser}} data-clear-user="{{.ClearUser}}"{{end}}><h1>{{.Heading}}</h1><p>{{.Message}}</p>{{if .Link}}<a class="btn btn-primary" href="{{.Link}}">{{.LinkText}}</a>{{else}}<a class="btn btn-primary" href="/">回到首页</a>{{end}}</main>{{end}}

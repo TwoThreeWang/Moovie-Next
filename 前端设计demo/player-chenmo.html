@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0a0a0c">
+<title>沉默的证人 - 播放 - Moovie</title>
+<link rel="preconnect" href="https://picsum.photos">
+<link rel="preconnect" href="https://fastly.picsum.photos">
+<link rel="stylesheet" href="css/app.css"><link rel="stylesheet" href="css/player.css">
+<script src="js/htmx.min.js" defer></script>
+<script src="js/app.js" defer></script>
+<script type="speculationrules">{"prerender":[{"where":{"and":[{"href_matches":"/*.html"},{"not":{"selector_matches":"[data-no-prerender]"}}]},"eagerness":"moderate"}]}</script>
+</head>
+<body class="player-page" style="--ambient:#30302f">
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+<symbol id="i-home" viewBox="0 0 24 24"><path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1z"/></symbol>
+<symbol id="i-compass" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="m15.5 8.5-2 5-5 2 2-5z"/></symbol>
+<symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></symbol>
+<symbol id="i-user" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.6-6 8-6s8 2 8 6"/></symbol>
+<symbol id="i-play" viewBox="0 0 24 24"><path d="M7 4.5v15a1 1 0 0 0 1.5.86l12.5-7.5a1 1 0 0 0 0-1.72L8.5 3.64A1 1 0 0 0 7 4.5z" fill="currentColor" stroke="none"/></symbol>
+<symbol id="i-pause" viewBox="0 0 24 24"><rect x="6" y="4.5" width="4" height="15" rx="1" fill="currentColor" stroke="none"/><rect x="14" y="4.5" width="4" height="15" rx="1" fill="currentColor" stroke="none"/></symbol>
+<symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+<symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12.5 4.5 4.5L19 7.5"/></symbol>
+<symbol id="i-more" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.4"/><circle cx="12" cy="12" r="1.4"/><circle cx="19" cy="12" r="1.4"/></symbol>
+<symbol id="i-chev-l" viewBox="0 0 24 24"><path d="m15 5-7 7 7 7"/></symbol>
+<symbol id="i-chev-r" viewBox="0 0 24 24"><path d="m9 5 7 7-7 7"/></symbol>
+<symbol id="i-share" viewBox="0 0 24 24"><path d="M12 3v12M7.5 7.5 12 3l4.5 4.5M5 13v6a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-6"/></symbol>
+<symbol id="i-heart" viewBox="0 0 24 24"><path d="M12 20s-7.5-4.6-7.5-10.2A4.3 4.3 0 0 1 12 7a4.3 4.3 0 0 1 7.5 2.8C19.5 15.4 12 20 12 20z"/></symbol>
+<symbol id="i-back10" viewBox="0 0 24 24"><path d="M3 4v5h5"/><path d="M3.6 9A9 9 0 1 1 3 12"/><path d="M10 10v5M13 10.5h2.5v4H13z"/></symbol>
+<symbol id="i-fwd10" viewBox="0 0 24 24"><path d="M21 4v5h-5"/><path d="M20.4 9A9 9 0 1 0 21 12"/><path d="M9 10v5M12 10.5h2.5v4H12z"/></symbol>
+<symbol id="i-next" viewBox="0 0 24 24"><path d="M5 5v14l10-7z" fill="currentColor"/><path d="M19 5v14"/></symbol>
+<symbol id="i-vol" viewBox="0 0 24 24"><path d="M4 9h4l5-4v14l-5-4H4z"/><path d="M16.5 8.5a5 5 0 0 1 0 7M19 6a8.5 8.5 0 0 1 0 12"/></symbol>
+<symbol id="i-dm" viewBox="0 0 24 24"><path d="M4 5h16v11H9l-5 4z"/><path d="M8 9.5h8M8 12.5h5"/></symbol>
+<symbol id="i-pip" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><rect x="12" y="11" width="7" height="6" rx="1"/></symbol>
+<symbol id="i-fs" viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></symbol>
+<symbol id="i-theater" viewBox="0 0 24 24"><rect x="2.5" y="6" width="19" height="12" rx="2"/></symbol>
+<symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></symbol>
+<symbol id="i-eye" viewBox="0 0 24 24"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></symbol>
+<symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5v.5"/></symbol>
+<symbol id="i-layers" viewBox="0 0 24 24"><path d="m12 3 9 5-9 5-9-5z"/><path d="m3 13 9 5 9-5"/></symbol>
+<symbol id="i-bell" viewBox="0 0 24 24"><path d="M6 9a6 6 0 0 1 12 0c0 6 2.5 7.5 2.5 7.5h-17S6 15 6 9zM10 20a2 2 0 0 0 4 0"/></symbol>
+<symbol id="i-cog" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M2 12h3M19 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1"/></symbol>
+<symbol id="i-sync" viewBox="0 0 24 24"><path d="M20 11a8 8 0 0 0-14.3-4.9L4 8M4 4v4h4M4 13a8 8 0 0 0 14.3 4.9L20 16M20 20v-4h-4"/></symbol>
+<symbol id="i-chat" viewBox="0 0 24 24"><path d="M21 12a8 8 0 0 1-11.8 7L4 20l1.1-4.6A8 8 0 1 1 21 12z"/></symbol>
+</svg>
+<nav class="nav" aria-label="主导航"><a class="nav-brand" href="index.html" aria-label="Moovie 首页"><span class="brand-m">M</span><span class="brand-t">Moovie</span></a><ul class="nav-links"><li><a class="nav-link" data-tab="home" href="index.html" aria-current="page"><svg class="i"><use href="#i-home"/></svg><span>首页</span></a></li><li><a class="nav-link" data-tab="discover" href="discover.html"><svg class="i"><use href="#i-compass"/></svg><span>发现</span></a></li><li><a class="nav-link" data-tab="search" href="search.html"><svg class="i"><use href="#i-search"/></svg><span>搜索</span></a></li><li><a class="nav-link" data-tab="me" href="me.html"><svg class="i"><use href="#i-user"/></svg><span>我的</span></a></li></ul><a class="nav-avatar" href="me.html" aria-label="我的"><img class="avatar" src="https://picsum.photos/seed/u-me/72/72.webp" width="36" height="36" alt=""></a></nav><main class="pl" id="pl">
+<div class="pl-stage">
+<div class="vp" id="vp" data-state="paused" data-dm="on" data-cfg='{&quot;id&quot;: &quot;chenmo&quot;, &quot;title&quot;: &quot;沉默的证人&quot;, &quot;series&quot;: false, &quot;total&quot;: 1, &quot;intro&quot;: 12, &quot;src&quot;: &quot;https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8&quot;}'>
+<video playsinline preload="none" poster="https://picsum.photos/seed/chenmo-s1/1280/720.webp"></video>
+<div class="vp-bright"></div>
+<div class="vp-dm" aria-hidden="true"></div>
+<div class="vp-ripple" data-side="-1">« 10 秒</div><div class="vp-ripple" data-side="1">10 秒 »</div>
+<div class="vp-spin"></div>
+<div class="vp-ui">
+ <div class="vp-top">
+  <a class="vbtn" href="detail-chenmo.html" aria-label="返回"><svg class="i"><use href="#i-chev-l"/></svg></a>
+  <div class="t"><b>沉默的证人</b><span id="vp-sub">正片</span></div>
+  <button class="vbtn" data-act="pip" aria-label="画中画"><svg class="i"><use href="#i-pip"/></svg></button>
+ </div>
+ <div class="vp-mid">
+  <button class="vbtn vp-jump" data-act="back" aria-label="后退 10 秒"><svg class="i"><use href="#i-back10"/></svg></button>
+  <button class="vbtn vp-big" data-act="toggle" aria-label="播放/暂停"><svg class="i i-play-on"><use href="#i-play"/></svg><svg class="i i-pause-on"><use href="#i-pause"/></svg></button>
+  <button class="vbtn vp-jump" data-act="fwd" aria-label="前进 10 秒"><svg class="i"><use href="#i-fwd10"/></svg></button>
+ </div>
+ <div class="vp-bottom">
+  <div class="vp-bar" id="vp-bar" role="slider" aria-label="进度" tabindex="0"><div class="track"><div class="buf"></div><div class="done"></div><div class="knob"></div></div><span class="tip">0:00</span></div>
+  <div class="vp-row">
+   <button class="vbtn" data-act="toggle" aria-label="播放/暂停"><svg class="i i-play-on"><use href="#i-play"/></svg><svg class="i i-pause-on"><use href="#i-pause"/></svg></button>
+   
+   <button class="vbtn vp-vol" data-act="mute" aria-label="静音"><svg class="i"><use href="#i-vol"/></svg></button>
+   <span class="vp-time"><span id="vp-cur">0:00</span> / <span id="vp-dur">0:00</span></span>
+   <span class="grow"></span>
+   <button class="vbtn" data-act="dm" aria-pressed="true" aria-label="弹幕"><svg class="i"><use href="#i-dm"/></svg></button>
+   <button class="vbtn txt" data-act="speed" aria-label="倍速" id="vp-speed">1.0×</button>
+   <button class="vbtn only-wide" data-act="theater" aria-label="剧场模式"><svg class="i"><use href="#i-theater"/></svg></button>
+   <button class="vbtn" data-act="fs" aria-label="全屏"><svg class="i"><use href="#i-fs"/></svg></button>
+  </div>
+ </div>
+</div>
+<div class="vp-menu" id="vp-menu" role="menu"><button role="menuitemradio" aria-checked="false" data-rate="0.5">0.5×</button><button role="menuitemradio" aria-checked="false" data-rate="0.75">0.75×</button><button role="menuitemradio" aria-checked="true" data-rate="1">1×</button><button role="menuitemradio" aria-checked="false" data-rate="1.25">1.25×</button><button role="menuitemradio" aria-checked="false" data-rate="1.5">1.5×</button><button role="menuitemradio" aria-checked="false" data-rate="2">2×</button></div>
+<div class="vp-hint" id="vp-hint"></div>
+<button class="vp-skip" id="vp-skip" data-act="skip">跳过片头</button>
+<button class="vp-next" id="vp-next" data-act="next"><img src="https://picsum.photos/seed/chenmo-s2/192/108.webp" width="96" height="54" loading="lazy" alt=""><span><small>即将播放</small>下一集</span><span class="ring"><svg class="i"><use href="#i-play"/></svg></span></button>
+</div>
+</div>
+<section class="pl-side">
+<div class="full"><h1 class="pl-title">沉默的证人</h1><p class="pl-meta">2024 · 犯罪 / 剧情 · 豆瓣 8.3</p></div>
+<div class="pl-acts full">
+<button class="chip" data-wish="chenmo" aria-pressed="false"><svg class="i"><use href="#i-plus"/></svg>想看</button>
+<button class="chip" data-seen="chenmo" aria-pressed="false"><svg class="i"><use href="#i-eye"/></svg>看过</button>
+<a class="chip" href="detail-chenmo.html"><svg class="i"><use href="#i-info"/></svg>详情</a>
+<button class="chip" data-share><svg class="i"><use href="#i-share"/></svg>分享</button>
+</div>
+
+<section><h3 class="pl-h">来源<small>播放失败会在同一集内自动切换</small></h3><div class="src" role="radiogroup" id="src"><button role="radio" aria-checked="true" data-src="自动选择 · 最佳线路"><svg class="i"><use href="#i-layers"/></svg>自动选择 · 最佳线路<span class="lat good">38ms</span></button><button role="radio" aria-checked="false" data-src="线路 A · 量子"><svg class="i"><use href="#i-layers"/></svg>线路 A · 量子<span class="lat good">52ms</span></button><button role="radio" aria-checked="false" data-src="线路 B · 非凡"><svg class="i"><use href="#i-layers"/></svg>线路 B · 非凡<span class="lat">96ms</span></button><button role="radio" aria-checked="false" data-src="线路 C · 红牛"><svg class="i"><use href="#i-layers"/></svg>线路 C · 红牛<span class="lat">180ms</span></button></div></section>
+<section><h3 class="pl-h">弹幕<small>2,418 条</small></h3><form class="dm-form" id="dm-form"><input name="t" maxlength="40" placeholder="发一条友善的弹幕" autocomplete="off" enterkeyhint="send"><button class="btn btn-primary" style="height:44px;padding:0 18px">发送</button></form></section>
+</section>
+</main>
+<dialog class="sheet" id="sheet">
+<div class="sheet-grab"></div>
+<div class="sheet-head"><img alt="" id="sheet-img"><div><strong id="sheet-title"></strong><span id="sheet-meta"></span></div></div>
+<a class="sheet-item" id="sheet-play" href="#"><svg class="i"><use href="#i-play"/></svg>播放</a>
+<button class="sheet-item" data-sheet="wish"><svg class="i"><use href="#i-plus"/></svg>加入想看</button>
+<button class="sheet-item" data-sheet="seen"><svg class="i"><use href="#i-eye"/></svg>标记为看过</button>
+<a class="sheet-item" id="sheet-detail" href="#"><svg class="i"><use href="#i-info"/></svg>查看详情</a>
+<button class="sheet-item danger" data-sheet="remove"><svg class="i"><use href="#i-trash"/></svg>移除观看记录</button>
+</dialog>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+<script src="js/player.js" defer></script>
+</body>
+</html>

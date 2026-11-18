@@ -1,0 +1,61 @@
+{{define "content"}}<div class="d-top">
+<a class="btn btn-icon" href="/" data-back aria-label="返回"><svg class="i"><use href="#i-chev-l"/></svg></a>
+<button class="btn btn-icon" data-share data-card="{{json .Card}}" aria-label="分享"><svg class="i"><use href="#i-share"/></svg></button>
+</div>
+<main class="detail" data-media="{{json .Client}}">
+<section class="d-hero">
+<div class="d-media"><picture>{{if .M.Backdrops}}<source media="(min-width:720px)" srcset="{{img .M.Backdrop "l"}}">{{end}}<img class="fade" src="{{img .M.Poster "l"}}" width="720" height="900" fetchpriority="high" decoding="async" alt="《{{.M.Title}}》海报"></picture></div>
+<div class="d-body">
+{{if .Fetching}}{{template "fetching" dict "ID" .M.ID "Attempt" 1}}{{end}}
+<p class="kicker">{{.M.TypeLabel}}{{with .M.Form}} · {{.}}{{end}}{{if .Status}} · {{.Status}}{{end}}{{if .M.Hidden}} · 已隐藏{{end}}</p>
+<h1 class="d-title">{{.M.Title}}</h1>
+{{if and .M.OriginalTitle (ne .M.OriginalTitle .M.Title)}}<p class="d-orig">{{.M.OriginalTitle}}</p>{{end}}
+<div class="meta">{{if rating .M.RatingDouban}}<span class="score">豆瓣 {{rating .M.RatingDouban}}</span><i class="sep"></i>{{else if rating .M.RatingTMDB}}<span class="score">TMDB {{rating .M.RatingTMDB}}</span><i class="sep"></i>{{else if rating .M.RatingHongguo}}<span class="score">红果 {{rating .M.RatingHongguo}}</span><i class="sep"></i>{{end}}{{if .M.Year}}<span>{{.M.Year}}</span>{{end}}{{if .M.Topics}}<i class="sep"></i><span>{{join (first .M.Topics 3) " / "}}</span>{{end}}</div>
+<div class="d-actions" id="d-actions">
+<a class="btn btn-primary" href="{{if .User}}{{.PlayHref}}{{else}}{{.Login}}{{end}}" data-no-prerender data-play><span class="play-main"><svg class="i"><use href="#i-play"/></svg>{{.PlayLabel}}</span>{{if .PlaySub}}<small>{{.PlaySub}}</small>{{end}}</a>
+{{if .User}}{{template "library_actions" dict "MediaID" .M.ID "Entry" .Entry "HasEntry" .HasEntry}}{{else}}<a class="btn btn-glass btn-icon" href="{{.Login}}" aria-label="登录后加入想看" title="登录后加入想看"><svg class="i"><use href="#i-plus"/></svg></a>{{end}}
+</div>
+{{if .M.Summary}}<p class="d-summary" id="d-summary">{{.M.Summary}}</p>
+<button class="d-more" data-more="d-summary">更多</button>{{end}}
+{{with .NextAir}}<p class="d-schedule"><svg class="i"><use href="#i-bell"/></svg><span>第 {{.Number}} 集 <b>{{date .AirDate}}</b> 更新</span></p>{{end}}
+</div>
+</section>
+<div class="d-grid">
+<div class="d-main">
+{{if .Episodes}}<section class="d-sec" id="episodes"><div class="row-head"><h2 class="row-title">选集<span class="row-sub">{{.Status}}</span></h2></div>
+<div class="ep-grid">{{range .Episodes}}{{if .Upcoming}}<span class="ep-soon" title="{{date .AirDate}} 更新">{{.Number}}</span>{{else}}<a href="{{.Href}}" data-no-prerender{{if .Completed}} data-seen{{end}}{{if .Current}} aria-current="true"{{end}} title="{{.Title}}">{{.Number}}</a>{{end}}{{end}}</div>
+</section>{{end}}
+<section class="d-sec" id="sources">
+{{if .User}}<div class="row-head"><h2 class="row-title">播放源<span class="row-sub" id="src-status"></span></h2><a class="row-more" href="/settings#sources">设置<svg class="i"><use href="#i-chev-r"/></svg></a></div>
+<div class="src-list" id="src-list"><p class="hint">正在查询你的播放源…</p></div>
+{{else}}<div class="row-head"><h2 class="row-title">播放</h2></div>
+<div class="src-list"><div class="src-empty"><p>登录后，可以用你自己配置的播放源播放，并记录看到哪一集。本站不提供视频。</p><a class="btn btn-glass" href="{{.Login}}">登录</a></div></div>{{end}}
+</section>
+{{if .Series}}{{template "row" dict "Row" (dict "Title" "同系列" "Cards" .Series)}}{{end}}
+{{if gt (len .M.Backdrops) 1}}<section class="row"><div class="row-head"><h2 class="row-title">剧照</h2></div>
+<div class="rail rail-wide" data-gallery>{{range $i, $b := .M.Backdrops}}<button type="button" class="card card-wide still" data-zoom="{{img $b "l"}}" aria-label="查看第 {{add $i 1}} 张剧照的大图"><div class="card-art"><img src="{{img $b "m"}}" width="480" height="270" loading="lazy" decoding="async" alt="《{{$.M.Title}}》剧照 {{add $i 1}}"></div></button>{{end}}</div></section>{{end}}
+{{if .Inline}}{{template "media_comments" dict "Comments" .Comments "More" .CommentsMore "First" true "MediaID" .M.ID "User" .User}}
+{{else}}<div data-lazy hx-get="/api/htmx/m/{{.M.ID}}/comments" hx-trigger="near once" hx-swap="outerHTML"></div>{{end}}
+</div>
+<aside class="d-aside">
+<section class="info"><h2>信息</h2><dl>
+{{if .M.Directors}}<div><dt>导演</dt><dd>{{join (first .M.Directors 3) " / "}}</dd></div>{{end}}
+{{if .M.Actors}}<div><dt>主演</dt><dd>{{join (first .M.Actors 6) " / "}}</dd></div>{{end}}
+{{if .M.Form}}<div><dt>剧种</dt><dd>{{.M.Form}}</dd></div>{{end}}
+{{if .M.Topics}}<div><dt>{{if .M.IsShort}}题材{{else}}类型{{end}}</dt><dd>{{join .M.Topics " / "}}</dd></div>{{end}}
+{{if .M.Countries}}<div><dt>地区</dt><dd>{{join .M.Countries " / "}}</dd></div>{{end}}
+{{if .M.Year}}<div><dt>年份</dt><dd>{{.M.Year}}</dd></div>{{end}}
+{{if .M.IsSeries}}{{if .M.EpisodeCount}}<div><dt>集数</dt><dd>{{.M.EpisodeCount}} 集</dd></div>{{end}}{{else if .M.DurationMinutes}}<div><dt>片长</dt><dd>{{.M.DurationMinutes}} 分钟</dd></div>{{end}}
+{{if .M.DoubanID}}<div><dt>豆瓣</dt><dd><a href="https://movie.douban.com/subject/{{.M.DoubanID}}/" rel="noopener noreferrer" target="_blank">{{.M.DoubanID}}</a></dd></div>{{end}}
+{{if .M.HongguoID}}<div><dt>来源</dt><dd><a href="https://hongguoduanju.com/detail?series_id={{.M.HongguoID}}" rel="noopener noreferrer" target="_blank">红果短剧</a></dd></div>{{end}}
+{{if .IMDb}}<div><dt>IMDb</dt><dd><a href="https://www.imdb.com/title/{{.IMDb}}/" rel="noopener noreferrer" target="_blank">{{.IMDb}}</a></dd></div>{{end}}
+</dl></section>
+</aside>
+</div>
+<div class="rows">{{if .Inline}}{{if .Similar}}{{template "row" dict "Row" (dict "Title" "相似推荐" "Cards" .Similar "More" (printf "/m/%d/similar" .M.ID))}}{{end}}
+{{else}}<div data-lazy hx-get="/api/htmx/m/{{.M.ID}}/similar" hx-trigger="near once" hx-swap="outerHTML"></div>{{end}}</div>
+<div class="d-bar" id="d-bar">
+<a class="btn btn-primary" href="{{if .User}}{{.PlayHref}}{{else}}{{.Login}}{{end}}" data-no-prerender data-play><svg class="i"><use href="#i-play"/></svg>{{.PlayLabel}}{{if .PlaySub}} · {{.PlaySub}}{{end}}</a>
+</div>
+{{template "footer" .}}
+</main>{{end}}

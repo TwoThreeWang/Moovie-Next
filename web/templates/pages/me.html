@@ -1,0 +1,32 @@
+{{define "content"}}<main>
+<header class="page-head me-head">
+<span class="avatar avatar-emoji lg">{{.User.Avatar}}</span>
+<div><h1 class="page-title">{{.User.Username}}</h1><p class="me-stats"><a href="/me/watched"><b>{{.WatchedCount}}</b> 看过</a> · <a href="/me/wish"><b>{{.WishCount}}</b> 想看</a></p></div>
+<a class="btn btn-glass btn-icon" href="/notifications" aria-label="通知{{if .Unread}}（{{.Unread}} 条未读）{{end}}"><svg class="i"><use href="#i-bell"/></svg>{{if .Unread}}<span class="dot-badge"></span>{{end}}</a>
+</header>
+<a class="report" href="/user/{{.User.ID}}/monthly/{{.Month}}">
+<span class="kicker">{{.Report.Label}}观影报告</span>
+{{if .Report.WatchedCount}}<b>这个月你看了 {{.Report.WatchedCount}} 部{{if .Report.Genres}}，最爱{{(index .Report.Genres 0).Name}}{{end}}</b>
+<span>共 {{.Report.Hours}} 小时{{if .Report.ActiveDays}} · {{.Report.ActiveDays}} 天有观影{{end}}{{if .Report.Percentile}} · 超过 {{.Report.Percentile}}% 的用户{{end}}</span>
+{{else}}<b>{{.Report.PersonaTitle}}</b><span>{{.Report.PersonaLine}}</span>{{end}}
+</a>
+<div class="rows">
+<div id="continue" data-continue>{{if .Recent}}{{template "row" dict "Row" (dict "Title" "观看历史" "More" "/me/history" "Class" "rail-wide" "Wide" .Recent)}}{{end}}</div>
+{{if .Wish}}{{template "row" dict "Row" (dict "Title" "想看" "More" "/me/wish" "Cards" .Wish)}}{{end}}
+{{if .Watched}}{{template "row" dict "Row" (dict "Title" "看过" "More" "/me/watched" "Cards" .Watched)}}{{end}}
+</div>
+<ul class="menu">
+<li class="menu-row"><a href="/notifications"><svg class="i"><use href="#i-bell"/></svg>通知{{if .Unread}}<span class="pill">{{.Unread}}</span>{{end}}</a>
+{{if .Unread}}<form method="post" action="/notifications/read-all?back=/me"><input type="hidden" name="_csrf" value="{{.CSRF}}"><button class="link">全部已读</button></form>{{end}}</li>
+<li><a href="/settings#sources"><svg class="i"><use href="#i-layers"/></svg>播放源<span class="dim" id="menu-sources"></span></a></li>
+<li><a href="/settings#douban"><svg class="i"><use href="#i-sync"/></svg>豆瓣同步{{if .User.DoubanUserID}}<span class="dim">已绑定</span>{{end}}</a></li>
+<li><a href="/user/{{.User.ID}}"><svg class="i"><use href="#i-user"/></svg>我的主页{{if not .User.IsPublic}}<span class="dim">未公开</span>{{end}}</a></li>
+<li><a href="/m3u8"><svg class="i"><use href="#i-link"/></svg>M3U8 播放器</a></li>
+<li><a href="/settings"><svg class="i"><use href="#i-cog"/></svg>设置</a></li>
+<li><a href="/install"><svg class="i"><use href="#i-plus"/></svg>添加到桌面</a></li>
+<li><a href="/feedback"><svg class="i"><use href="#i-chat"/></svg>反馈与建议</a></li>
+{{if .User.IsAdmin}}<li><a href="/admin"><svg class="i"><use href="#i-shield"/></svg>管理后台</a></li>{{end}}
+<li><form method="post" action="/auth/logout"><input type="hidden" name="_csrf" value="{{.CSRF}}"><button><svg class="i"><use href="#i-out"/></svg>退出登录</button></form></li>
+</ul>
+{{template "footer" .}}
+</main>{{end}}

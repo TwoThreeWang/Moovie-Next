@@ -1,0 +1,44 @@
+/* 管理后台 */
+.admin { padding-bottom: 32px; }
+.admin-nav { margin-bottom: 12px; }
+.admin-tools { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.admin-tools .form.inline { flex: 1; min-width: 260px; max-width: 520px; }
+.admin .card-panel { max-width: none; }
+.table-wrap { overflow-x: auto; padding: 0 var(--gutter); }
+.table { width: 100%; border-collapse: collapse; font-size: 14px; min-width: 640px; }
+.table th { text-align: left; font-weight: 600; color: var(--text-3); font-size: 12.5px; padding: 10px 12px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+.table td { padding: 10px 12px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+.table td.empty { text-align: center; padding: 40px 0; }
+.table td.actions { white-space: nowrap; }
+.table tr.is-hidden td { opacity: .55; }
+.table a { text-decoration: underline; text-underline-offset: 3px; text-decoration-color: var(--text-3); }
+.inline-form { display: inline-flex; gap: 8px; align-items: center; margin-right: 10px; }
+.inline-form select { min-height: 34px; padding: 4px 10px; width: auto; font-size: 14px; }
+.admin .form.inline .btn { height: 46px; }
+
+.copy-field { width: 100%; font: inherit; font-size: 13px; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--line, rgba(255,255,255,.12)); background: rgba(0,0,0,.25); color: inherit; }
+
+/* 禁言 / 封禁 */
+.restrict { display: inline-block; margin-left: 8px; }
+.restrict summary { cursor: pointer; list-style: none; display: inline; }
+.restrict summary::-webkit-details-marker { display: none; }
+.restrict-form { display: grid; gap: 8px; margin-top: 8px; min-width: 240px; }
+.restrict-form select, .restrict-form input { min-height: 34px; padding: 4px 10px; font-size: 14px; }
+/* 内容审核 */
+.content-text { max-width: 420px; white-space: pre-wrap; word-break: break-word; }
+.bulk-bar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-top: 14px; }
+.bulk-bar input[name="reason"] { flex: 1; min-width: 220px; max-width: 420px; }
+/* 最近 30 天 */
+.spark-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
+.spark-card { padding: 12px; border-radius: 12px; background: rgba(255, 255, 255, .04); display: grid; gap: 10px; }
+.spark-head { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; font-size: 13px; }
+.spark { display: flex; align-items: flex-end; gap: 2px; height: 48px; }
+.spark i { flex: 1; height: var(--h); min-height: 1px; border-radius: 2px 2px 0 0; background: var(--brand); opacity: .75; }
+.spark i:last-child { opacity: 1; }
+
+/* 搜索框和下面的表格、标签之间留出距离 */
+.admin .form.inline { margin-bottom: 16px; }
+.admin .chips + .form.inline, .admin .hint.pad + .chips { margin-top: 4px; }
+/* 批量操作栏里的输入框，和表单里的输入框一个样子 */
+.bulk-bar input { min-height: 42px; padding: 0 14px; border-radius: 12px; border: 1px solid var(--line); background: var(--surface); color: var(--text); font: inherit; font-size: 14px; }
+.admin nav.pager { margin-top: 16px; }

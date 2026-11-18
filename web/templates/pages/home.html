@@ -1,0 +1,27 @@
+{{define "content"}}<main>
+{{if .Hero}}<section class="hero" aria-roledescription="carousel" aria-label="精选">
+<div class="hero-track" id="hero-track">
+{{range $i, $m := .Hero}}<div class="slide" aria-roledescription="slide" aria-label="{{add $i 1}} / {{len $.Hero}}">
+<div class="slide-media"><picture><source media="(min-width:720px)" srcset="{{img $m.Backdrop "l"}}"><img class="fade" src="{{img $m.Poster "l"}}" width="720" height="900" {{if eq $i 0}}fetchpriority="high"{{else}}loading="lazy"{{end}} decoding="async" alt=""></picture></div>
+<div class="slide-body"><p class="kicker">热门{{$m.TypeLabel}}</p>
+<h2 class="slide-title"><a href="/m/{{$m.ID}}">{{$m.Title}}</a></h2>
+<div class="meta">{{if rating $m.Rating}}<span class="score">豆瓣 {{rating $m.Rating}}</span><i class="sep"></i>{{end}}{{if $m.Year}}<span>{{$m.Year}}</span>{{end}}{{if $m.Genres}}<i class="sep"></i><span>{{join (first $m.Genres 3) " / "}}</span>{{end}}</div>
+<p class="slide-summary">{{truncate $m.Summary 120}}</p>
+<div class="slide-actions"><a class="btn btn-primary" href="/play/{{$m.ID}}" data-no-prerender><svg class="i"><use href="#i-play"/></svg>播放</a>
+<a class="btn btn-glass btn-icon" href="/m/{{$m.ID}}" aria-label="详情"><svg class="i"><use href="#i-info"/></svg></a></div></div></div>
+{{end}}</div>
+<div class="hero-dots" role="tablist">{{range $i, $m := .Hero}}<button class="hero-dot" data-i="{{$i}}" aria-label="第 {{add $i 1}} 张"{{if eq $i 0}} aria-current="true"{{end}}></button>{{end}}</div>
+</section>{{else}}<header class="page-head"><h1 class="page-title">首页</h1><p class="hint">榜单正在准备中，稍后刷新就能看到内容。也可以先去<a href="/search">搜索</a>想看的作品。</p></header>{{end}}
+<div class="rows">
+<div id="continue" data-continue>{{if .Recent}}{{template "row" dict "Row" (dict "Title" "继续观看" "More" "/me/history" "Class" "rail-wide" "Wide" .Recent)}}{{end}}</div>
+{{if .Today}}{{template "row" dict "Row" (dict "Title" "今日更新" "Sub" "你在追的" "Cards" .Today)}}{{end}}
+{{template "row_lazy" dict "Src" "/api/htmx/row/foryou"}}
+{{template "row_lazy" dict "Src" "/api/htmx/row/chart/movie"}}
+{{template "row_lazy" dict "Src" "/api/htmx/row/collections" "Class" "rail-banner"}}
+{{template "row_lazy" dict "Src" "/api/htmx/row/chart/tv"}}
+{{template "row_lazy" dict "Src" "/api/htmx/row/friends"}}
+{{template "row_lazy" dict "Src" "/api/htmx/row/chart/anime"}}
+{{template "row_lazy" dict "Src" "/api/htmx/row/chart/show"}}
+</div>
+{{template "footer" .}}
+</main>{{end}}

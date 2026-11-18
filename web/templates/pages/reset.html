@@ -1,0 +1,9 @@
+{{define "content"}}<main class="auth">
+<a class="nav-brand" href="/"><img class="brand-icon" src="/static/img/apple-touch-icon.png" width="40" height="40" alt=""><span class="brand-t">{{.Site}}</span></a>
+<form class="form auth-card" method="post" action="/auth/reset">
+<h1>设置新密码</h1>
+{{if .Error}}<p class="flash error" role="alert">{{.Error}}</p>{{end}}
+<input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="t" value="{{.Token}}">
+<label>新密码<input type="password" name="password" minlength="8" autocomplete="new-password" required autofocus><small>至少 8 位。设置后，其他设备需要重新登录。</small></label>
+<button class="btn btn-primary">保存并登录</button>
+</form></main>{{end}}

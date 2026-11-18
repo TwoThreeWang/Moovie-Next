@@ -1,0 +1,30 @@
+{{define "content"}}<main class="landing">
+<header class="landing-top"><a class="nav-brand" href="/"><img class="brand-icon" src="/static/img/apple-touch-icon.png" width="40" height="40" alt=""><span class="brand-t">{{.Site}}</span></a>
+<nav><a class="btn btn-glass" href="/auth/login">登录</a><a class="btn btn-primary" href="/auth/register">注册</a></nav></header>
+<section class="landing-hero">
+<p class="kicker">观影管理 · 自带播放器</p>
+<h1>把想看的、看过的，<br>都放在一个地方</h1>
+<p class="lead">记录每一部电影和剧集，追更新，看每个月的观影报告。资料来自豆瓣和 TMDB，界面为手机和电脑都做了优化。</p>
+<div class="landing-cta"><a class="btn btn-primary" href="/auth/register">免费注册</a><a class="btn btn-glass" href="/auth/login">我已有账号</a></div>
+<p class="hint">手机上可以<a href="/install">添加到桌面</a>，像 App 一样使用。</p>
+</section>
+<section class="landing-grid">
+<article><svg class="i"><use href="#i-list"/></svg><h2>想看、看过、片单</h2><p>一键标记，打分写短评。可以把豆瓣上的想看和看过同步过来。</p></article>
+<article><svg class="i"><use href="#i-bell"/></svg><h2>追更新</h2><p>首页告诉你今天哪些在追的剧更新了，看到第几集也都记着。</p></article>
+<article><svg class="i"><use href="#i-compass"/></svg><h2>发现下一部</h2><p>热门榜单、相似推荐，还有根据你的口味生成的个性化推荐。</p></article>
+<article><svg class="i"><use href="#i-play"/></svg><h2>通用播放器</h2><p>本站不提供任何视频。你可以填写自己的播放源，由浏览器直接连接，进度在多台设备间同步。</p></article>
+<article><svg class="i"><use href="#i-shield"/></svg><h2>你的配置只在你手里</h2><p>播放源列表只保存在你自己的设备上，服务器不知道你填了什么。</p></article>
+<article><svg class="i"><use href="#i-chat"/></svg><h2>短评和月度报告</h2><p>看看别人怎么评价，每个月收到一份属于自己的观影报告。</p></article>
+</section>
+<section class="landing-browse">
+<div class="row-head"><h2 class="row-title">先随便看看</h2><a class="row-more" href="/discover">发现更多<svg class="i"><use href="#i-chev-r"/></svg></a></div>
+<div class="rows">
+{{template "row_lazy" dict "Src" "/api/htmx/row/chart/movie"}}
+{{template "row_lazy" dict "Src" "/api/htmx/row/chart/tv"}}
+{{template "row_lazy" dict "Src" "/api/htmx/row/collections" "Class" "rail-banner"}}
+{{template "row_lazy" dict "Src" "/api/htmx/row/chart/anime"}}
+</div>
+<p class="pad hint"><a href="/trends">热搜榜</a> · <a href="/list">片单</a> · <a href="/cinema">大家的短评</a></p>
+</section>
+{{template "footer" .}}
+</main>{{end}}

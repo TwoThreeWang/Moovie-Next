@@ -1,0 +1,11 @@
+{{define "content"}}<main class="admin">{{template "admin_nav" .}}
+<section class="card-panel"><h2>添加屏蔽词</h2>
+<p class="hint">片名或原名包含屏蔽词的作品不会在站内展示。添加后立刻生效。删除屏蔽词不会自动恢复已隐藏的作品。</p>
+<form class="form inline" method="post" action="/admin/filters">{{template "csrf" .CSRF}}
+<select name="kind"><option value="copyright">版权</option><option value="nsfw">不适宜内容</option></select>
+<input name="keyword" minlength="2" maxlength="60" placeholder="关键词" required><button class="btn btn-primary">添加</button></form></section>
+<div class="table-wrap"><table class="table"><thead><tr><th>类型</th><th>关键词</th><th>添加时间</th><th></th></tr></thead><tbody>
+{{range .Keywords}}<tr><td>{{if eq .Kind "copyright"}}版权{{else}}不适宜内容{{end}}</td><td>{{.Keyword}}</td><td>{{date .CreatedAt}}</td>
+<td><form method="post" action="/admin/filters/{{.ID}}/delete" class="inline-form">{{template "csrf" $.CSRF}}<button class="link danger">删除</button></form></td></tr>
+{{else}}<tr><td colspan="4" class="empty">还没有屏蔽词</td></tr>{{end}}</tbody></table></div>
+</main>{{end}}

@@ -1,0 +1,10 @@
+{{define "content"}}<main class="narrow">
+<header class="page-head"><h1 class="page-title">热搜榜</h1><p class="hint">根据大家在作品库里的搜索统计，每次打开都是最新的。不记录是谁搜的。</p></header>
+<div class="chips pad"><a class="chip-l" href="/trends"{{if not .Week}} aria-current="true"{{end}}>今天</a><a class="chip-l" href="/trends?range=week"{{if .Week}} aria-current="true"{{end}}>本周</a></div>
+{{if .Keywords}}<ol class="trends pad">{{range $i, $k := .Keywords}}<li><a href="/search?q={{$k.Keyword}}">
+<b class="rank{{if lt $i 3}} top{{end}}">{{add $i 1}}</b><span class="word">{{$k.Keyword}}</span>
+{{if $k.New}}<span class="trend-tag new">新</span>{{else if $k.Rising}}<span class="trend-tag up">升</span>{{end}}
+<i class="heat" style="--p:{{$k.Heat}}%"></i></a></li>{{end}}</ol>
+{{else}}<p class="empty">{{.Label}}还没有足够的搜索，晚点再来看看。</p>{{end}}
+{{template "footer" .}}
+</main>{{end}}

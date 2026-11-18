@@ -1,0 +1,83 @@
+{{define "library_actions"}}<span class="lib" id="lib-{{.MediaID}}" hx-target="this" hx-swap="outerHTML">
+{{- if and .HasEntry (eq .Entry.Status "watched")}}
+<button class="btn btn-glass btn-icon is-on" hx-get="/api/htmx/m/{{.MediaID}}/mark-form" hx-target="#modal-body" hx-swap="innerHTML" aria-label="已看过，点击修改" title="已看过"><svg class="i"><use href="#i-check"/></svg></button>
+{{- else}}
+<button class="btn btn-glass btn-icon{{if .HasEntry}} is-on{{end}}" hx-post="/api/library/{{.MediaID}}/wish" aria-pressed="{{.HasEntry}}" aria-label="{{if .HasEntry}}取消想看{{else}}加入想看{{end}}" title="{{if .HasEntry}}已在想看{{else}}加入想看{{end}}"><svg class="i"><use href="#{{if .HasEntry}}i-check{{else}}i-plus{{end}}"/></svg></button>
+<button class="btn btn-glass btn-icon" hx-get="/api/htmx/m/{{.MediaID}}/mark-form" hx-target="#modal-body" hx-swap="innerHTML" aria-label="标记看过" title="标记看过"><svg class="i"><use href="#i-eye"/></svg></button>
+{{- end}}</span>{{end}}
+
+{{define "mark_form"}}<form class="form" hx-post="/api/library/{{.M.ID}}/watched" hx-target="#lib-{{.M.ID}}" hx-swap="outerHTML">
+<h2>看过《{{.M.Title}}》</h2>
+<fieldset class="rate" aria-label="评分">{{range ratings}}<input type="radio" name="rating" id="rate-{{.}}" value="{{.}}"{{if eq $.Entry.Rating .}} checked{{end}}><label for="rate-{{.}}" aria-label="{{.}} 星">★</label>{{end}}</fieldset>
+<textarea name="comment" maxlength="2000" rows="4" placeholder="写点短评（可以不写）">{{.Entry.Comment}}</textarea>
+<div class="form-actions">
+{{if .Entry.ID}}<button type="button" class="btn btn-glass danger" hx-delete="/api/library/{{.M.ID}}" hx-target="#lib-{{.M.ID}}" hx-swap="outerHTML">取消标记</button>{{end}}
+<span class="grow"></span>
+<button type="button" class="btn btn-glass" data-close-modal>取消</button>
+<button class="btn btn-primary">保存</button>
+</div></form>{{end}}
+
+{{define "like_button"}}<button class="like" aria-pressed="{{.C.Liked}}" hx-post="/api/comments/{{.C.ID}}/like" hx-swap="outerHTML" aria-label="点赞"><svg class="i"><use href="#i-heart"/></svg><span>{{.C.Likes}}</span></button>{{end}}
+
+{{define "comment"}}<article class="comment" id="c-{{.C.ID}}">
+{{if .Media}}<a class="comment-media" href="/m/{{.C.MediaID}}">{{if .C.MediaPoster}}<img src="{{img .C.MediaPoster "s"}}" width="48" height="72" loading="lazy" alt="">{{end}}</a>{{end}}
+<div class="comment-body">
+<header><span class="avatar avatar-emoji sm">{{.C.Avatar}}</span>
+<div><b>{{if .C.UserPublic}}<a href="/user/{{.C.UserID}}">{{.C.Username}}</a>{{else}}{{.C.Username}}{{end}}</b>{{if .Media}} 看过 <a href="/m/{{.C.MediaID}}">《{{.C.MediaTitle}}》</a>{{end}}
+{{if .C.Rating}}<span class="stars">{{stars .C.Rating}}</span>{{end}}</div><time>{{timeago .C.UpdatedAt}}</time></header>
+<p>{{.C.Text}}</p>
+<footer>{{template "like_button" dict "C" .C}}
+<button class="like" hx-get="/api/htmx/comments/{{.C.ID}}/replies" hx-target="#r-{{.C.ID}}" hx-swap="innerHTML" aria-label="回复"><svg class="i"><use href="#i-chat"/></svg><span>{{.C.Replies}}</span></button>
+<button class="like" type="button" data-share data-card="{{json (dict "kind" "comment" "title" .C.MediaTitle "text" .C.Text "author" .C.Username "badge" (stars .C.Rating) "poster" (img .C.MediaPoster "m") "url" (printf "/m/%d#c-%d" .C.MediaID .C.ID) "name" (printf "moovie-comment-%d" .C.ID))}}" aria-label="分享这条短评"><svg class="i"><use href="#i-share"/></svg></button>
+{{if .User}}{{if .User.IsAdmin}}<button class="link danger comment-remove" type="button" data-remove="/api/comments/{{.C.ID}}/remove" data-method="POST" data-target="#c-{{.C.ID}}" data-swap="outerHTML">删除</button>{{end}}{{end}}</footer>
+<div class="replies" id="r-{{.C.ID}}"></div>
+</div></article>{{end}}
+
+{{define "media_comments"}}{{if .First}}<section class="row" id="comments"><div class="row-head"><h2 class="row-title">短评</h2></div><div class="comments">{{end}}
+{{range .Comments}}{{template "comment" dict "C" . "User" $.User}}{{end}}
+{{if and .First (not .Comments)}}<p class="empty">还没有短评。标记看过时可以写一条。</p>{{end}}
+{{if .More}}<button class="btn btn-glass more" hx-get="{{.More}}" hx-swap="outerHTML">更多短评</button>{{end}}
+{{if .First}}</div></section>{{end}}{{end}}
+
+{{define "replies"}}{{range .Replies}}<div class="reply"><span class="avatar avatar-emoji sm">{{.Avatar}}</span>
+<div><b>{{.Username}}</b> <time>{{timeago .CreatedAt}}</time><p>{{.Content}}</p></div>
+{{if $.User}}{{if eq .UserID $.User.ID}}<button class="link danger" hx-delete="/api/replies/{{.ID}}" hx-target="#r-{{.CommentID}}" hx-swap="innerHTML" hx-confirm="删除这条回复？">删除</button>
+{{else if $.User.IsAdmin}}<button class="link danger" type="button" data-remove="/api/replies/{{.ID}}" data-method="DELETE" data-target="#r-{{.CommentID}}" data-swap="innerHTML">删除</button>{{end}}{{end}}</div>{{end}}
+{{if $.User}}<form class="reply-form" hx-post="/api/comments/{{.CommentID}}/replies" hx-target="#r-{{.CommentID}}" hx-swap="innerHTML">
+<input name="content" maxlength="300" placeholder="回复…" autocomplete="off" required><button class="btn btn-primary">发送</button></form>{{else}}<p class="hint"><a href="/auth/login">登录</a>后可以回复。</p>{{end}}{{end}}
+
+{{define "fetching"}}<div class="fetching" id="fetching"{{if not .GiveUp}} hx-get="/api/htmx/m/{{.ID}}/ready?n={{.Attempt}}" hx-trigger="load delay:3s" hx-swap="outerHTML"{{end}}>
+{{if .GiveUp}}<span>资料还没获取到，可能是豆瓣暂时访问不了。稍后再来看看。</span>
+{{else}}<span class="spinner" aria-hidden="true"></span><span>正在从豆瓣获取完整资料，好了会自动刷新…</span>{{end}}</div>{{end}}
+
+{{define "follow_button"}}<button class="btn {{if .Profile.Followed}}btn-glass{{else}}btn-primary{{end}}" hx-post="/api/users/{{.Profile.ID}}/follow" hx-swap="outerHTML">{{if .Profile.Followed}}已关注{{else}}关注{{end}}</button>{{end}}
+
+{{define "douban_status"}}<div id="douban-status" class="douban-status"{{if .Running}} hx-get="/api/htmx/douban-status" hx-trigger="every 2s" hx-swap="outerHTML"{{end}}>
+{{if .Running}}<p class="hint">正在同步… 已处理 {{.Progress.Processed}} / {{.Progress.Total}} 条，新增 {{.Progress.Imported}} 条。</p>
+{{else if .Found}}{{if eq .Job.Status "done"}}<p class="hint">上次同步：{{timeago .Job.Finished}}，处理 {{.Progress.Processed}} 条，新增 {{.Progress.Imported}} 条。</p>
+{{else}}<p class="hint error">上次同步失败：{{.Job.LastError}}</p>{{end}}{{end}}
+{{if and .Bound (not .Running)}}<button class="btn btn-primary" hx-post="/settings/douban/sync" hx-target="#douban-status" hx-swap="outerHTML">立即同步</button>{{end}}
+</div>{{end}}
+
+{{define "flash"}}{{if .Error}}<p class="flash error" role="alert">{{.Error}}</p>{{else if .Notice}}<p class="flash ok" role="status">{{.Notice}}</p>{{else if .Saved}}<p class="flash ok" role="status">已保存</p>{{end}}{{end}}
+
+{{define "notification"}}{{with .N}}<li class="note{{if not .Read}} unread{{end}}" id="note-{{.ID}}">
+<a class="note-main" href="/notifications/{{.ID}}/open" data-no-prerender>
+{{if or (eq .Kind "feedback") (eq .Kind "removed") (eq .Kind "muted")}}<span class="avatar avatar-emoji sm admin-badge" aria-hidden="true"><svg class="i"><use href="#i-shield"/></svg></span>
+<div><p><b>管理员</b>
+{{if eq .Kind "feedback"}}回复了你的反馈{{else if eq .Kind "muted"}}限制了你的发言{{else}}删除了你{{if .MediaTitle}}在《{{.MediaTitle}}》下{{end}}的一条内容{{end}}</p>
+{{if eq .Kind "muted"}}<p class="dim">你{{.Excerpt}}。这段时间里不能发短评、回复和弹幕，其他功能照常。有疑问可以在反馈里申诉。</p>
+{{else if .Excerpt}}<p class="dim{{if eq .Kind "removed"}} removed-text{{end}}">{{truncate .Excerpt 120}}</p>{{end}}
+{{if and .Reason (ne .Kind "muted")}}<p class="dim">原因：{{.Reason}}。有疑问可以在反馈里申诉。</p>{{end}}
+<time>{{timeago .CreatedAt}}</time></div>
+{{else}}<span class="avatar avatar-emoji sm">{{.ActorAvatar}}</span>
+<div><p><b>{{.ActorName}}</b>
+{{if eq .Kind "like"}}赞了你对《{{.MediaTitle}}》的短评
+{{else if eq .Kind "reply"}}回复了你对《{{.MediaTitle}}》的短评
+{{else}}关注了你{{end}}</p>
+{{if and .Excerpt (ne .Kind "follow")}}<p class="dim">{{truncate .Excerpt 80}}</p>{{end}}<time>{{timeago .CreatedAt}}</time></div>{{end}}
+</a>
+<div class="note-actions">
+{{if not .Read}}<button class="link" type="button" hx-post="/api/notifications/{{.ID}}/read" hx-target="#note-{{.ID}}" hx-swap="outerHTML" aria-label="标为已读">已读</button>{{end}}
+<button class="link danger" type="button" hx-delete="/api/notifications/{{.ID}}" hx-target="#note-{{.ID}}" hx-swap="outerHTML" aria-label="删除这条通知"><svg class="i"><use href="#i-x"/></svg></button>
+</div></li>{{end}}{{end}}

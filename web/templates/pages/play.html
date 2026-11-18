@@ -1,0 +1,87 @@
+{{define "content"}}{{$noMedia := or .Local .Manual}}<main class="pl" id="pl"{{if .Local}} data-local="1"{{else if .Manual}} data-manual="1"{{else}} data-media="{{json .Client}}" data-episode="{{.Episode}}" data-positions="{{json .Positions}}"{{end}}>
+<div class="pl-stage">
+<div class="vp" id="vp" data-state="paused" data-dm="on">
+<video playsinline preload="none" x-webkit-airplay="allow"{{if not $noMedia}}{{if .M.Backdrops}} poster="{{img .M.Backdrop "l"}}"{{end}}{{end}}></video>
+<div class="vp-bright"></div>
+<div class="vp-dm" aria-hidden="true"></div>
+<div class="vp-ripple" data-side="-1">« 10 秒</div><div class="vp-ripple" data-side="1">10 秒 »</div>
+<div class="vp-spin"></div><p class="vp-spin-text" aria-live="polite"></p>
+<div class="vp-msg" id="vp-msg" hidden></div>
+<div class="vp-warn" id="vp-warn" hidden>请不要相信视频里出现的任何广告，尤其是博彩、贷款、加微信。</div>
+<button class="vbtn vp-lock" data-act="lock" aria-pressed="false" aria-label="锁定屏幕"><svg class="i"><use href="#i-lock"/></svg></button>
+<div class="vp-ui">
+ <div class="vp-top">
+  <a class="vbtn" href="{{if .Local}}/search{{else if .Manual}}/{{else}}/m/{{.M.ID}}{{end}}" data-back aria-label="返回"><svg class="i"><use href="#i-chev-l"/></svg></a>
+  <div class="t"><b id="vp-title">{{if not $noMedia}}{{.M.Title}}{{end}}</b><span id="vp-sub"></span></div>
+  <button class="vbtn" data-act="airplay" aria-label="隔空播放" hidden><svg class="i"><use href="#i-airplay"/></svg></button>
+  <button class="vbtn" data-act="pip" aria-label="画中画"><svg class="i"><use href="#i-pip"/></svg></button>
+ </div>
+ <div class="vp-mid">
+  <button class="vbtn vp-jump" data-act="back" aria-label="后退 10 秒"><svg class="i"><use href="#i-back10"/></svg></button>
+  <button class="vbtn vp-big" data-act="toggle" aria-label="播放/暂停"><svg class="i i-play-on"><use href="#i-play"/></svg><svg class="i i-pause-on"><use href="#i-pause"/></svg></button>
+  <button class="vbtn vp-jump" data-act="fwd" aria-label="前进 10 秒"><svg class="i"><use href="#i-fwd10"/></svg></button>
+ </div>
+ <div class="vp-bottom">
+  <div class="vp-bar" id="vp-bar" role="slider" aria-label="进度" tabindex="0"><div class="track"><div class="buf"></div><div class="done"></div><div class="knob"></div></div><span class="tip">0:00</span></div>
+  <div class="vp-row">
+   <button class="vbtn" data-act="prev" aria-label="上一集" id="vp-prev-btn" hidden><svg class="i flip"><use href="#i-next"/></svg></button>
+   <button class="vbtn" data-act="toggle" aria-label="播放/暂停"><svg class="i i-play-on"><use href="#i-play"/></svg><svg class="i i-pause-on"><use href="#i-pause"/></svg></button>
+   <button class="vbtn" data-act="next" aria-label="下一集" id="vp-next-btn" hidden><svg class="i"><use href="#i-next"/></svg></button>
+   <button class="vbtn vp-vol" data-act="mute" aria-label="静音"><svg class="i"><use href="#i-vol"/></svg></button>
+   <span class="vp-time"><span id="vp-cur">0:00</span> / <span id="vp-dur">0:00</span></span>
+   <span class="grow"></span>
+   <button class="vbtn" data-act="dm" aria-pressed="true" aria-label="弹幕"><svg class="i"><use href="#i-dm"/></svg></button>
+   <button class="vbtn txt" data-act="speed" aria-label="倍速" id="vp-speed">1.0×</button>
+   <button class="vbtn" data-act="settings" aria-label="播放设置"><svg class="i"><use href="#i-cog"/></svg></button>
+   <button class="vbtn only-wide" data-act="theater" aria-label="剧场模式"><svg class="i"><use href="#i-theater"/></svg></button>
+   <button class="vbtn" data-act="fs" aria-label="全屏"><svg class="i"><use href="#i-fs"/></svg></button>
+  </div>
+ </div>
+</div>
+<div class="vp-menu" id="vp-menu" role="menu"><button role="menuitemradio" aria-checked="false" data-rate="0.5">0.5×</button><button role="menuitemradio" aria-checked="false" data-rate="0.75">0.75×</button><button role="menuitemradio" aria-checked="true" data-rate="1">1×</button><button role="menuitemradio" aria-checked="false" data-rate="1.25">1.25×</button><button role="menuitemradio" aria-checked="false" data-rate="1.5">1.5×</button><button role="menuitemradio" aria-checked="false" data-rate="2">2×</button><button role="menuitemradio" aria-checked="false" data-rate="3">3×</button></div>
+<div class="vp-menu vp-settings" id="vp-settings" role="menu">
+ <div class="set-row"><span>自动播放下一集</span><div class="seg-mini"><button data-pref="autoNext" data-value="true">开</button><button data-pref="autoNext" data-value="false">关</button></div></div>
+ <div class="set-row"><span>弹幕字号</span><div class="seg-mini"><button data-pref="dmSize" data-value="0.8">小</button><button data-pref="dmSize" data-value="1">中</button><button data-pref="dmSize" data-value="1.25">大</button></div></div>
+ <div class="set-row"><span>弹幕透明度</span><div class="seg-mini"><button data-pref="dmOpacity" data-value="1">不透明</button><button data-pref="dmOpacity" data-value="0.75">75%</button><button data-pref="dmOpacity" data-value="0.5">50%</button></div></div>
+ <div class="set-row"><span>弹幕速度</span><div class="seg-mini"><button data-pref="dmSpeed" data-value="0.75">慢</button><button data-pref="dmSpeed" data-value="1">中</button><button data-pref="dmSpeed" data-value="1.4">快</button></div></div>
+ <div class="set-row"><span>弹幕区域</span><div class="seg-mini"><button data-pref="dmArea" data-value="0.25">1/4</button><button data-pref="dmArea" data-value="0.5">半屏</button><button data-pref="dmArea" data-value="0.75">3/4</button></div></div>
+</div>
+<div class="vp-hint" id="vp-hint"></div>
+<div class="vp-ad" id="vp-ad" hidden></div>
+<div class="vp-next-wrap"><button class="vp-next" id="vp-next" data-act="next"><span><small>即将播放</small>下一集</span><span class="ring"><svg class="i"><use href="#i-play"/></svg></span></button><button class="vp-next-x" data-act="next-cancel" aria-label="不播放下一集">×</button></div>
+</div>
+</div>
+<section class="pl-side">
+{{if .Manual}}<div class="full tool-head">
+<h1 class="pl-title" id="pl-title">在线 M3U8 播放器</h1>
+<p class="pl-meta" id="pl-meta">粘贴 m3u8、HLS 或 MP4 链接，直接在浏览器里播放。不用下载软件，不用注册。</p>
+<form class="paste-row tool-form" id="manual-form" novalidate><input id="manual-url" type="url" inputmode="url" enterkeyhint="go" placeholder="粘贴视频链接，例如 https://…/index.m3u8" autocomplete="off" spellcheck="false" aria-label="视频链接">
+<button class="btn btn-primary">播放</button></form>
+<p class="hint tool-error" id="manual-error" role="alert" hidden></p>
+<div class="tool-acts"><button class="chip" type="button" id="manual-share" hidden><svg class="i"><use href="#i-share"/></svg>复制分享链接</button>
+<a class="chip" id="dl-link" href="#" target="_blank" rel="noopener noreferrer nofollow" referrerpolicy="no-referrer" hidden><svg class="i"><use href="#i-download"/></svg>下载（第三方工具）</a></div>
+</div>
+<section id="recent-sec" hidden><h3 class="pl-h">最近播放<button class="link-btn" type="button" id="recent-clear">清空</button></h3>
+<ul class="recent" id="recent"></ul><p class="hint">只保存在这台设备上，本站服务器不知道你播过什么。</p></section>
+<section class="full tool-help"><h2 class="pl-h">怎么用</h2>
+<ol class="tool-steps"><li>复制视频链接（以 .m3u8 或 .mp4 结尾的地址）。</li><li>粘贴到上面的输入框，会自动开始播放。</li><li>想发给别人看，点"复制分享链接"：链接在网址的 # 后面，对方打开就能播，本站服务器收不到。</li></ol>
+<h2 class="pl-h">常见问题</h2>
+<div class="faq">{{range .FAQ}}<details><summary>{{.Q}}</summary><p>{{.A}}</p></details>{{end}}</div>
+<p class="hint">本站不提供任何视频，只是一个播放器：你粘贴的链接由你的浏览器直接打开。请只播放你有权观看的内容。</p>
+</section>
+<div hidden><span id="src-status"></span><div id="src"></div><div id="ep-grid"></div></div>
+{{else}}<div class="full"><h1 class="pl-title" id="pl-title">{{if not $noMedia}}{{.M.Title}}{{end}}</h1>
+<p class="pl-meta" id="pl-meta">{{if not $noMedia}}{{if .M.Year}}{{.M.Year}}{{end}}{{if .M.Genres}} · {{join (first .M.Genres 3) " / "}}{{end}}{{if rating .M.Rating}} · 豆瓣 {{rating .M.Rating}}{{end}}{{else if .Local}}这部作品不在作品库里，观看记录会加密后同步{{end}}</p></div>
+{{if not $noMedia}}<div class="pl-acts full">
+{{template "library_actions" dict "MediaID" .M.ID "Entry" .Entry "HasEntry" .HasEntry}}
+<a class="chip" href="/m/{{.M.ID}}"><svg class="i"><use href="#i-info"/></svg>详情</a>
+<button class="chip" data-share data-url="/m/{{.M.ID}}"><svg class="i"><use href="#i-share"/></svg>分享</button>
+</div>{{end}}
+<section id="ep-sec"{{if and (not .Local) (not .Episodes)}} hidden{{end}}><h3 class="pl-h">选集<small id="ep-status">{{if not $noMedia}}{{.Status}}{{end}}</small></h3>
+<div class="ep-grid" id="ep-grid">{{if not $noMedia}}{{range .Episodes}}{{if not .Upcoming}}<a href="{{.Href}}" data-ep="{{.Number}}"{{if .Completed}} data-seen{{end}}{{if .Current}} aria-current="true"{{end}} title="{{.Title}}">{{.Number}}</a>{{end}}{{end}}{{end}}</div></section>
+<section id="dm-section"><h3 class="pl-h">弹幕<small id="dm-count"></small></h3><form class="dm-form" id="dm-form"><input name="t" maxlength="50" placeholder="发一条友善的弹幕" autocomplete="off" enterkeyhint="send"><button class="btn btn-primary">发送</button></form></section>
+<section><h3 class="pl-h">来源<small id="src-status">播放失败会自动切换到下一个</small></h3><div class="src" role="radiogroup" id="src"></div>
+<p class="hint src-links"><a href="/settings#sources">管理播放源</a>
+<a id="dl-link" href="#" target="_blank" rel="noopener noreferrer nofollow" referrerpolicy="no-referrer" hidden><svg class="i"><use href="#i-download"/></svg>下载当前视频（第三方）</a></p></section>
+{{end}}</section>
+</main>{{end}}

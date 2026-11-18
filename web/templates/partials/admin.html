@@ -1,0 +1,18 @@
+{{define "admin_nav"}}<header class="page-head"><h1 class="page-title">管理后台</h1></header>
+<div class="chips pad admin-nav">
+<a class="chip-l" href="/admin"{{if eq .Section "dashboard"}} aria-current="true"{{end}}>概览</a>
+<a class="chip-l" href="/admin/users"{{if eq .Section "users"}} aria-current="true"{{end}}>用户</a>
+<a class="chip-l" href="/admin/media"{{if eq .Section "media"}} aria-current="true"{{end}}>作品</a>
+<a class="chip-l" href="/admin/collections"{{if eq .Section "collections"}} aria-current="true"{{end}}>片单</a>
+<a class="chip-l" href="/admin/content"{{if eq .Section "content"}} aria-current="true"{{end}}>内容审核</a>
+<a class="chip-l" href="/admin/feedback"{{if eq .Section "feedback"}} aria-current="true"{{end}}>反馈</a>
+<a class="chip-l" href="/admin/fingerprints"{{if eq .Section "fingerprints"}} aria-current="true"{{end}}>广告指纹</a>
+<a class="chip-l" href="/admin/filters"{{if eq .Section "filters"}} aria-current="true"{{end}}>屏蔽词</a>
+<a class="chip-l" href="/admin/jobs"{{if eq .Section "jobs"}} aria-current="true"{{end}}>任务</a>
+</div>
+{{if .Notice}}<p class="flash ok" role="status">{{.Notice}}</p>{{end}}{{end}}
+
+{{define "admin_pager"}}{{with .Pager}}<nav class="pager"><span class="hint">共 {{.Total}} 条 · 第 {{.Page}} / {{.Pages}} 页</span>{{if .Prev}}<a class="btn btn-glass" href="{{.Prev}}">上一页</a>{{end}}{{if .Next}}<a class="btn btn-glass" href="{{.Next}}">下一页</a>{{end}}</nav>{{end}}{{end}}
+
+{{define "csrf"}}<input type="hidden" name="_csrf" value="{{.}}">{{end}}
+{{define "reset_link"}}<div class="flash ok pad" role="status"><p>{{.ResetFor}} 的重置密码链接（30 分钟内有效，只能用一次）：</p><p><input class="copy-field" value="{{.ResetLink}}" readonly aria-label="重置链接"></p></div>{{end}}

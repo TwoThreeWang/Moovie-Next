@@ -1,0 +1,12 @@
+{{define "content"}}<main class="auth">
+<a class="nav-brand" href="/"><img class="brand-icon" src="/static/img/apple-touch-icon.png" width="40" height="40" alt=""><span class="brand-t">{{.Site}}</span></a>
+<form class="form auth-card" method="post" action="/auth/forgot" data-pow>
+{{if .PoW}}<input type="hidden" name="pow_token" value="{{.PoW}}"><input type="hidden" name="pow_nonce" value="">
+<noscript><p class="flash error">需要开启 JavaScript（用于安全校验）。</p></noscript>{{end}}
+<h1>找回密码</h1>
+{{if .Error}}<p class="flash error" role="alert">{{.Error}}</p>{{end}}
+<input type="hidden" name="_csrf" value="{{.CSRF}}">
+<label>注册时用的邮箱<input type="email" name="email" value="{{.Email}}" autocomplete="email" inputmode="email" required autofocus><small>我们会发一个链接，点开后设置新密码。</small></label>
+<button class="btn btn-primary">发送重置链接</button>
+<p class="hint"><a href="/auth/login">回到登录</a> · 邮箱也收不到？在<a href="/feedback">反馈</a>里说明，管理员可以帮你重置。</p>
+</form></main>{{end}}

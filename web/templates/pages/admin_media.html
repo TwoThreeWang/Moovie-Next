@@ -1,0 +1,13 @@
+{{define "content"}}<main class="admin">{{template "admin_nav" .}}
+<div class="pad admin-tools"><form class="form inline" method="get">{{if .Kind}}<input type="hidden" name="kind" value="{{.Kind}}">{{end}}<input name="q" value="{{.Query}}" placeholder="片名、豆瓣 ID 或红果链接"><button class="btn btn-glass">搜索</button></form>
+<form class="form inline" method="post" action="/admin/media/add">{{template "csrf" .CSRF}}<input name="ref" placeholder="豆瓣 ID / 链接，或红果短剧链接" required><button class="btn btn-primary">添加</button></form></div>
+<div class="pad chips"><a class="chip-l" href="/admin/media?q={{.Query}}"{{if not .Kind}} aria-current="true"{{end}}>全部</a><a class="chip-l" href="/admin/media?kind=long&q={{.Query}}"{{if eq .Kind "long"}} aria-current="true"{{end}}>电影、剧集、综艺、动漫</a><a class="chip-l" href="/admin/media?kind=short&q={{.Query}}"{{if eq .Kind "short"}} aria-current="true"{{end}}>短剧</a></div>
+<div class="table-wrap"><table class="table"><thead><tr><th>ID</th><th>作品</th><th>类型</th><th>来源</th><th>资料</th><th>上次同步</th><th></th></tr></thead><tbody>
+{{range .List}}<tr{{if .Hidden}} class="is-hidden"{{end}}><td>{{.ID}}</td><td><a href="/m/{{.ID}}">{{if .Title}}{{.Title}}{{else}}（等待补全）{{end}}</a>{{if .Year}} <span class="dim">{{.Year}}</span>{{end}}{{if .Hidden}} <span class="tag">已隐藏</span>{{end}}</td>
+<td>{{.TypeLabel}}{{with .Form}} · {{.}}{{end}}</td>
+<td>{{if .HongguoID}}<a href="https://hongguoduanju.com/detail?series_id={{.HongguoID}}" rel="noopener noreferrer" target="_blank">红果</a>{{else if .DoubanID}}<a href="https://movie.douban.com/subject/{{.DoubanID}}/" rel="noopener noreferrer" target="_blank">豆瓣 {{.DoubanID}}</a>{{end}}</td>
+<td>{{if eq .MetadataStatus "complete"}}完整{{else if eq .MetadataStatus "not_found"}}{{if .HongguoID}}红果已下架{{else}}豆瓣无此条目{{end}}{{else}}待补全{{end}}{{if .HasEmbedding}} · 有向量{{end}}{{if .IsShort}}{{if .Heat}} · 热度 {{.Heat}}{{end}}{{end}}</td><td>{{timeago .MetadataSyncedAt}}</td>
+<td class="actions"><form method="post" action="/admin/media/{{.ID}}/refresh" class="inline-form">{{template "csrf" $.CSRF}}<button class="link">同步</button></form>
+<form method="post" action="/admin/media/{{.ID}}/hidden" class="inline-form">{{template "csrf" $.CSRF}}<input type="hidden" name="hidden" value="{{if .Hidden}}0{{else}}1{{end}}"><button class="link{{if not .Hidden}} danger{{end}}">{{if .Hidden}}恢复{{else}}隐藏{{end}}</button></form></td></tr>
+{{else}}<tr><td colspan="7" class="empty">没有作品</td></tr>{{end}}</tbody></table></div>
+{{template "admin_pager" .}}</main>{{end}}

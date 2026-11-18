@@ -1,0 +1,19 @@
+{{define "content"}}<main class="narrow report-page">
+<header class="page-head"><p class="kicker"><a href="/user/{{.Profile.ID}}">{{.Profile.Username}}</a></p><h1 class="page-title">{{.Report.Label}}观影报告</h1>
+{{if or .Profile.IsPublic .Self}}<p><button class="btn btn-glass" type="button" data-share data-url="{{.ShareURL}}" data-card="{{json .Card}}"><svg class="i"><use href="#i-share"/></svg>分享报告</button></p>{{end}}
+{{if and .Self (not .Profile.IsPublic)}}<p class="hint">你的主页没有公开，别人扫码只能打开首页。<a href="/settings#privacy">去公开</a></p>{{end}}</header>
+<section class="report-hero"><span class="kicker">本月身份</span><h2>{{.Report.PersonaTitle}}</h2><p>{{.Report.PersonaLine}}</p></section>
+<div class="stats">
+<div><b>{{.Report.WatchedCount}}</b><span>部看过</span></div>
+<div><b>{{.Report.Hours}}</b><span>小时</span></div>
+<div><b>{{.Report.ActiveDays}}</b><span>天有观影</span></div>
+<div><b>{{.Report.LongestStreak}}</b><span>天最长连续</span></div>
+{{if rating .Report.AverageRating}}<div><b>{{rating .Report.AverageRating}}</b><span>平均评分（满分 5）</span></div>{{end}}
+{{if .Report.Percentile}}<div><b>{{.Report.Percentile}}%</b><span>超过的用户</span></div>{{end}}
+</div>
+{{if .Report.Genres}}<section class="card-panel"><h2>最常看的类型</h2><ul class="bars">{{$top := (index .Report.Genres 0).Count}}{{range .Report.Genres}}<li><span>{{.Name}}</span><i style="--p:{{pct (floatOf .Count) (floatOf $top)}}%"></i><b>{{.Count}}</b></li>{{end}}</ul></section>{{end}}
+{{with .Report.Top}}<section class="card-panel top-pick"><h2>本月最爱</h2><a href="/m/{{.MediaID}}">{{if .Poster}}<img src="{{img .Poster "s"}}" width="96" height="144" loading="lazy" alt="">{{end}}<div><b>{{.Title}}</b><span class="stars">{{stars .Rating}}</span></div></a></section>{{end}}
+{{if .Report.Posters}}<section class="card-panel"><h2>海报墙</h2><div class="poster-wall">{{range .Report.Posters}}<img src="{{img . "s"}}" loading="lazy" decoding="async" alt="">{{end}}</div></section>{{end}}
+{{if not .Report.WatchedCount}}<p class="empty">这个月还没有标记看过的作品。</p>{{end}}
+{{template "footer" .}}
+</main>{{end}}

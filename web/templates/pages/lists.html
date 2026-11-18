@@ -1,0 +1,5 @@
+{{define "content"}}<main>
+<header class="page-head"><h1 class="page-title">片单</h1></header>
+{{if .Collections}}<div class="grid grid-banner">{{range .Collections}}{{template "collection_card" .}}{{end}}</div>{{else}}<p class="empty">还没有片单。</p>{{end}}
+{{template "footer" .}}
+</main>{{end}}

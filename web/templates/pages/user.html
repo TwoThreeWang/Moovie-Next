@@ -1,0 +1,16 @@
+{{define "content"}}<main>
+<header class="page-head me-head">
+<span class="avatar avatar-emoji lg">{{.Profile.Avatar}}</span>
+<div><h1 class="page-title">{{.Profile.Username}}</h1><p class="me-stats"><b>{{.WatchedCount}}</b> 看过 · <b>{{.WishCount}}</b> 想看 · <b>{{.Profile.Followers}}</b> 关注者</p></div>
+{{if .Self}}<a class="btn btn-glass" href="/settings#privacy">{{if .Profile.IsPublic}}已公开{{else}}未公开{{end}}</a>{{if .Profile.IsPublic}}<button class="btn btn-glass btn-icon" type="button" data-share data-url="{{.ShareURL}}" aria-label="分享主页"><svg class="i"><use href="#i-share"/></svg></button>{{end}}{{else if .User}}{{template "follow_button" dict "Profile" .Profile}}{{end}}
+</header>
+{{if .Months}}<div class="chips pad">{{range .Months}}<a class="chip-l" href="/user/{{$.Profile.ID}}/monthly/{{.}}">{{.}} 报告</a>{{end}}</div>{{end}}
+<div class="rows">
+{{if .Watched}}{{template "row" dict "Row" (dict "Title" "看过" "Cards" .Watched)}}{{end}}
+{{if .Wish}}{{template "row" dict "Row" (dict "Title" "想看" "Cards" .Wish)}}{{end}}
+</div>
+{{if .Comments}}<section class="row"><div class="row-head"><h2 class="row-title">短评</h2></div>
+<div class="comments pad">{{range .Comments}}{{template "comment" dict "C" . "Media" true "User" $.User}}{{end}}</div></section>{{end}}
+{{if and (not .Watched) (not .Wish)}}<p class="empty">这里还没有内容。</p>{{end}}
+{{template "footer" .}}
+</main>{{end}}

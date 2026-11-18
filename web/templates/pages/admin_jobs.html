@@ -1,0 +1,12 @@
+{{define "content"}}<main class="admin">{{template "admin_nav" .}}
+<div class="pad admin-tools"><div class="chips"><a class="chip-l" href="/admin/jobs"{{if not .Status}} aria-current="true"{{end}}>全部</a>
+<a class="chip-l" href="/admin/jobs?status=queued"{{if eq .Status "queued"}} aria-current="true"{{end}}>排队 {{index .Counts "queued"}}</a>
+<a class="chip-l" href="/admin/jobs?status=running"{{if eq .Status "running"}} aria-current="true"{{end}}>运行中 {{index .Counts "running"}}</a>
+<a class="chip-l" href="/admin/jobs?status=failed"{{if eq .Status "failed"}} aria-current="true"{{end}}>失败 {{index .Counts "failed"}}</a>
+<a class="chip-l" href="/admin/jobs?status=done"{{if eq .Status "done"}} aria-current="true"{{end}}>完成 {{index .Counts "done"}}</a></div>
+<form method="post" action="/admin/jobs/retry">{{template "csrf" .CSRF}}<button class="btn btn-glass">重试所有失败任务</button></form></div>
+<div class="table-wrap"><table class="table"><thead><tr><th>ID</th><th>类型</th><th>对象</th><th>状态</th><th>次数</th><th>创建</th><th>错误</th><th></th></tr></thead><tbody>
+{{range .Jobs}}<tr><td>{{.ID}}</td><td>{{.Kind}}</td><td>{{.Subject}}</td><td>{{.Status}}</td><td>{{.Attempts}}</td><td>{{timeago .CreatedAt}}</td><td class="dim">{{truncate .LastError 120}}</td>
+<td>{{if eq .Status "failed"}}<form method="post" action="/admin/jobs/retry" class="inline-form">{{template "csrf" $.CSRF}}<input type="hidden" name="id" value="{{.ID}}"><button class="link">重试</button></form>{{end}}</td></tr>
+{{else}}<tr><td colspan="8" class="empty">没有任务</td></tr>{{end}}</tbody></table></div>
+{{template "admin_pager" .}}</main>{{end}}

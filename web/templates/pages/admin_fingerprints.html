@@ -1,0 +1,11 @@
+{{define "content"}}<main class="admin">{{template "admin_nav" .}}
+<section class="card-panel"><h2>广告指纹怎么判定</h2>
+<p class="hint">指纹只是播放清单里一段片段的哈希，不知道是哪部片、哪一集，也看不到画面，所以这里不提供人工裁定——是不是广告由看到画面的人投票决定：播放时遇到疑似广告会问"这一段是广告吗"；自动跳过后可以点"撤销 → 这段不是广告"纠正。</p>
+<p class="hint">确认票达到 {{.MinConfirm}} 张、且确认占 80% 以上，算已确认（所有人自动跳过）；否认票达到 {{.MinReject}} 张、且多于确认，算已否认（不再询问）。这一页用来看整体情况，比如短时间内某个指纹票数暴涨。</p></section>
+<div class="chips pad"><a class="chip-l" href="/admin/fingerprints"{{if not .Status}} aria-current="true"{{end}}>全部</a><a class="chip-l" href="/admin/fingerprints?status=confirmed"{{if eq .Status "confirmed"}} aria-current="true"{{end}}>已确认</a><a class="chip-l" href="/admin/fingerprints?status=pending"{{if eq .Status "pending"}} aria-current="true"{{end}}>待定</a><a class="chip-l" href="/admin/fingerprints?status=rejected"{{if eq .Status "rejected"}} aria-current="true"{{end}}>已否认</a></div>
+<div class="table-wrap"><table class="table"><thead><tr><th>指纹</th><th>确认</th><th>否认</th><th>状态</th><th>最早出现</th><th>最近投票</th></tr></thead><tbody>
+{{range .List}}<tr><td><code title="{{.Hex}}">{{slice .Hex 0 16}}…</code></td><td>{{.Confirm}}</td><td>{{.Reject}}</td>
+<td><span class="tag status-{{if eq .Status "confirmed"}}resolved{{else if eq .Status "rejected"}}rejected{{else}}open{{end}}">{{if eq .Status "confirmed"}}已确认{{else if eq .Status "rejected"}}已否认{{else}}待定{{end}}</span></td>
+<td>{{date .CreatedAt}}</td><td>{{timeago .UpdatedAt}}</td></tr>
+{{else}}<tr><td colspan="6" class="empty">没有指纹</td></tr>{{end}}</tbody></table></div>
+{{template "admin_pager" .}}</main>{{end}}

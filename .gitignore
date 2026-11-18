@@ -1,0 +1,7 @@
+.env
+/bin/
+/tmp/
+*.test
+/deploy/mihomo/config.yaml
+/deploy/mihomo/providers/
+/data/

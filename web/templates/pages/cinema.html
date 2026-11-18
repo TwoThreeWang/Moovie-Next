@@ -1,0 +1,7 @@
+{{define "content"}}<main class="narrow">
+<header class="page-head"><h1 class="page-title">影院</h1><p class="hint">大家最近看了什么、怎么说。</p></header>
+<div class="chips pad"><a class="chip-l" href="/cinema"{{if not .Following}} aria-current="true"{{end}}>全部</a><a class="chip-l" href="/cinema?tab=following"{{if .Following}} aria-current="true"{{end}}>我关注的</a></div>
+<div class="comments pad">{{range .Comments}}{{template "comment" dict "C" . "Media" true "User" $.User}}{{else}}<p class="empty">{{if .Following}}你关注的人还没有写短评。{{else}}还没有短评。{{end}}</p>{{end}}</div>
+{{template "pager" .}}
+{{template "footer" .}}
+</main>{{end}}

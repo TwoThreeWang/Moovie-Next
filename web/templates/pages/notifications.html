@@ -1,0 +1,10 @@
+{{define "content"}}<main class="narrow">
+<header class="page-head page-head-row"><h1 class="page-title">通知</h1>
+{{if .Notifications}}<div class="head-actions">
+<form method="post" action="/notifications/read-all"><input type="hidden" name="_csrf" value="{{.CSRF}}"><button class="btn btn-glass"{{if not .UnreadCount}} disabled title="没有未读通知"{{end}}><svg class="i"><use href="#i-check"/></svg>全部已读{{if .UnreadCount}}（{{.UnreadCount}}）{{end}}</button></form>
+<form method="post" action="/notifications/clear" data-confirm="清空所有通知？清空后不能恢复。"><input type="hidden" name="_csrf" value="{{.CSRF}}"><button class="btn btn-glass danger">清空</button></form>
+</div>{{end}}</header>
+{{if .Notifications}}<p class="hint pad">点一条通知会标为已读并打开相关页面。</p>{{end}}
+<ul class="notes pad">{{range .Notifications}}{{template "notification" dict "N" .}}{{else}}<li class="empty">还没有通知。</li>{{end}}</ul>
+{{template "footer" .}}
+</main>{{end}}

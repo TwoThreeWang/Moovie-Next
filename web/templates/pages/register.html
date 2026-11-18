@@ -1,0 +1,13 @@
+{{define "content"}}<main class="auth">
+<a class="nav-brand" href="/"><img class="brand-icon" src="/static/img/apple-touch-icon.png" width="40" height="40" alt=""><span class="brand-t">{{.Site}}</span></a>
+<form class="form auth-card" method="post" action="/auth/register" data-pow>
+{{if .PoW}}<input type="hidden" name="pow_token" value="{{.PoW}}"><input type="hidden" name="pow_nonce" value="">
+<noscript><p class="flash error">注册需要开启 JavaScript（用于安全校验）。</p></noscript>{{end}}
+<h1>注册</h1>
+{{if .Error}}<p class="flash error" role="alert">{{.Error}}{{if .Exists}}，可以<a href="/auth/login?email={{.Email}}">直接登录</a>；忘记密码可以<a href="/auth/forgot?email={{.Email}}">找回</a>。{{end}}</p>{{end}}
+<input type="hidden" name="_csrf" value="{{.CSRF}}">
+<label>邮箱<input type="email" name="email" value="{{.Email}}" autocomplete="email" inputmode="email" required autofocus><small>我们会把登录密码发到这个邮箱，登录后可以修改。</small></label>
+<label class="hp" aria-hidden="true">网站<input type="text" name="website" tabindex="-1" autocomplete="off"></label>
+<button class="btn btn-primary">注册并发送密码</button>
+<p class="hint">注册即表示同意<a href="/terms">服务协议</a>和<a href="/privacy">隐私政策</a>。已有账号？<a href="/auth/login">登录</a></p>
+</form></main>{{end}}

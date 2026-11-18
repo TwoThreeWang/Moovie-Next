@@ -1,0 +1,23 @@
+{{define "content"}}<main class="search-page">
+<header class="page-head"><h1 class="page-title">搜索</h1></header>
+<form class="search-box" action="/search" role="search">
+<svg class="i"><use href="#i-search"/></svg>
+<input id="q" name="q" type="search" value="{{.Query}}" placeholder="电影、剧集、综艺、动漫" autocomplete="off" enterkeyhint="search" autofocus
+ hx-get="/api/htmx/search" hx-trigger="run" hx-target="#results" hx-indicator="#results">
+</form>
+<div id="search-empty"{{if .Query}} hidden{{end}}>
+<div class="chips pad"><a class="chip-l" href="/trends">热搜榜</a><a class="chip-l" href="/discover">发现</a><a class="chip-l" href="/list">片单</a></div>
+<section class="search-sec" id="recent-wrap" hidden><div class="row-head"><h2 class="row-title">最近搜索</h2><button class="row-more" id="recent-clear">清除</button></div><div class="chips wrap" id="recent"></div></section>
+{{if .Trending}}<section class="search-sec"><div class="row-head"><h2 class="row-title">大家都在搜</h2><a class="row-more" href="/trends">热搜榜<svg class="i"><use href="#i-chev-r"/></svg></a></div>
+<ol class="hot">{{range $i, $k := .Trending}}<li><a href="/search?q={{$k.Keyword}}"><b>{{add $i 1}}</b>{{$k.Keyword}}{{if $k.New}}<span class="trend-tag new">新</span>{{else if $k.Rising}}<span class="trend-tag up">升</span>{{end}}</a></li>{{end}}</ol></section>
+{{else if .Hot}}<section class="search-sec"><div class="row-head"><h2 class="row-title">大家都在看</h2><a class="row-more" href="/trends">热搜榜<svg class="i"><use href="#i-chev-r"/></svg></a></div>
+<ol class="hot">{{range $i, $m := .Hot}}<li><a href="/m/{{$m.ID}}"><b>{{add $i 1}}</b>{{$m.Title}}</a></li>{{end}}</ol></section>{{end}}
+</div>
+<div id="results" class="search-results"></div>
+{{if .User}}<section class="search-sec" id="source-search" hidden>
+<div class="row-head"><h2 class="row-title">我的源<span class="row-sub" id="source-status"></span></h2><a class="row-more" href="/settings#sources">设置</a></div>
+<p class="hint">下面的结果来自你自己配置的播放源，由浏览器直接查询，本站不参与。</p>
+<div class="grid" id="source-results"></div>
+</section>{{end}}
+{{template "footer" .}}
+</main>{{end}}

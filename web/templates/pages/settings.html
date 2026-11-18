@@ -1,0 +1,91 @@
+{{define "content"}}<main class="settings">
+<header class="page-head"><h1 class="page-title">设置</h1></header>
+{{template "flash" .}}
+{{if .Welcome}}<section class="card-panel welcome"><h2>欢迎！先设置播放源</h2>
+<p>本站只提供作品资料和一个通用播放器，不提供任何视频。想要播放，需要在下面填写你自己的订阅地址。不填也可以正常使用想看、看过、片单等功能。</p></section>{{end}}
+
+<section class="card-panel" id="sources">
+<h2>播放源</h2>
+<p class="hint">订阅地址指向一个由你自己维护的 JSON 文件，里面列出你的播放源。查询和播放都由浏览器直接连接，本站的服务器不会访问这些地址。</p>
+<p class="hint">在其他设备上登录同一个账号，播放源会自动同步过去。同步时订阅地址先在你的浏览器里用登录密码加密，服务器只保存密文，解不开。</p>
+<form class="form" id="sub-form"><label>订阅地址<input type="url" id="sub-url" placeholder="https://example.com/my-sources.json" autocomplete="off" spellcheck="false"></label>
+<div class="form-actions"><button class="btn btn-primary">保存并检查</button><button type="button" class="btn btn-glass" id="sub-refresh">重新读取</button><button type="button" class="btn btn-glass danger" id="sub-clear">清除</button></div></form>
+{{if .ExampleSubscription}}<p class="hint">还没有自己的订阅？可以先用示例订阅试试。<button type="button" class="link-inline" id="sub-example" data-url="/sub/example.json">使用示例订阅</button></p>{{end}}
+<p class="hint" id="sub-status"></p>
+<ul class="src-table" id="src-table"></ul>
+<details><summary>订阅文件的格式</summary>
+<pre>{
+  "version": 1,
+  "sources": [
+    { "key": "a", "name": "我的源 A", "api": "https://example.com/api.php/provide/vod/" }
+  ]
+}</pre>
+<p class="hint">每个源需要一个不变的 key。目前支持苹果 CMS 格式的 JSON 和 XML 接口。</p></details>
+</section>
+
+
+<section class="card-panel" id="homescreen">
+<h2>添加到手机桌面</h2>
+<p class="hint">像 App 一样从桌面打开：全屏、启动更快。</p>
+<div class="form-actions"><a class="btn btn-glass" href="/install">查看教程</a></div>
+</section>
+
+<section class="card-panel" id="playback">
+<h2>播放</h2>
+<form class="form" method="post" action="/settings/ad-skip"><input type="hidden" name="_csrf" value="{{.CSRF}}">
+<label class="switch"><input type="checkbox" name="enabled"{{if .User.AdSkipEnabled}} checked{{end}}><span>自动跳过已确认的片中广告</span></label>
+<p class="hint">判断完全在浏览器里完成：服务器只下发一份所有人相同的广告指纹列表，不知道你在看什么。</p>
+<div class="form-actions"><button class="btn btn-primary">保存</button></div></form>
+</section>
+
+<section class="card-panel" id="douban">
+<h2>豆瓣同步</h2>
+{{if .User.DoubanUserID}}<p>已绑定豆瓣账号 <b>{{.User.DoubanUserID}}</b>。同步会把豆瓣上的想看和看过导入本站，不会覆盖你在本站已有的标记。</p>
+<div hx-get="/api/htmx/douban-status" hx-trigger="load" hx-swap="outerHTML"></div>
+<form class="form" method="post" action="/settings/douban/unbind"><input type="hidden" name="_csrf" value="{{.CSRF}}"><div class="form-actions"><button class="btn btn-glass danger">解除绑定</button></div></form>
+{{else}}<form class="form" method="post" action="/settings/douban/bind"><input type="hidden" name="_csrf" value="{{.CSRF}}">
+<label>豆瓣 ID<input name="douban_user_id" maxlength="40" placeholder="个人主页地址 douban.com/people/ 后面的那一段" required></label>
+<p class="hint">需要你的豆瓣标记是公开的。</p>
+<div class="form-actions"><button class="btn btn-primary">绑定</button></div></form>{{end}}
+</section>
+
+<section class="card-panel" id="account">
+<h2>账号</h2>
+<form class="form" method="post" action="/settings/avatar"><input type="hidden" name="_csrf" value="{{.CSRF}}">
+<fieldset class="avatars"><legend>头像</legend>{{range .Avatars}}<label><input type="radio" name="avatar" value="{{.}}"{{if eq $.User.Avatar .}} checked{{end}}><span class="avatar avatar-emoji">{{.}}</span></label>{{end}}<label class="avatar-custom"><input type="radio" name="avatar" value="{{.CustomAvatar}}" id="avatar-custom-radio"{{if .CustomAvatar}} checked{{end}}><input class="avatar avatar-emoji" id="avatar-custom" value="{{.CustomAvatar}}" placeholder="+" maxlength="16" autocomplete="off" aria-label="自定义头像：输入一个 emoji"></label></fieldset>
+<p class="hint">最后一格可以输入任意一个 emoji。</p>
+<div class="form-actions"><button class="btn btn-glass">更换头像</button></div></form>
+<form class="form" method="post" action="/settings/username"><input type="hidden" name="_csrf" value="{{.CSRF}}">
+<label>用户名<input name="username" value="{{.User.Username}}" minlength="2" maxlength="20" required></label><div class="form-actions"><button class="btn btn-glass">修改用户名</button></div></form>
+<form class="form" method="post" action="/settings/email"><input type="hidden" name="_csrf" value="{{.CSRF}}">
+<label>邮箱<input type="email" name="email" value="{{.User.Email}}" inputmode="email" required></label><p class="hint">会给新邮箱发一封确认邮件，点开链接后才生效。</p><div class="form-actions"><button class="btn btn-glass">修改邮箱</button></div></form>
+<form class="form" method="post" action="/settings/password"><input type="hidden" name="_csrf" value="{{.CSRF}}">
+<label>当前密码<input type="password" name="current" autocomplete="current-password" required><small>注册时邮件里发的那个密码；忘了可以<a href="/auth/forgot?email={{.User.Email}}">重置</a>。</small></label>
+<label>新密码<input type="password" name="password" minlength="8" autocomplete="new-password" required></label>
+<p class="hint">修改密码后，其他设备需要重新登录。</p>
+<div class="form-actions"><button class="btn btn-glass">修改密码</button></div></form>
+</section>
+
+<section class="card-panel" id="privacy">
+<h2>隐私</h2>
+<form class="form" method="post" action="/settings/public"><input type="hidden" name="_csrf" value="{{.CSRF}}">
+<label class="switch"><input type="checkbox" name="public"{{if .User.IsPublic}} checked{{end}}><span>公开我的观影主页</span></label>
+<p class="hint">公开后，其他登录用户可以看到你的想看、看过和月度报告。短评始终对登录用户可见。</p>
+<div class="form-actions"><button class="btn btn-primary">保存</button></div></form>
+</section>
+<section class="card-panel" id="data">
+<h2>我的数据</h2>
+<p class="hint">导出你在本站的所有数据：账号信息、想看和看过、评分、短评、回复、播放进度、弹幕、关注、反馈。没有元数据的作品的观看历史在服务器上是加密的，导出时由这台设备解密后一起放进文件。</p>
+<div class="form-actions"><a class="btn btn-glass" href="/settings/export.json" data-export download>导出全部（JSON）</a><a class="btn btn-glass" href="/settings/export.csv" download>导出想看和看过（CSV，可用 Excel 打开）</a></div>
+</section>
+
+<section class="card-panel danger-zone" id="danger">
+<h2>注销账号</h2>
+<p class="hint">注销后，账号和它的所有数据（想看、看过、评分、短评、回复、播放进度、加密历史、弹幕、关注、通知）都会立即删除，<b>无法恢复</b>。反馈记录会保留，但不再和你关联。建议先导出数据。</p>
+<form class="form" method="post" action="/settings/delete-account" data-confirm="确定注销账号？所有数据会立即删除，无法恢复。"><input type="hidden" name="_csrf" value="{{.CSRF}}">
+<label>当前密码<input type="password" name="password" autocomplete="current-password" required></label>
+<label>输入“注销”两个字确认<input name="confirm" autocomplete="off" required pattern="注销"></label>
+<div class="form-actions"><button class="btn btn-glass danger">注销账号</button></div></form>
+</section>
+{{template "footer" .}}
+</main>{{end}}
