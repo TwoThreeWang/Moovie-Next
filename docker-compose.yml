@@ -1,50 +1,27 @@
-# 正式部署：网站、后台任务、弹幕服务。数据库、Ollama、Cloudflare WARP 用服务器上已有的，
-# 它们都在外部网络 postgres_default 里（和旧系统一样）。说明见 deploy/README.md。
-#
-#   docker compose up -d --build
-#
-# 可以在 .env 里覆盖的部署参数（都有默认值）：
-#   WEB_BIND          网站端口绑在哪个地址，默认 127.0.0.1（只给本机的反向代理用）
-#   OUTBOUND_PROXY    出站代理，默认 socks5://cloudflare-warp:1080；设成空就直连
-#   各个 *_MEMORY_LIMIT、*_CPU_LIMIT
-x-common: &common
-  image: moovie:local
-  env_file: .env
+# docker compose up -d --build；数据库、Ollama、WARP 使用 postgres_default 网络里的已有服务。
+# 环境变量从宿主机的 .env 和 deploy/*.env 读取，配置说明见 deploy/README.md。
+x-runtime: &runtime
   restart: unless-stopped
-  stop_grace_period: 20s
-  read_only: true
-  tmpfs:
-    - /tmp:size=64m,mode=1777
-  volumes:
-    # 临时的示例订阅文件（cmd/migrate-legacy -sources 导出）。没有这个目录也能启动
-    - ./data:/app/data:ro
-  networks:
-    - postgres_default
+  networks: [postgres_default]
   logging:
     driver: json-file
-    options:
-      max-size: "10m"
-      max-file: "3"
+    options: { max-size: "10m", max-file: "3" }
 
-x-outbound: &outbound
-  # 豆瓣、TMDB、Wikidata、AI、Telegram、图片代理走出站代理；内网服务和播放源查询的转发不走
-  # （转发只连公网地址，自己直连）。
-  HTTP_PROXY: ${OUTBOUND_PROXY-socks5://cloudflare-warp:1080}
-  HTTPS_PROXY: ${OUTBOUND_PROXY-socks5://cloudflare-warp:1080}
-  NO_PROXY: localhost,127.0.0.1,postgres,danmu-api,ollama,mihomo,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16
+x-app: &app
+  <<: *runtime
+  image: moovie:local
+  stop_grace_period: 20s
+  read_only: true
+  tmpfs: ["/tmp:size=64m,mode=1777"]
+  volumes:
+    - ./data:/app/data:ro
 
 services:
   web:
-    <<: *common
+    <<: *app
     build: .
     container_name: moovie-web
-    environment:
-      <<: *outbound
-      APP_ENV: production
-      PORT: "5008"
-      JOBS_IN_WEB: "false"
-      DB_MAX_CONNS: "${WEB_DB_MAX_CONNS:-12}"
-      GOMEMLIMIT: "${WEB_GO_MEMORY_LIMIT:-400MiB}"
+    env_file: [.env, ./deploy/web.env]
     ports:
       - "${WEB_BIND:-127.0.0.1}:5008:5008"
     mem_limit: "${WEB_MEMORY_LIMIT:-512m}"
@@ -58,49 +35,23 @@ services:
       start_period: 20s
 
   worker:
-    <<: *common
+    <<: *app
     container_name: moovie-worker
     entrypoint: ["./worker"]
-    depends_on:
-      - web
-    environment:
-      <<: *outbound
-      APP_ENV: production
-      JOBS_IN_WEB: "false"
-      DB_MAX_CONNS: "${WORKER_DB_MAX_CONNS:-6}"
-      GOMEMLIMIT: "${WORKER_GO_MEMORY_LIMIT:-200MiB}"
+    env_file: [.env, ./deploy/worker.env]
     mem_limit: "${WORKER_MEMORY_LIMIT:-256m}"
     cpus: "${WORKER_CPU_LIMIT:-1.0}"
     pids_limit: 128
 
-  # 弹幕聚合服务，只给网站在内网调用，不对外开端口。.env 里 DANMU_API_BASE=http://danmu-api:9321/<DANMU_API_TOKEN>
+  # 只供网站内网调用，不对外开端口，也不加载含数据库、邮件等密钥的 .env。
   danmu-api:
+    <<: *runtime
     image: logvar/danmu-api:latest
     container_name: moovie-danmu
-    environment:
-      TOKEN: ${DANMU_API_TOKEN:-changeme}
-      # 必须为 0：请求都从网站发出，弹幕服务只看得到同一个来源 IP；限流在网站里按访客做
-      RATE_LIMIT_MAX_REQUESTS: "0"
-      COMMENT_CACHE_MINUTES: "60"
-      SEARCH_CACHE_MINUTES: "30"
-      DANMU_LIMIT: "5"
-      LIKE_SWITCH: "false"
-      LOG_LEVEL: warn
-      TZ: Asia/Shanghai
-      HTTP_PROXY: ${OUTBOUND_PROXY-socks5://cloudflare-warp:1080}
-      HTTPS_PROXY: ${OUTBOUND_PROXY-socks5://cloudflare-warp:1080}
-      NO_PROXY: localhost,127.0.0.1,postgres,ollama
+    env_file: ./deploy/danmu.env
     volumes:
       - ./data/danmu-cache:/app/.cache
-    restart: unless-stopped
     mem_limit: 512m
-    networks:
-      - postgres_default
-    logging:
-      driver: json-file
-      options:
-        max-size: "10m"
-        max-file: "3"
 
 networks:
   postgres_default:

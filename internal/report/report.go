@@ -12,22 +12,23 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"moovie/internal/db"
+	"moovie/internal/media"
 )
 
 // Report 是一个月的观影报告。
 type Report struct {
-	YearMonth     string      `json:"year_month"`
-	WatchedCount  int         `json:"watched_count"`
-	TotalMinutes  int         `json:"total_minutes"`
-	AverageRating float64     `json:"average_rating"`
-	Genres        []GenreStat `json:"genres"`
-	Top           *TopItem    `json:"top,omitempty"`
-	ActiveDays    int         `json:"active_days"`
-	LongestStreak int         `json:"longest_streak"`
-	Percentile    int         `json:"percentile"` // 看得比百分之多少的用户多
-	PersonaTitle  string      `json:"persona_title"`
-	PersonaLine   string      `json:"persona_line"`
-	Posters       []string    `json:"posters"`
+	YearMonth     string          `json:"year_month"`
+	WatchedCount  int             `json:"watched_count"`
+	TotalMinutes  int             `json:"total_minutes"`
+	AverageRating float64         `json:"average_rating"`
+	Genres        []GenreStat     `json:"genres"`
+	Top           *TopItem        `json:"top,omitempty"`
+	ActiveDays    int             `json:"active_days"`
+	LongestStreak int             `json:"longest_streak"`
+	Percentile    int             `json:"percentile"` // 看得比百分之多少的用户多
+	PersonaTitle  string          `json:"persona_title"`
+	PersonaLine   string          `json:"persona_line"`
+	Posters       []media.Picture `json:"posters"`
 }
 
 // GenreStat 是某个类型看了几部。
@@ -88,7 +89,7 @@ func (s *Service) Get(ctx context.Context, userID int64, yearMonth string) (Repo
 	if err != nil {
 		return Report{}, err
 	}
-	report := Report{YearMonth: yearMonth, Genres: []GenreStat{}, Posters: []string{}}
+	report := Report{YearMonth: yearMonth, Genres: []GenreStat{}, Posters: []media.Picture{}}
 
 	if err := s.pool.QueryRow(ctx, `SELECT count(*),
 COALESCE(sum(m.duration_minutes * CASE WHEN m.media_type = 'movie' THEN 1 ELSE GREATEST(m.episode_count, 1) END), 0),
@@ -128,15 +129,15 @@ ORDER BY um.rating DESC, um.updated_at DESC LIMIT 1`, userID, start, end).Scan(&
 		return report, err
 	}
 
-	rows, err = s.pool.Query(ctx, `SELECT m.poster FROM user_movies um JOIN media m ON m.id = um.media_id
+	rows, err = s.pool.Query(ctx, `SELECT m.poster, m.title FROM user_movies um JOIN media m ON m.id = um.media_id
 WHERE um.user_id = $1 AND um.status = 'watched' AND m.poster <> '' AND um.updated_at >= $2 AND um.updated_at < $3
 ORDER BY um.rating DESC, um.updated_at DESC LIMIT 12`, userID, start, end)
 	if err != nil {
 		return report, err
 	}
 	for rows.Next() {
-		var poster string
-		if err := rows.Scan(&poster); err != nil {
+		var poster media.Picture
+		if err := rows.Scan(&poster.URL, &poster.Title); err != nil {
 			rows.Close()
 			return report, err
 		}

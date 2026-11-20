@@ -3,7 +3,7 @@
 <div class="sticky-filters">
 <div class="chips"><a class="chip-l" href="/discover"{{if not .Filter.Type}} aria-current="true"{{end}}>全部</a>
 {{range .Types}}<a class="chip-l" href="/discover/{{.Key}}"{{if eq $.Filter.Type .Key}} aria-current="true"{{end}}>{{.Label}}</a>{{end}}
-<a class="chip-l" href="/list">片单</a><a class="chip-l" href="/cinema">影院</a></div>
+<a class="chip-l" href="/cinema">影院</a></div>
 {{if .Short}}<div class="chips"><a class="chip-l" href="{{.Path}}?genre={{.Filter.Genre}}&sort={{.Filter.Sort}}"{{if not .Filter.Form}} aria-current="true"{{end}}>全部剧种</a>
 {{range .Forms}}<a class="chip-l" href="{{$.Path}}?form={{.}}&genre={{$.Filter.Genre}}&sort={{$.Filter.Sort}}"{{if eq $.Filter.Form .}} aria-current="true"{{end}}>{{.}}</a>{{end}}</div>{{end}}
 <div class="chips"><a class="chip-l" href="{{.Path}}?form={{.Filter.Form}}&sort={{.Filter.Sort}}"{{if not .Filter.Genre}} aria-current="true"{{end}}>全部{{if .Short}}题材{{else}}类型{{end}}</a>
@@ -13,6 +13,7 @@
 <a class="chip-l" href="{{.Path}}?form={{.Filter.Form}}&genre={{.Filter.Genre}}&sort=new"{{if eq .Filter.Sort "new"}} aria-current="true"{{end}}>最新</a></div>
 </div>
 {{if .Rows}}<div class="rows">{{range .Rows}}{{template "row" dict "Row" .}}{{end}}</div>{{end}}
+{{with .Prev}}<nav class="pager" aria-label="作品分页"><a class="btn btn-glass" href="{{.}}" rel="prev">上一页</a></nav>{{end}}
 {{if .Cards}}<div class="grid" id="grid">{{template "grid_cards" .}}</div>{{else}}<p class="empty">这个筛选条件下还没有作品。</p>{{end}}
 {{if .Short}}<p class="hint">短剧资料来自<a href="https://hongguoduanju.com/" rel="noopener noreferrer" target="_blank">红果短剧</a>。剧种只有上过红果分类和榜单的短剧才知道，按剧种筛选时看到的是其中较热门的部分。</p>{{end}}
 {{template "footer" .}}

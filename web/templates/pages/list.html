@@ -1,8 +1,30 @@
 {{define "content"}}<main>
-<header class="page-head"><p class="kicker"><a href="/list">片单</a></p><h1 class="page-title">{{.Collection.Title}}</h1>
-{{if .Collection.Description}}<p class="lead">{{.Collection.Description}}</p>{{end}}<p class="hint">{{.Collection.Count}} 部 · 更新于 {{date .Collection.UpdatedAt}}</p>
-<p><button class="btn btn-glass" type="button" data-share data-card="{{json .Card}}"><svg class="i"><use href="#i-share"/></svg>分享片单</button></p></header>
-{{if .Cards}}<div class="grid">{{range .Cards}}{{template "card" .}}{{end}}</div>{{else}}<p class="empty">这个片单还是空的。</p>{{end}}
+<header class="page-head">
+<p class="kicker">{{if .PreviewLabel}}{{.PreviewLabel}}{{else if .Shared}}仅链接可见{{else}}<a href="/list">片单广场</a>{{end}}</p>
+<h1 class="page-title">{{.Collection.Title}}</h1>
+{{if .Public}}
+<a class="collection-author" href="/user/{{.Collection.OwnerID}}">
+<span class="avatar avatar-emoji" aria-hidden="true">{{.Collection.AuthorAvatar}}</span>
+<span><strong>{{.Collection.AuthorName}}</strong><span class="hint">查看作者主页</span></span>
+<svg class="i" aria-hidden="true"><use href="#i-chev-r"/></svg>
+</a>
+{{end}}
+{{with .Collection.Description}}<p class="lead collection-entry-note">{{.}}</p>{{end}}
+<p class="hint collection-stats"{{if .CountView}} data-collection-view="/api/collections/{{.Collection.Slug}}/view"{{end}}>
+<span>{{.Collection.Count}} 部</span>{{if .Public}}<span><svg class="i" aria-hidden="true"><use href="#i-eye"/></svg>{{.Collection.Views}} 次浏览</span><span>{{.Engagement.Favorites}} 人收藏</span>{{end}}
+</p>
+{{if .Card}}<div class="form-actions collection-detail-actions">
+{{if .Public}}
+{{if .User}}{{if ne .User.ID .Collection.OwnerID}}
+<form method="post" action="/me/collections/{{.Collection.ID}}/favorite">{{template "csrf" .CSRF}}
+<button class="btn btn-glass{{if .Engagement.Favorited}} is-on{{end}}" name="intent" value="{{if .Engagement.Favorited}}remove{{else}}save{{end}}" aria-pressed="{{.Engagement.Favorited}}">
+<svg class="i" aria-hidden="true"><use href="#{{if .Engagement.Favorited}}i-check{{else}}i-plus{{end}}"/></svg>{{if .Engagement.Favorited}}取消收藏{{else}}收藏片单{{end}}</button></form>
+{{end}}{{else}}<a class="btn btn-glass" href="{{.LoginURL}}">登录后收藏</a>{{end}}
+{{end}}
+<button class="btn btn-glass" type="button" data-share data-card="{{json .Card}}"><svg class="i" aria-hidden="true"><use href="#i-share"/></svg>分享片单</button>
+</div>{{end}}
+</header>
+{{template "collection_entries" .}}
 {{if .Related}}<section class="row"><div class="row-head"><h2 class="row-title">相关片单</h2></div>
 <div class="rail rail-banner">{{range .Related}}{{template "collection_card" .}}{{end}}</div></section>{{end}}
 {{template "footer" .}}

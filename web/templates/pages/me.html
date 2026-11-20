@@ -18,6 +18,7 @@
 <ul class="menu">
 <li class="menu-row"><a href="/notifications"><svg class="i"><use href="#i-bell"/></svg>通知{{if .Unread}}<span class="pill">{{.Unread}}</span>{{end}}</a>
 {{if .Unread}}<form method="post" action="/notifications/read-all?back=/me"><input type="hidden" name="_csrf" value="{{.CSRF}}"><button class="link">全部已读</button></form>{{end}}</li>
+<li><a href="/me/collections"><svg class="i"><use href="#i-layers"/></svg>我的片单</a></li>
 <li><a href="/settings#sources"><svg class="i"><use href="#i-layers"/></svg>播放源<span class="dim" id="menu-sources"></span></a></li>
 <li><a href="/settings#douban"><svg class="i"><use href="#i-sync"/></svg>豆瓣同步{{if .User.DoubanUserID}}<span class="dim">已绑定</span>{{end}}</a></li>
 <li><a href="/user/{{.User.ID}}"><svg class="i"><use href="#i-user"/></svg>我的主页{{if not .User.IsPublic}}<span class="dim">未公开</span>{{end}}</a></li>

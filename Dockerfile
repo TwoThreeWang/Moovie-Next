@@ -3,7 +3,9 @@
 FROM golang:1.25-alpine AS builder
 WORKDIR /src
 COPY go.mod go.sum ./
+# 依赖缓存和编译缓存由同一个 BuildKit builder 跨次构建保留。
 RUN --mount=type=cache,target=/go/pkg/mod go mod download
+# .dockerignore 只放行构建所需文件；配置、文档等变更不会触发下面的编译。
 COPY . .
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
     for name in web worker migrate-legacy mailcheck tgcheck hongguo-seed; do \

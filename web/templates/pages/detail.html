@@ -4,7 +4,7 @@
 </div>
 <main class="detail" data-media="{{json .Client}}">
 <section class="d-hero">
-<div class="d-media"><picture>{{if .M.Backdrops}}<source media="(min-width:720px)" srcset="{{img .M.Backdrop "l"}}">{{end}}<img class="fade" src="{{img .M.Poster "l"}}" width="720" height="900" fetchpriority="high" decoding="async" alt="《{{.M.Title}}》海报"></picture></div>
+<div class="d-media"><picture>{{if .M.Backdrops}}<source media="(min-width:720px)" srcset="{{img .M.Backdrop "display" .M.Title "still"}}">{{end}}<img class="fade" src="{{img .M.Poster "display" .M.Title "poster"}}" width="720" height="900" fetchpriority="high" decoding="async" alt="《{{.M.Title}}》海报"></picture></div>
 <div class="d-body">
 {{if .Fetching}}{{template "fetching" dict "ID" .M.ID "Attempt" 1}}{{end}}
 <p class="kicker">{{.M.TypeLabel}}{{with .M.Form}} · {{.}}{{end}}{{if .Status}} · {{.Status}}{{end}}{{if .M.Hidden}} · 已隐藏{{end}}</p>
@@ -33,7 +33,7 @@
 </section>
 {{if .Series}}{{template "row" dict "Row" (dict "Title" "同系列" "Cards" .Series)}}{{end}}
 {{if gt (len .M.Backdrops) 1}}<section class="row"><div class="row-head"><h2 class="row-title">剧照</h2></div>
-<div class="rail rail-wide" data-gallery>{{range $i, $b := .M.Backdrops}}<button type="button" class="card card-wide still" data-zoom="{{img $b "l"}}" aria-label="查看第 {{add $i 1}} 张剧照的大图"><div class="card-art"><img src="{{img $b "m"}}" width="480" height="270" loading="lazy" decoding="async" alt="《{{$.M.Title}}》剧照 {{add $i 1}}"></div></button>{{end}}</div></section>{{end}}
+<div class="rail rail-wide" data-gallery>{{range $i, $b := .M.Backdrops}}<button type="button" class="card card-wide still" data-zoom="{{img $b "original" $.M.Title "still"}}" aria-label="查看第 {{add $i 1}} 张剧照的大图"><div class="card-art"><img src="{{img $b "thumb" $.M.Title "still"}}" width="480" height="270" loading="lazy" decoding="async" alt="《{{$.M.Title}}》剧照 {{add $i 1}}"></div></button>{{end}}</div></section>{{end}}
 {{if .Inline}}{{template "media_comments" dict "Comments" .Comments "More" .CommentsMore "First" true "MediaID" .M.ID "User" .User}}
 {{else}}<div data-lazy hx-get="/api/htmx/m/{{.M.ID}}/comments" hx-trigger="near once" hx-swap="outerHTML"></div>{{end}}
 </div>

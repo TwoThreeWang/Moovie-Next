@@ -65,6 +65,12 @@ const (
 // ErrNotFound 表示作品不存在。
 var ErrNotFound = errors.New("作品不存在")
 
+// Picture 给组合封面保留所属作品的片名，供图片签名和 Telegram 文件命名使用。
+type Picture struct {
+	URL   string `json:"url"`
+	Title string `json:"title"`
+}
+
 // Media 是一部作品的完整资料。
 type Media struct {
 	ID               int64

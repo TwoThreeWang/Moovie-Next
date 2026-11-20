@@ -74,18 +74,19 @@ type App struct {
 	DoubanSync  *doubansync.Service
 	Queue       *jobs.Queue
 
-	render     *ui.Renderer
-	assetV     string
-	modules    moduleMap
-	resolve    *httpx.Limiter
-	discover   *httpx.Limiter
-	searched   *recentSet
-	searchLog  *httpx.Limiter
-	images     *imageproxy.Handler
-	exampleSub []byte // 临时：示例订阅，见 example_subscription.go
-	topics     shortTopics
-	pow        *pow.Issuer
-	accounts   *auth.Handler
+	render          *ui.Renderer
+	assetV          string
+	modules         moduleMap
+	resolve         *httpx.Limiter
+	discover        *httpx.Limiter
+	searched        *recentSet
+	searchLog       *httpx.Limiter
+	collectionViews *httpx.Limiter
+	images          *imageproxy.Handler
+	exampleSub      []byte // 临时：示例订阅，见 example_subscription.go
+	topics          shortTopics
+	pow             *pow.Issuer
+	accounts        *auth.Handler
 }
 
 // Options 让测试可以替换外部依赖。
@@ -129,8 +130,9 @@ func New(cfg config.Config, pool *db.Pool, log *slog.Logger, options Options) (*
 		resolve:  httpx.NewLimiter(120, time.Minute),
 		discover: httpx.NewLimiter(20, time.Minute),
 		searched: newRecentSet(10 * time.Minute), searchLog: httpx.NewLimiter(30, time.Minute),
-		images: imageproxy.New(client),
-		pow:    options.PoW,
+		collectionViews: httpx.NewLimiter(120, time.Minute),
+		images:          imageproxy.New(client, cfg.AppSecret),
+		pow:             options.PoW,
 	}
 	if app.pow == nil && !options.DisablePoW {
 		app.pow = pow.New(cfg.PoWBits, pow.MinSolveTime)
@@ -206,7 +208,7 @@ func New(cfg config.Config, pool *db.Pool, log *slog.Logger, options Options) (*
 	}
 	app.modules = modules
 	app.exampleSub = app.loadExampleSubscription()
-	renderer, err := ui.New(templates, reload, app.common)
+	renderer, err := ui.New(templates, reload, app.common, app.images.URL)
 	if err != nil {
 		return nil, fmt.Errorf("加载模板: %w", err)
 	}
@@ -219,7 +221,7 @@ func (a *App) common(c *gin.Context) gin.H {
 	user := auth.Current(c)
 	// 导航栏上的未读提醒：只在整页渲染时查（HTMX 片段用不到）。
 	unread := 0
-	if user != nil && !httpx.IsHTMX(c) {
+	if user != nil && !httpx.IsHTMX(c) && !c.GetBool("errorPage") {
 		unread, _ = a.Social.Unread(c.Request.Context(), user.ID)
 	}
 	return gin.H{
@@ -281,6 +283,8 @@ func (a *App) RegisterJobs(worker *jobs.Worker) {
 	worker.Lane(jobs.Lane{Kinds: []string{ingest.KindSemantic}, Loops: 2})
 	worker.Handle("trends.prune", func(ctx context.Context, _ jobs.Job) error { return a.Trends.Prune(ctx) })
 	worker.Every("trends.prune", 24*time.Hour)
+	worker.Handle("collections.prune-views", func(ctx context.Context, _ jobs.Job) error { return a.Collections.PruneViews(ctx) })
+	worker.Every("collections.prune-views", 24*time.Hour)
 	worker.Handle("mail.prune", func(ctx context.Context, _ jobs.Job) error { return a.Mail.Prune(ctx) })
 	worker.Every("mail.prune", 24*time.Hour)
 }
@@ -295,9 +299,18 @@ func (a *App) Router() *gin.Engine {
 		a.Log.Warn("TRUSTED_PROXIES 格式不对，不信任任何代理", "error", err)
 		router.SetTrustedProxies(nil)
 	}
-	router.Use(gin.Recovery(), a.accessLog(), httpx.Compress("/img/"))
+	router.Use(a.accessLog(), httpx.Compress("/img/"))
 	router.Use(httpx.SecurityHeaders(a.Config.Dev(), a.modules.hash))
-	router.NoRoute(func(c *gin.Context) { a.render.NotFound(c) })
+	router.Use(httpx.ErrorPages(func(c *gin.Context, status int, message string) { a.errorPage(c, status, "", message) }))
+	router.Use(gin.CustomRecovery(func(c *gin.Context, _ any) {
+		if !c.Writer.Written() {
+			httpx.Error(c, http.StatusInternalServerError, "请稍后重试。")
+		}
+		c.Abort()
+	}))
+	router.NoRoute(func(c *gin.Context) {
+		httpx.Error(c, http.StatusNotFound, "这个链接对应的页面不存在，或者已经被移除。")
+	})
 
 	a.static(router)
 	a.images.Register(router)
@@ -312,6 +325,8 @@ func (a *App) Router() *gin.Engine {
 	})
 	a.installRoutes(router)
 	router.GET("/robots.txt", a.robots)
+	router.GET("/sitemap.xml", a.sitemapIndex)
+	router.GET("/sitemap-:file", a.sitemapFile)
 	router.GET(exampleSubscriptionPath, a.exampleSubscription)
 
 	site := router.Group("", a.Sessions.Load(), httpx.CSRF())
@@ -408,13 +423,7 @@ func (a *App) static(router *gin.Engine) {
 // fail 记录错误并返回 500。
 func (a *App) fail(c *gin.Context, err error) {
 	c.Error(err)
-	if httpx.WantsJSON(c) || httpx.IsHTMX(c) {
-		httpx.Error(c, http.StatusInternalServerError, "服务器出错了，请稍后再试")
-		return
-	}
-	a.render.Page(c, http.StatusInternalServerError, "message.html", gin.H{
-		"Title": "出错了", "Heading": "服务器出错了", "Message": "请稍后再试。如果问题一直存在，可以在反馈页告诉我们。",
-	})
+	httpx.Error(c, http.StatusInternalServerError, "请稍后再试。如果问题持续发生，可以提交反馈。")
 }
 
 // newMailer 按配置创建发信器。

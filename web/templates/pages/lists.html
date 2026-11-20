@@ -1,5 +1,11 @@
 {{define "content"}}<main>
-<header class="page-head"><h1 class="page-title">片单</h1></header>
-{{if .Collections}}<div class="grid grid-banner">{{range .Collections}}{{template "collection_card" .}}{{end}}</div>{{else}}<p class="empty">还没有片单。</p>{{end}}
+<header class="page-head page-head-row"><h1 class="page-title">片单广场</h1>{{if .User}}<a class="btn btn-glass" href="/me/collections">我的片单</a>{{end}}</header>
+<nav class="chips pad" aria-label="片单排序">
+<a class="chip-l" href="/list"{{if eq .Order "new"}} aria-current="page"{{end}}>最新发布</a>
+<a class="chip-l" href="/list?sort=hot"{{if eq .Order "hot"}} aria-current="page"{{end}}>近 7 天热门</a>
+</nav>
+{{if eq .Order "hot"}}<p class="hint pad">按近 7 天新增收藏人数排序，人数相同时比较去重浏览量。</p>{{end}}
+{{if .Collections}}<div class="grid grid-banner">{{range .Collections}}{{template "collection_card" .}}{{end}}</div>{{else}}<p class="empty">还没有公开片单。</p>{{end}}
+{{template "collection_pager" .}}
 {{template "footer" .}}
 </main>{{end}}

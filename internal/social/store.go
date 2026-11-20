@@ -46,18 +46,19 @@ type Reply struct {
 
 // Notification 是一条通知。
 type Notification struct {
-	ID          int64
-	Kind        string
-	ActorID     int64
-	ActorName   string
-	ActorAvatar string
-	MediaID     int64
-	MediaTitle  string
-	Excerpt     string // 回复内容、被点赞的短评、管理员的回复，或被删掉的内容
-	Reason      string // 内容被删除的原因
-	FeedbackID  int64
-	CreatedAt   time.Time
-	Read        bool
+	ID           int64
+	Kind         string
+	ActorID      int64
+	ActorName    string
+	ActorAvatar  string
+	MediaID      int64
+	MediaTitle   string
+	Excerpt      string // 回复内容、被点赞的短评、管理员的回复，或被删掉的内容
+	Reason       string // 内容被删除的原因
+	FeedbackID   int64
+	CollectionID int64
+	CreatedAt    time.Time
+	Read         bool
 }
 
 // Notice 是要发出的一条通知（反馈被回复、内容被删除这类由管理员触发的通知）。
@@ -323,7 +324,7 @@ func (s *Store) Notification(ctx context.Context, userID, id int64) (Notificatio
 
 func (s *Store) notifications(ctx context.Context, where string, args ...any) ([]Notification, error) {
 	rows, err := s.pool.Query(ctx, `SELECT n.id, n.kind, a.id, a.username, a.avatar, COALESCE(m.id, 0), COALESCE(m.title, ''),
-CASE WHEN n.body <> '' THEN n.body ELSE COALESCE(r.content, um.comment, '') END, n.reason, COALESCE(n.feedback_id, 0),
+CASE WHEN n.body <> '' THEN n.body ELSE COALESCE(r.content, um.comment, '') END, n.reason, COALESCE(n.feedback_id, 0), COALESCE(n.collection_id, 0),
 n.created_at, n.read_at IS NOT NULL
 FROM notifications n JOIN users a ON a.id = n.actor_id
 LEFT JOIN user_movies um ON um.id = n.user_movie_id LEFT JOIN media m ON m.id = COALESCE(n.media_id, um.media_id)
@@ -336,7 +337,7 @@ WHERE `+where, args...)
 	list := []Notification{}
 	for rows.Next() {
 		var n Notification
-		if err := rows.Scan(&n.ID, &n.Kind, &n.ActorID, &n.ActorName, &n.ActorAvatar, &n.MediaID, &n.MediaTitle, &n.Excerpt, &n.Reason, &n.FeedbackID, &n.CreatedAt, &n.Read); err != nil {
+		if err := rows.Scan(&n.ID, &n.Kind, &n.ActorID, &n.ActorName, &n.ActorAvatar, &n.MediaID, &n.MediaTitle, &n.Excerpt, &n.Reason, &n.FeedbackID, &n.CollectionID, &n.CreatedAt, &n.Read); err != nil {
 			return nil, err
 		}
 		list = append(list, n)
@@ -352,6 +353,8 @@ func (n Notification) Target() string {
 		return "/user/" + id(n.ActorID)
 	case n.Kind == "feedback":
 		return "/feedback#f-" + id(n.FeedbackID)
+	case n.CollectionID > 0:
+		return "/me/collections/" + id(n.CollectionID)
 	case n.MediaID > 0 && n.Kind == "removed":
 		return "/m/" + id(n.MediaID)
 	case n.MediaID > 0:

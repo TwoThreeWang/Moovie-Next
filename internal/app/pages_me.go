@@ -18,7 +18,6 @@ import (
 	"moovie/internal/mail"
 	"moovie/internal/report"
 	"moovie/internal/social"
-	"moovie/internal/ui"
 )
 
 func entryViews(items []library.Item) []CardView {
@@ -219,6 +218,8 @@ var settingsMessages = map[string]string{
 	"taken":               "邮箱或用户名已被占用",
 	"password_wrong":      "当前密码不正确",
 	"password_weak":       "新密码至少 8 位",
+	"keyring_required":    "请启用浏览器加密并刷新页面，密码与账号配置需要一起更新",
+	"password_conflict":   "账号或同步配置已变化，密码尚未修改，请刷新页面后重试",
 	"douban_invalid":      doubansync.ErrInvalidUser.Error(),
 	"failed":              "保存失败，请重试",
 	"avatar_invalid":      "头像只能是一个 emoji",
@@ -309,13 +310,11 @@ func (a *App) doubanStatus(c *gin.Context) {
 
 // ---------- 公开主页和月度报告 ----------
 
-// visibleProfile 读取用户资料。资料不公开且访客不是本人时渲染提示页并返回 false。
-func (a *App) visibleProfile(c *gin.Context) (social.Profile, bool) {
+func (a *App) findProfile(c *gin.Context) (social.Profile, bool) {
 	id, ok := httpx.ParamID(c, "id")
 	if !ok {
 		return social.Profile{}, false
 	}
-	viewer := auth.Current(c)
 	profile, err := a.Social.Profile(c.Request.Context(), viewerID(c), id)
 	if errors.Is(err, social.ErrNotFound) {
 		a.render.NotFound(c)
@@ -325,21 +324,59 @@ func (a *App) visibleProfile(c *gin.Context) (social.Profile, bool) {
 		a.fail(c, err)
 		return profile, false
 	}
-	if !profile.IsPublic && profile.ID != viewerID(c) && !viewer.IsAdmin() {
-		a.render.Page(c, http.StatusForbidden, "message.html", gin.H{
-			"Title": profile.Username, "Heading": "这个主页没有公开", "Message": profile.Username + " 没有公开自己的观影主页。",
-		})
+	return profile, true
+}
+
+func canViewWatchProfile(profile social.Profile, user *auth.User) bool {
+	return profile.IsPublic || (user != nil && (profile.ID == user.ID || user.IsAdmin()))
+}
+
+func (a *App) visibleProfile(c *gin.Context) (social.Profile, bool) {
+	profile, ok := a.findProfile(c)
+	if !ok {
+		return profile, false
+	}
+	if !canViewWatchProfile(profile, auth.Current(c)) {
+		a.errorPage(c, http.StatusForbidden, "这个主页没有公开", profile.Username+" 没有公开自己的观影主页。")
 		return profile, false
 	}
 	return profile, true
 }
 
 func (a *App) userPage(c *gin.Context) {
-	profile, ok := a.visibleProfile(c)
+	c.Header("Cache-Control", "private, no-store")
+	profile, ok := a.findProfile(c)
 	if !ok {
 		return
 	}
 	ctx, viewer := c.Request.Context(), viewerID(c)
+	const pageSize = 24
+	page, offset := httpx.Page(c, pageSize)
+	lists, err := a.Collections.ByAuthor(ctx, profile.ID, pageSize+1, offset)
+	if err != nil {
+		a.fail(c, err)
+		return
+	}
+	path := "/user/" + strconv.FormatInt(profile.ID, 10)
+	data := gin.H{
+		"SEO":   SEO{Canonical: a.absolute(path), Type: "profile", NoIndex: true},
+		"Title": profile.Username, "Nav": "me", "Profile": profile, "Self": profile.ID == viewer,
+		"Collections": firstN(lists, pageSize), "ShareURL": a.absolute(path),
+	}
+	setPager(data, page, len(lists) > pageSize, pageLink(path+"#author-collections"))
+	if page > 1 && len(lists) == 0 {
+		a.render.NotFound(c)
+		return
+	}
+	if !canViewWatchProfile(profile, auth.Current(c)) {
+		if len(lists) == 0 {
+			a.errorPage(c, http.StatusForbidden, "这个主页没有公开", profile.Username+" 没有公开自己的观影主页。")
+			return
+		}
+		data["CollectionsOnly"] = true
+		a.render.Page(c, http.StatusOK, "user.html", data)
+		return
+	}
 	wishCount, watchedCount, err := a.Library.Counts(ctx, profile.ID)
 	if err != nil {
 		a.fail(c, err)
@@ -365,14 +402,10 @@ func (a *App) userPage(c *gin.Context) {
 		a.fail(c, err)
 		return
 	}
-	a.render.Page(c, http.StatusOK, "user.html", gin.H{
-		// 个人主页和观影报告是个人内容：可以分享，但不让搜索引擎收录
-		"SEO":      SEO{Description: profile.Username + " 看过 " + strconv.Itoa(watchedCount) + " 部、想看 " + strconv.Itoa(wishCount) + " 部。", Canonical: a.absolute("/user/" + strconv.FormatInt(profile.ID, 10)), Type: "profile", NoIndex: true},
-		"ShareURL": a.absolute("/user/" + strconv.FormatInt(profile.ID, 10)),
-		"Title":    profile.Username, "Nav": "me", "Profile": profile, "Self": profile.ID == viewer,
-		"WishCount": wishCount, "WatchedCount": watchedCount,
-		"Watched": entryViews(watched), "Wish": entryViews(wish), "Comments": comments, "Months": months,
-	})
+	data["SEO"] = SEO{Description: profile.Username + " 看过 " + strconv.Itoa(watchedCount) + " 部、想看 " + strconv.Itoa(wishCount) + " 部。", Canonical: a.absolute(path), Type: "profile", NoIndex: true}
+	data["WishCount"], data["WatchedCount"] = wishCount, watchedCount
+	data["Watched"], data["Wish"], data["Comments"], data["Months"] = entryViews(watched), entryViews(wish), comments, months
+	a.render.Page(c, http.StatusOK, "user.html", data)
 }
 
 func (a *App) reportPage(c *gin.Context) {
@@ -392,7 +425,7 @@ func (a *App) reportPage(c *gin.Context) {
 	seo := a.pageSEO(c.Request.URL.Path, monthly.PersonaTitle+"："+monthly.PersonaLine)
 	seo.Type, seo.NoIndex = "article", true
 	if len(monthly.Posters) > 0 {
-		seo.Image = a.absolute(ui.Image(monthly.Posters[0], "l"))
+		seo.Image = a.absolute(a.images.URL(monthly.Posters[0].URL, "display", monthly.Posters[0].Title, "poster"))
 	}
 	a.render.Page(c, http.StatusOK, "report.html", gin.H{
 		"Title": profile.Username + " 的 " + monthly.Label() + "观影报告", "Nav": "me", "Profile": profile, "Report": monthly, "SEO": seo,

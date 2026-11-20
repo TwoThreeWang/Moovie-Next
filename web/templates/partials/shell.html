@@ -43,9 +43,9 @@
 <ul class="nav-links">
 <li><a class="nav-link" href="/"{{if eq .Nav "home"}} aria-current="page"{{end}}><svg class="i"><use href="#i-home"/></svg><span>首页</span></a></li>
 <li><a class="nav-link" href="/discover"{{if eq .Nav "discover"}} aria-current="page"{{end}}><svg class="i"><use href="#i-compass"/></svg><span>发现</span></a></li>
-<li><a class="nav-link" href="/trends"{{if eq .Nav "trends"}} aria-current="page"{{end}}><svg class="i"><use href="#i-flame"/></svg><span>热搜</span></a></li>
+<li><a class="nav-link" href="/list"{{if eq .Nav "lists"}} aria-current="page"{{end}}><svg class="i"><use href="#i-list"/></svg><span>片单</span></a></li>
+<li class="nav-wide"><a class="nav-link" href="/trends"{{if eq .Nav "trends"}} aria-current="page"{{end}}><svg class="i"><use href="#i-flame"/></svg><span>热搜</span></a></li>
 <li><a class="nav-link" href="/search"{{if eq .Nav "search"}} aria-current="page"{{end}}><svg class="i"><use href="#i-search"/></svg><span>搜索</span></a></li>
-{{if .User}}{{if .User.IsAdmin}}<li class="nav-admin"><a class="nav-link" href="/admin"{{if eq .Nav "admin"}} aria-current="page"{{end}}><svg class="i"><use href="#i-shield"/></svg><span>管理</span></a></li>{{end}}{{end}}
 <li><a class="nav-link" href="{{if .NavUnread}}/notifications{{else}}/me{{end}}"{{if eq .Nav "me"}} aria-current="page"{{end}}><svg class="i"><use href="#i-user"/></svg><span>我的</span>{{if .NavUnread}}<i class="nav-dot" aria-label="{{.NavUnread}} 条未读通知"></i>{{end}}</a></li>
 </ul>
 {{if .User}}<a class="nav-avatar" href="{{if .NavUnread}}/notifications{{else}}/me{{end}}" aria-label="我的{{if .NavUnread}}（{{.NavUnread}} 条未读通知）{{end}}"><span class="avatar avatar-emoji">{{.User.Avatar}}</span>{{if .NavUnread}}<i class="nav-dot"></i>{{end}}</a>{{else}}<a class="btn btn-primary nav-login" href="/auth/login?redirect={{.Path}}">登录</a>{{end}}</nav>{{end}}

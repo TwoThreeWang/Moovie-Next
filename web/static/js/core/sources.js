@@ -80,12 +80,17 @@ export async function getSources() {
  * 保存订阅地址并读取一次。返回订阅状态；地址不对或读取失败时抛错（error.message 可以直接给用户看）。
  */
 export async function setSubscription(url) {
-  const checked = checkURL(url, location.href);
-  if (!checked.url) throw new Error('订阅地址不正确');
-  return loadSubscription(checked.url);
+  return saveSubscription(await readSubscription(url));
 }
 
-async function loadSubscription(url) {
+/** 读取并校验候选订阅，不改动本机已经生效的配置。 */
+export async function readSubscription(url) {
+  const checked = checkURL(url, location.href);
+  if (!checked.url) throw new Error('订阅地址不正确');
+  return readCheckedSubscription(checked.url);
+}
+
+async function readCheckedSubscription(url) {
   let text;
   try {
     text = await fetchText(url, { timeout: 8000 });
@@ -94,12 +99,20 @@ async function loadSubscription(url) {
   }
   const { sources, errors } = parseSubscription(text);
   if (!sources.length) throw new Error(errors[0] ?? '订阅里没有可用的源');
+  return { url, sources, errors, fetchedAt: Date.now() };
+}
+
+/** 账号保存确认后，或同步账号配置时，才让候选配置在本机生效。 */
+export async function saveSubscription(subscription) {
   const previous = await getSubscription();
-  const subscription = { url, sources, errors, fetchedAt: Date.now() };
   await idb.set('kv', userKey('subscription'), subscription);
+  globalThis.dispatchEvent?.(new CustomEvent('moovie:subscription-change'));
+  const { sources } = subscription;
   if (previous) await dropRemovedSources(previous.sources, sources);
   return subscription;
 }
+
+async function loadSubscription(url) { return saveSubscription(await readCheckedSubscription(url)); }
 
 /** 订阅里删掉的源：清掉指向它的"上次用的源"。 */
 async function dropRemovedSources(before, after) {
@@ -127,6 +140,7 @@ export async function clearSubscription() {
   await idb.del('kv', userKey('health'));
   for (const prefix of [userKey('last:')]) for (const { key } of await idb.entries('kv', prefix)) await idb.del('kv', key);
   for (const { key } of await idb.entries('cache', userKey('m:'))) await idb.del('cache', key);
+  globalThis.dispatchEvent?.(new CustomEvent('moovie:subscription-change'));
 }
 
 // ---------- 查询 ----------

@@ -1,0 +1,66 @@
+{{define "content"}}{{$c := .Collection}}<main class="collection-editor-page">
+<header class="page-head page-head-row">
+<div>
+<p class="kicker"><a href="/me/collections">我的片单</a></p>
+<h1 class="page-title">{{.Title}}</h1>
+{{if eq $c.Status "published"}}
+{{if eq $c.Revision "pending"}}<p class="hint">修改正在审核，公开页仍显示上一版。再次提交会替换待审核的修改。</p>
+{{else}}<p class="hint">提交修改后，公开页继续显示当前版本，审核通过后换成新版本。收藏和浏览数据保留。</p>{{end}}
+{{else if eq $c.Status "pending"}}<p class="hint">片单正在等待审核，提交修改后管理员将审核最新内容。</p>
+{{else}}<p class="hint">新片单仅自己可见，保存后可以在「我的片单」开启链接访问；投稿审核通过后会显示在广场和你的主页。</p>{{end}}
+</div>
+{{if $c.ID}}<div class="collection-editor-state">
+<span class="chip-l">{{$c.StatusLabel}}</span>
+{{if or (eq $c.Status "published") $c.LinkVisible}}<a class="link" href="/list/{{$c.Slug}}">查看公开页</a>{{end}}
+</div>{{end}}
+</header>
+{{template "flash" .}}
+{{with $c.ReviewReason}}<p class="flash error">审核意见：{{.}}</p>{{end}}
+<div class="collection-editor" data-editor data-entries="{{json .Entries}}">
+<form class="form" method="post" action="/me/collections">
+{{template "csrf" .CSRF}}
+<input type="hidden" name="id" value="{{$c.ID}}">
+<input type="hidden" name="base" value="{{.Base}}">
+<input type="hidden" name="entries">
+<div class="collection-editor-grid">
+<section class="card-panel collection-info" aria-label="基本信息">
+<label>标题<input name="title" value="{{$c.Title}}" maxlength="80" required placeholder="例如：适合雨天看的悬疑片"></label>
+<label>简介<textarea name="description" rows="3" maxlength="1000" placeholder="说说这份片单适合谁，为什么选这些作品">{{$c.Description}}</textarea></label>
+</section>
+<section class="card-panel collection-selection" aria-labelledby="selection-title">
+<h2 id="selection-title">已选作品 <span class="hint" data-count></span></h2>
+<p class="hint" data-empty>在「添加作品」里搜索片名并加入，再拖动或用按钮调整顺序、填写推荐语。</p>
+<ol class="collection-entries" data-items></ol>
+<div class="collection-undo" hidden data-undo-wrap><span data-removed></span> <button type="button" class="link" data-undo>撤销</button></div>
+</section>
+<aside class="card-panel collection-picker" aria-labelledby="picker-title">
+<h2 id="picker-title">添加作品</h2>
+<label><input type="search" data-search maxlength="120" placeholder="输入片名或别名" aria-label="片名或别名" autocomplete="off"></label>
+<p class="hint" data-search-status role="status">输入片名，点「加入」收录作品。</p>
+<ul class="collection-results" data-results></ul>
+</aside>
+</div>
+<div class="collection-editor-bar">
+<div class="collection-editor-messages">
+<p class="hint" data-draft-status role="status"></p>
+<p class="flash error" data-editor-error role="alert" hidden></p>
+</div>
+<div class="form-actions">
+<a class="btn btn-glass collection-editor-back" href="/me/collections">返回</a>
+<button class="btn btn-glass" type="button" data-restore hidden>恢复旧草稿</button>
+<button class="btn btn-glass" type="button" data-discard hidden>放弃本机草稿</button>
+<button class="btn btn-glass" type="submit" formaction="/me/collections/preview" formtarget="_blank" rel="noopener" data-preview disabled>预览</button>
+{{if eq $c.Status "published"}}
+<button class="btn btn-primary" type="submit" name="intent" value="submit" data-save disabled>提交修改审核</button>
+{{else if eq $c.Status "pending"}}
+<button class="btn btn-primary" type="submit" name="intent" value="submit" data-save disabled>保存并更新投稿</button>
+{{else}}
+<button class="btn btn-glass" type="submit" name="intent" value="save" data-save disabled>保存片单</button>
+<button class="btn btn-primary" type="submit" name="intent" value="submit" data-save{{if $c.LinkVisible}} data-review-confirm="投稿后链接暂时无法打开，审核通过后会恢复。确定投稿？"{{end}} disabled>投稿到广场</button>
+{{end}}
+</div>
+</div>
+<noscript><p class="hint">请开启 JavaScript 使用片单编辑器。</p></noscript>
+</form>
+</div>
+</main>{{end}}

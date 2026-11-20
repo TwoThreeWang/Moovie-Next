@@ -1,7 +1,6 @@
 package app
 
 import (
-	"encoding/xml"
 	"errors"
 	"fmt"
 	"net/http"
@@ -16,7 +15,6 @@ import (
 	"moovie/internal/ingest"
 	"moovie/internal/media"
 	"moovie/internal/providers"
-	"moovie/internal/ui"
 )
 
 // 公开页面（不登录也能看）的搜索引擎优化、相似推荐、热搜榜。
@@ -52,15 +50,19 @@ func clip(text string, limit int) string {
 // mediaSEO 生成作品详情页的标题、描述和结构化数据。
 //
 // 标题和描述按人们实际搜索的方式写（片名 + 年份 + 类型；导演、主演、评分、简介），
-// 结构化数据用 schema.org 的 Movie / TVSeries，加上面包屑；sameAs 指向豆瓣和 IMDb，帮助搜索引擎确认是哪部作品。
+// 结构化数据区分电影、单季和整剧，并附上面包屑。
 func (a *App) mediaSEO(m media.Media) SEO {
 	kind, ogType, section, sectionPath := "Movie", "video.movie", "电影", "/discover/movie"
+	seasonPage := m.IsSeries() && !m.IsShort()
 	if m.IsSeries() {
 		kind, ogType = "TVSeries", "video.tv_show"
 		section, sectionPath = m.TypeLabel(), "/discover/"+m.Type
 	}
+	if seasonPage {
+		kind = "TVSeason"
+	}
 	url := a.absolute(mediaHref(m.ID))
-	image := a.absolute(ui.Image(m.Poster, "l"))
+	image := a.absolute(a.images.URL(m.Poster, "display", m.Title, "poster"))
 
 	title := m.Title
 	if m.Year > 0 {
@@ -134,11 +136,18 @@ func (a *App) mediaSEO(m media.Media) SEO {
 	if m.DoubanID != "" {
 		sameAs = append(sameAs, "https://movie.douban.com/subject/"+m.DoubanID+"/")
 	}
-	if m.IMDbID != "" {
-		sameAs = append(sameAs, "https://www.imdb.com/title/"+m.IMDbID+"/")
-	}
-	if m.WikidataID != "" {
-		sameAs = append(sameAs, "https://www.wikidata.org/wiki/"+m.WikidataID)
+	if seasonPage {
+		if m.Season > 0 {
+			work["seasonNumber"] = m.Season
+		}
+		work["partOfSeries"] = mediaSeriesSchema(m)
+	} else {
+		if m.IMDbID != "" {
+			sameAs = append(sameAs, "https://www.imdb.com/title/"+m.IMDbID+"/")
+		}
+		if m.WikidataID != "" {
+			sameAs = append(sameAs, "https://www.wikidata.org/wiki/"+m.WikidataID)
+		}
 	}
 	if len(sameAs) > 0 {
 		work["sameAs"] = sameAs
@@ -151,6 +160,24 @@ func (a *App) mediaSEO(m media.Media) SEO {
 		NoIndex: m.MetadataStatus != "complete" || m.Title == "" || m.IsShort(),
 		JSONLD:  map[string]any{"@context": "https://schema.org", "@graph": []any{work, crumbs}},
 	}
+}
+
+func mediaSeriesSchema(m media.Media) map[string]any {
+	name, _ := media.SplitSeason(m.Title)
+	series := map[string]any{"@type": "TVSeries", "name": name}
+	links := []string{}
+	if m.IMDbID != "" {
+		links = append(links, "https://www.imdb.com/title/"+m.IMDbID+"/")
+	}
+	if id, ok := strings.CutPrefix(m.TMDBID, "tv/"); ok {
+		if number, err := strconv.ParseUint(id, 10, 64); err == nil && number > 0 {
+			links = append(links, "https://www.themoviedb.org/tv/"+strconv.FormatUint(number, 10))
+		}
+	}
+	if len(links) > 0 {
+		series["@id"], series["sameAs"] = links[0], links
+	}
+	return series
 }
 
 // breadcrumbs 生成面包屑的结构化数据。
@@ -186,7 +213,7 @@ func (a *App) similarPage(c *gin.Context) {
 		return
 	}
 	seo := a.pageSEO(mediaHref(m.ID)+"/similar", fmt.Sprintf("喜欢《%s》的人可能也喜欢的%d部作品。", m.Title, len(cards)))
-	seo.Image = a.absolute(ui.Image(m.Poster, "l"))
+	seo.Image = a.absolute(a.images.URL(m.Poster, "display", m.Title, "poster"))
 	seo.NoIndex = true // 内容是详情页的延伸，不单独收录；里面的链接照常跟踪
 	a.render.Page(c, http.StatusOK, "grid.html", gin.H{
 		"Title": "和《" + m.Title + "》相似的作品", "Nav": "discover", "Heading": "和《" + m.Title + "》相似的作品",
@@ -299,56 +326,6 @@ func (a *App) robots(c *gin.Context) {
 		"Disallow: /search?", "Disallow: /foryou",
 		"", "Sitemap: " + a.Config.SiteURL + "/sitemap.xml", "",
 	}, "\n"))
-}
-
-type sitemapURL struct {
-	Loc     string `xml:"loc"`
-	LastMod string `xml:"lastmod,omitempty"`
-}
-
-func (a *App) sitemap(c *gin.Context) {
-	ctx := c.Request.Context()
-	urls := []sitemapURL{}
-	for _, path := range []string{"/", "/discover", "/discover/movie", "/discover/tv", "/discover/show", "/discover/anime", "/list", "/trends", "/m3u8", "/cinema", "/about", "/install"} {
-		urls = append(urls, sitemapURL{Loc: a.absolute(path)})
-	}
-	// 短剧不进站点地图（页面也是 noindex，见 mediaSEO）。
-	rows, err := a.Pool.Query(ctx, `SELECT id, updated_at FROM media WHERE media_type <> 'short' AND NOT hidden AND title <> '' AND metadata_status = 'complete'
-ORDER BY votes_tmdb DESC, rating_douban DESC, id DESC LIMIT 45000`)
-	if err != nil {
-		a.fail(c, err)
-		return
-	}
-	for rows.Next() {
-		var id int64
-		var updated time.Time
-		if err := rows.Scan(&id, &updated); err != nil {
-			rows.Close()
-			a.fail(c, err)
-			return
-		}
-		urls = append(urls, sitemapURL{Loc: a.absolute(mediaHref(id)), LastMod: updated.Format("2006-01-02")})
-	}
-	rows.Close()
-	lists, err := a.Collections.List(ctx, 500, 0)
-	if err != nil {
-		a.fail(c, err)
-		return
-	}
-	for _, list := range lists {
-		urls = append(urls, sitemapURL{Loc: a.absolute("/list/" + list.Slug), LastMod: list.UpdatedAt.Format("2006-01-02")})
-	}
-	body, err := xml.MarshalIndent(struct {
-		XMLName xml.Name     `xml:"urlset"`
-		XMLNS   string       `xml:"xmlns,attr"`
-		URLs    []sitemapURL `xml:"url"`
-	}{XMLNS: "http://www.sitemaps.org/schemas/sitemap/0.9", URLs: urls}, "", " ")
-	if err != nil {
-		a.fail(c, err)
-		return
-	}
-	c.Header("Cache-Control", "public, max-age=3600")
-	c.Data(http.StatusOK, "application/xml; charset=utf-8", append([]byte(xml.Header), body...))
 }
 
 // ---------- 老站地址 ----------

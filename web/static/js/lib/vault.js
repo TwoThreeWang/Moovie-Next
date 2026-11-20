@@ -82,8 +82,16 @@ export async function open(encKey, bytes) {
 
 export const KEYRING_ITERATIONS = 310000;
 
+/** 提前检查加密能力，避免 HTTP 局域网环境在保存后才静默失败。 */
+export function requireCrypto() {
+  if (globalThis.isSecureContext === false || !globalThis.crypto?.subtle) {
+    throw new Error('当前地址无法使用浏览器加密，不能保存到账号或同步。请使用 HTTPS；本机开发可使用 localhost。');
+  }
+}
+
 /** 从登录密码派生出加密钥匙圈用的密钥（不可导出）。 */
 export async function deriveWrapKey(password, salt, iterations = KEYRING_ITERATIONS) {
+  requireCrypto();
   const base = await crypto.subtle.importKey('raw', encoder.encode(password), 'PBKDF2', false, ['deriveKey']);
   return crypto.subtle.deriveKey({ name: 'PBKDF2', hash: 'SHA-256', salt, iterations }, base,
     { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);

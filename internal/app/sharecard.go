@@ -8,7 +8,6 @@ import (
 	"moovie/internal/media"
 	"moovie/internal/report"
 	"moovie/internal/social"
-	"moovie/internal/ui"
 )
 
 // ShareCard 是分享图片的内容。图片由浏览器用 canvas 画（web/static/js/core/sharecard.js），
@@ -35,7 +34,7 @@ func (a *App) mediaCard(m media.Media) ShareCard {
 		kicker += " · " + strconv.Itoa(m.Year)
 	}
 	card := ShareCard{Kind: "media", Kicker: kicker, Title: m.Title, Sub: strings.Join(firstN(m.Genres, 3), " / "),
-		Text: clip(m.Summary, 90), Poster: ui.Image(m.Poster, "l"), URL: a.absolute(mediaHref(m.ID)),
+		Text: clip(m.Summary, 90), Poster: a.images.URL(m.Poster, "display", m.Title, "poster"), URL: a.absolute(mediaHref(m.ID)),
 		Name: "moovie-" + strconv.FormatInt(m.ID, 10), Site: a.Config.SiteName}
 	switch {
 	case m.RatingDouban > 0:
@@ -54,7 +53,7 @@ func (a *App) reportCard(profile social.Profile, monthly report.Report, path str
 	}
 	posters := make([]string, 0, 5)
 	for _, poster := range firstN(monthly.Posters, 5) {
-		posters = append(posters, ui.Image(poster, "m"))
+		posters = append(posters, a.images.URL(poster.URL, "display", poster.Title, "poster"))
 	}
 	return ShareCard{Kind: "report", Kicker: profile.Username + " 的" + monthly.Label() + "观影报告", Title: monthly.PersonaTitle,
 		Text: monthly.PersonaLine, Posters: posters, URL: target, Name: "moovie-report-" + monthly.YearMonth, Site: a.Config.SiteName,
@@ -70,7 +69,7 @@ func (a *App) listCard(collection collections.Collection, cards []CardView) Shar
 		if len(posters) == 10 {
 			break
 		}
-		if image := ui.Image(card.Card.Poster, "m"); image != "" {
+		if image := a.images.URL(card.Card.Poster, "display", card.Card.Title, "poster"); image != "" {
 			posters = append(posters, image)
 		}
 	}

@@ -20,7 +20,7 @@
 {{define "like_button"}}<button class="like" aria-pressed="{{.C.Liked}}" hx-post="/api/comments/{{.C.ID}}/like" hx-swap="outerHTML" aria-label="点赞"><svg class="i"><use href="#i-heart"/></svg><span>{{.C.Likes}}</span></button>{{end}}
 
 {{define "comment"}}<article class="comment" id="c-{{.C.ID}}">
-{{if .Media}}<a class="comment-media" href="/m/{{.C.MediaID}}">{{if .C.MediaPoster}}<img src="{{img .C.MediaPoster "s"}}" width="48" height="72" loading="lazy" alt="">{{end}}</a>{{end}}
+{{if .Media}}<a class="comment-media" href="/m/{{.C.MediaID}}">{{if .C.MediaPoster}}<img src="{{img .C.MediaPoster "thumb" .C.MediaTitle "poster"}}" width="48" height="72" loading="lazy" alt="">{{end}}</a>{{end}}
 <div class="comment-body">
 <header><span class="avatar avatar-emoji sm">{{.C.Avatar}}</span>
 <div><b>{{if .C.UserPublic}}<a href="/user/{{.C.UserID}}">{{.C.Username}}</a>{{else}}{{.C.Username}}{{end}}</b>{{if .Media}} 看过 <a href="/m/{{.C.MediaID}}">《{{.C.MediaTitle}}》</a>{{end}}
@@ -28,7 +28,7 @@
 <p>{{.C.Text}}</p>
 <footer>{{template "like_button" dict "C" .C}}
 <button class="like" hx-get="/api/htmx/comments/{{.C.ID}}/replies" hx-target="#r-{{.C.ID}}" hx-swap="innerHTML" aria-label="回复"><svg class="i"><use href="#i-chat"/></svg><span>{{.C.Replies}}</span></button>
-<button class="like" type="button" data-share data-card="{{json (dict "kind" "comment" "title" .C.MediaTitle "text" .C.Text "author" .C.Username "badge" (stars .C.Rating) "poster" (img .C.MediaPoster "m") "url" (printf "/m/%d#c-%d" .C.MediaID .C.ID) "name" (printf "moovie-comment-%d" .C.ID))}}" aria-label="分享这条短评"><svg class="i"><use href="#i-share"/></svg></button>
+<button class="like" type="button" data-share data-card="{{json (dict "kind" "comment" "title" .C.MediaTitle "text" .C.Text "author" .C.Username "badge" (stars .C.Rating) "poster" (img .C.MediaPoster "display" .C.MediaTitle "poster") "url" (printf "/m/%d#c-%d" .C.MediaID .C.ID) "name" (printf "moovie-comment-%d" .C.ID))}}" aria-label="分享这条短评"><svg class="i"><use href="#i-share"/></svg></button>
 {{if .User}}{{if .User.IsAdmin}}<button class="link danger comment-remove" type="button" data-remove="/api/comments/{{.C.ID}}/remove" data-method="POST" data-target="#c-{{.C.ID}}" data-swap="outerHTML">删除</button>{{end}}{{end}}</footer>
 <div class="replies" id="r-{{.C.ID}}"></div>
 </div></article>{{end}}
@@ -63,9 +63,9 @@
 
 {{define "notification"}}{{with .N}}<li class="note{{if not .Read}} unread{{end}}" id="note-{{.ID}}">
 <a class="note-main" href="/notifications/{{.ID}}/open" data-no-prerender>
-{{if or (eq .Kind "feedback") (eq .Kind "removed") (eq .Kind "muted")}}<span class="avatar avatar-emoji sm admin-badge" aria-hidden="true"><svg class="i"><use href="#i-shield"/></svg></span>
+{{if or (eq .Kind "feedback") (eq .Kind "removed") (eq .Kind "muted") .CollectionID}}<span class="avatar avatar-emoji sm admin-badge" aria-hidden="true"><svg class="i"><use href="#i-shield"/></svg></span>
 <div><p><b>管理员</b>
-{{if eq .Kind "feedback"}}回复了你的反馈{{else if eq .Kind "muted"}}限制了你的发言{{else}}删除了你{{if .MediaTitle}}在《{{.MediaTitle}}》下{{end}}的一条内容{{end}}</p>
+{{if eq .Kind "feedback"}}回复了你的反馈{{else if eq .Kind "muted"}}限制了你的发言{{else if eq .Kind "collection_approved"}}通过了你的片单投稿{{else if eq .Kind "collection_returned"}}退回了你的片单投稿{{else if eq .Kind "collection_removed"}}下架了你的片单{{else}}删除了你{{if .MediaTitle}}在《{{.MediaTitle}}》下{{end}}的一条内容{{end}}</p>
 {{if eq .Kind "muted"}}<p class="dim">你{{.Excerpt}}。这段时间里不能发短评、回复和弹幕，其他功能照常。有疑问可以在反馈里申诉。</p>
 {{else if .Excerpt}}<p class="dim{{if eq .Kind "removed"}} removed-text{{end}}">{{truncate .Excerpt 120}}</p>{{end}}
 {{if and .Reason (ne .Kind "muted")}}<p class="dim">原因：{{.Reason}}。有疑问可以在反馈里申诉。</p>{{end}}

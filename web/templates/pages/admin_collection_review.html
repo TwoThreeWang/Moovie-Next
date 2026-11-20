@@ -1,0 +1,33 @@
+{{define "content"}}<main class="admin">{{template "admin_nav" .}}
+<header class="page-head">
+<p class="kicker"><a href="/admin/collections">片单管理</a> · {{.Collection.StatusLabel}}</p>
+{{if eq .Collection.Revision "pending"}}<p class="hint">下面是作者提交的修改，公开页在通过前仍显示上一版<a href="/list/{{.Collection.Slug}}">（查看公开版本）</a>。</p>{{end}}
+<h1 class="page-title">{{.Collection.Title}}</h1>
+<p class="hint">作者 {{.Collection.AuthorName}} · {{.Collection.Count}} 部可见作品</p>
+{{with .Collection.Description}}<p class="lead collection-entry-note">{{.}}</p>{{end}}
+{{with .Collection.ReviewReason}}<p class="hint">审核意见：{{.}}</p>{{end}}
+</header>
+{{template "collection_entries" .}}
+{{if .Collection.AwaitingReview}}
+<section class="card-panel">
+<h2>{{if eq .Collection.Status "pending"}}处理投稿{{else}}处理修改{{end}}</h2>
+<form class="form" method="post" action="/admin/collections/{{.Collection.ID}}">
+{{template "csrf" .CSRF}}<input type="hidden" name="base" value="{{.Base}}">
+<label>退回原因<textarea name="reason" maxlength="300" rows="2" placeholder="退回时填写，作者可以看到" required></textarea></label>
+<div class="form-actions">
+<button class="btn btn-primary" type="submit" name="intent" value="approve" formnovalidate>{{if eq .Collection.Status "pending"}}通过并发布{{else}}通过修改{{end}}</button>
+<button class="btn btn-glass" type="submit" name="intent" value="return">退回修改</button>
+</div></form>
+</section>
+{{end}}
+{{if eq .Collection.Status "published"}}
+<section class="card-panel">
+<h2>下架片单</h2>
+<form class="form" method="post" action="/admin/collections/{{.Collection.ID}}">
+{{template "csrf" .CSRF}}<input type="hidden" name="base" value="{{.Base}}">
+<label>下架原因<textarea name="reason" maxlength="300" rows="2" placeholder="填写下架原因，作者可以看到" required></textarea></label>
+<div class="form-actions"><button class="btn btn-glass danger" type="submit" name="intent" value="remove" data-confirm-click="从广场和作者主页下架，并关闭链接访问？">下架</button></div>
+</form>
+</section>
+{{end}}
+</main>{{end}}

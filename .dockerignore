@@ -1,8 +1,18 @@
-# 构建镜像只需要源码。本地的配置、数据、编译产物都不要带进去。
-.env
-data/
-bin/
-tmp/
-*.test
-deploy/
-web/jstest/
+# 只发送 Go 源码、表结构、模板和静态资源。
+# Git 历史、宿主机配置、数据、文档和设计 demo 不参与构建，也不会让编译层缓存失效。
+**
+!go.mod
+!go.sum
+!cmd/
+!cmd/**
+!internal/
+!internal/**
+!web/
+web/**
+!web/embed.go
+!web/templates/
+!web/templates/**
+!web/static/
+!web/static/**
+**/*_test.go
+**/.DS_Store

@@ -1,7 +1,14 @@
 {{define "content"}}<main class="admin">{{template "admin_nav" .}}
-<div class="pad admin-tools"><a class="btn btn-primary" href="/admin/collections/new">新建片单</a></div>
-<div class="table-wrap"><table class="table"><thead><tr><th>ID</th><th>片单</th><th>地址</th><th>作品数</th><th>更新</th><th></th></tr></thead><tbody>
-{{range .Collections}}<tr><td>{{.ID}}</td><td><a href="/admin/collections/{{.ID}}">{{.Title}}</a>{{if .Featured}} <span class="tag">精选</span>{{end}}</td><td><a href="/list/{{.Slug}}">/list/{{.Slug}}</a></td><td>{{.Count}}</td><td>{{date .UpdatedAt}}</td>
-<td><form method="post" action="/admin/collections/{{.ID}}/delete" class="inline-form" data-confirm="删除片单《{{.Title}}》？">{{template "csrf" $.CSRF}}<button class="link danger">删除</button></form></td></tr>
-{{else}}<tr><td colspan="6" class="empty">还没有片单</td></tr>{{end}}</tbody></table></div>
+<header class="page-head"><h1 class="page-title">片单管理</h1></header>
+{{template "flash" .}}
+<nav class="chips pad" aria-label="审核状态">
+<a class="chip-l" href="/admin/collections"{{if eq .Status "pending"}} aria-current="page"{{end}}>待审核</a>
+<a class="chip-l" href="/admin/collections?status=published"{{if eq .Status "published"}} aria-current="page"{{end}}>已发布</a>
+<a class="chip-l" href="/admin/collections?status=returned"{{if eq .Status "returned"}} aria-current="page"{{end}}>已退回或下架</a>
+</nav>
+<div class="table-wrap"><table class="table"><thead><tr><th>片单</th><th>作者</th><th>作品数</th><th>更新</th><th>操作</th></tr></thead><tbody>
+{{range .Collections}}<tr><td><a href="/admin/collections/{{.ID}}">{{.Title}}</a>{{if eq .Revision "pending"}} <span class="tag">修改</span>{{end}}</td><td>{{.AuthorName}}</td><td>{{.Count}}</td><td>{{date .UpdatedAt}}</td>
+<td><a class="link" href="/admin/collections/{{.ID}}">{{if .AwaitingReview}}审核{{else}}查看{{end}}</a></td></tr>
+{{else}}<tr><td colspan="5" class="empty">这里还没有片单。</td></tr>{{end}}</tbody></table></div>
+{{template "collection_pager" .}}
 </main>{{end}}

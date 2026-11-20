@@ -1,6 +1,7 @@
 // 登录、注册页：页面一打开就在后台做人机校验，用户填表的时候通常已经算完了。
 // 提交时如果还没算完，就等它算完再提交；服务器要求打开页面 2 秒后才能提交，这里也拦一下。
 import { parseToken, search } from '../lib/pow.js';
+import { showFormError, syncThenEnter } from '../core/signin.js';
 
 const form = document.querySelector('form[data-pow]');
 const tokenInput = form?.querySelector('[name="pow_token"]');
@@ -24,16 +25,7 @@ function fallback(token) {
   return parsed ? search(parsed.challenge, parsed.bits) : null;
 }
 
-function showError(message) {
-  let flash = form.querySelector('.flash.error');
-  if (!flash) {
-    flash = document.createElement('p');
-    flash.className = 'flash error';
-    flash.setAttribute('role', 'alert');
-    form.querySelector('h1')?.after(flash);
-  }
-  flash.textContent = message;
-}
+const showError = (message) => showFormError(form, message);
 
 /**
  * 登录：用脚本提交，成功后趁密码还在内存里同步钥匙圈（设备密钥和订阅地址），再跳转。
@@ -55,13 +47,7 @@ async function login(button, label) {
     return false;
   }
   document.body.dataset.user = String(result.user_id);
-  if (button) button.textContent = '正在同步播放源…';
-  try {
-    const { afterLogin } = await import('../core/keyring.js');
-    const outcome = await Promise.race([afterLogin(password), new Promise((resolve) => setTimeout(() => resolve('timeout'), 12000))]);
-    if (outcome === 'fresh') sessionStorage.setItem('mv:keyringFresh', '1');
-  } catch { /* 同步失败不影响登录，下次登录再试 */ }
-  location.href = result.redirect || '/';
+  await syncThenEnter({ form, button, password, redirect: result.redirect, failedPrefix: '已登录，但账号同步未完成：' });
   return true;
 }
 

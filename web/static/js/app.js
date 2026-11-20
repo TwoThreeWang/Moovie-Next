@@ -1,6 +1,6 @@
 // 全站通用的交互。页面在这个脚本加载失败时依然可看、可点。
 // 导航滚动态 / 懒加载内容行 / 首页轮播 / 行内翻页 / 卡片视差 / 长按菜单 / 弹窗 / 预取 / 键盘导航按需加载
-import { api, csrfToken, h, icon, toast, userId } from './core/api.js';
+import { api, csrfToken, h, icon, toast, userId, showSyncError } from './core/api.js';
 import * as sources from './core/sources.js';
 import { flushPositions } from './core/history.js';
 import * as install from './core/install.js';
@@ -277,7 +277,8 @@ d.addEventListener('click', (ev) => {
     }
     const data = { title: d.title, url: new URL(share.dataset.url || location.pathname, location.href).href };
     if (navigator.share) navigator.share(data).catch(() => {});
-    else navigator.clipboard?.writeText(data.url).then(() => toast('链接已复制'));
+    else if (navigator.clipboard) navigator.clipboard.writeText(data.url).then(() => toast('链接已复制'), () => prompt('复制链接', data.url));
+    else prompt('复制链接', data.url);
     return;
   }
   // 返回：有站内历史就后退（通常命中浏览器的页面缓存，立刻显示），否则走链接。
@@ -409,11 +410,7 @@ try { maybeShowInstallTip(); } catch { /* 提示条出错不影响页面 */ }
 // ---------- 账号同步 ----------
 // 别的设备改了订阅地址（或者这台设备第一次用这个账号）：在后台同步过来。每 5 分钟最多查一次。
 if (userId()) {
-  import('./core/keyring.js').then((m) => m.syncKeyring()).catch(() => {});
-  if (sessionStorage.getItem('mv:keyringFresh')) {
-    sessionStorage.removeItem('mv:keyringFresh');
-    toast('密码重置过，这台设备上没有之前的加密密钥：在之前用过的设备上登录一次，观看记录就会同步回来', 8000);
-  }
+  import('./core/keyring.js').then((m) => m.syncKeyring()).catch((error) => showSyncError(error.message || '请稍后重试。'));
 }
 
 // ---------- 后台：全选、按钮确认 ----------

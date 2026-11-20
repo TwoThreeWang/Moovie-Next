@@ -23,7 +23,7 @@ import (
 var errLastAdmin = errors.New("你是唯一的管理员，先在后台把别人设为管理员再注销")
 
 // deleteAccount 删除账号和它的所有数据（外键级联）。
-// 管理员名下的片单是给所有人看的，转给另一位管理员而不是一起删掉；唯一的管理员不能删。
+// 旧站的编辑片单交接给另一位管理员，个人片单随账号删除。唯一的管理员不能删。
 func (a *App) deleteAccount(ctx context.Context, userID int64) error {
 	return pgx.BeginFunc(ctx, a.Pool, func(tx pgx.Tx) error {
 		var role string
@@ -39,7 +39,8 @@ func (a *App) deleteAccount(ctx context.Context, userID int64) error {
 		case errors.Is(err, pgx.ErrNoRows) && role == "admin":
 			return errLastAdmin
 		case err == nil:
-			if _, err := tx.Exec(ctx, `UPDATE collections SET owner_user_id = $2 WHERE owner_user_id = $1`, userID, heir); err != nil {
+			if _, err := tx.Exec(ctx, `UPDATE collections SET owner_user_id = $2, link_visible = false, updated_at = clock_timestamp()
+WHERE owner_user_id = $1 AND legacy_editorial AND status = 'published'`, userID, heir); err != nil {
 				return err
 			}
 		case !errors.Is(err, pgx.ErrNoRows):
@@ -129,13 +130,15 @@ type exportData struct {
 		DoubanID  string    `json:"douban_user_id,omitempty"`
 		CreatedAt time.Time `json:"created_at"`
 	} `json:"account"`
-	Library   []exportEntry    `json:"library"`
-	Progress  []exportProgress `json:"progress"`
-	Replies   []exportText     `json:"replies"`
-	Danmaku   []exportText     `json:"danmaku"`
-	Following []string         `json:"following"`
-	Feedback  []exportFeedback `json:"feedback"`
-	Note      string           `json:"private_history_note"`
+	Library             []exportEntry    `json:"library"`
+	Progress            []exportProgress `json:"progress"`
+	Replies             []exportText     `json:"replies"`
+	Danmaku             []exportText     `json:"danmaku"`
+	Following           []string         `json:"following"`
+	Feedback            []exportFeedback `json:"feedback"`
+	Collections         json.RawMessage  `json:"collections"`
+	CollectionFavorites json.RawMessage  `json:"collection_favorites"`
+	Note                string           `json:"private_history_note"`
 }
 
 // collectExport 读出一个账号在服务器上的所有数据。
@@ -227,6 +230,19 @@ LEFT JOIN media m ON m.id = d.media_id WHERE d.user_id = $1 AND NOT d.deleted OR
 	}
 	for _, f := range feedbacks {
 		data.Feedback = append(data.Feedback, exportFeedback{Kind: f.Kind, Content: f.Content, Status: f.Status, Reply: f.Reply, At: f.CreatedAt})
+	}
+	if err := a.Pool.QueryRow(ctx, `SELECT
+    COALESCE((SELECT jsonb_agg(to_jsonb(owned) ORDER BY owned.updated_at DESC, owned.id DESC) FROM (
+        SELECT c.id, c.slug, c.title, c.description, c.status, c.link_visible, c.published_at, c.updated_at, c.revision AS pending_revision,
+            COALESCE((SELECT jsonb_agg(jsonb_build_object('media_id', i.media_id, 'title', m.title, 'note', i.note) ORDER BY i.position)
+                FROM collection_items i JOIN media m ON m.id = i.media_id WHERE i.collection_id = c.id), '[]') AS entries
+        FROM collections c WHERE c.owner_user_id = $1
+    ) owned), '[]'),
+    COALESCE((SELECT jsonb_agg(jsonb_build_object('collection_id', f.collection_id, 'saved_at', f.created_at,
+        'slug', CASE WHEN c.status = 'published' THEN c.slug END) ORDER BY f.created_at DESC, f.collection_id DESC)
+        FROM collection_favorites f JOIN collections c ON c.id = f.collection_id WHERE f.user_id = $1 AND f.active), '[]')`,
+		user.ID).Scan(&data.Collections, &data.CollectionFavorites); err != nil {
+		return nil, err
 	}
 	return data, nil
 }

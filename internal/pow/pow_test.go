@@ -61,8 +61,13 @@ func TestIssueAndVerify(t *testing.T) {
 	}
 
 	tampered := issuer.Issue("register")
-	tampered = tampered[:len(tampered)-1] + "0"
-	if err := issuer.Verify("register", tampered, "1"); err != ErrSignature && err != ErrUnsolved {
+	// 签名本来就可能以 0 结尾，必须确保真的改变了字符。
+	replacement := "0"
+	if tampered[len(tampered)-1] == '0' {
+		replacement = "1"
+	}
+	tampered = tampered[:len(tampered)-1] + replacement
+	if err := issuer.Verify("register", tampered, "1"); err != ErrSignature {
 		t.Errorf("改过的挑战应该被拒绝，实际 %v", err)
 	}
 	if err := New(10, 0).Verify("register", issuer.Issue("register"), "1"); err != ErrSignature {

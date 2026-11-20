@@ -42,6 +42,7 @@ type Mirror struct {
 
 type upload struct {
 	raw, contentType string
+	name             string
 	data             []byte
 }
 
@@ -98,7 +99,7 @@ func (m *Mirror) Lookup(ctx context.Context, raw string) (Record, bool, error) {
 }
 
 // Offer 把刚从原图取到、还没备份的图片交给备份器。不会等待：排着的太多就算了。
-func (m *Mirror) Offer(raw, contentType string, data []byte) {
+func (m *Mirror) Offer(raw, contentType string, data []byte, name string) {
 	key := hex.EncodeToString(hashURL(raw))
 	now := time.Now()
 	m.mu.Lock()
@@ -117,7 +118,7 @@ func (m *Mirror) Offer(raw, contentType string, data []byte) {
 		}
 	}
 	m.cooling[key] = now.Add(coolingFor)
-	m.pending = append(m.pending, upload{raw: raw, contentType: contentType, data: data})
+	m.pending = append(m.pending, upload{raw: raw, contentType: contentType, data: data, name: name})
 	m.pendingBytes += len(data)
 	select {
 	case m.wake <- struct{}{}:
@@ -168,7 +169,7 @@ func (m *Mirror) upload(ctx context.Context, item upload) error {
 	if _, found, err := m.Lookup(ctx, item.raw); err != nil || found {
 		return err
 	}
-	name := hex.EncodeToString(hashURL(item.raw))[:16] + extension(item.contentType)
+	name := item.name
 	for try := 1; ; try++ {
 		if wait := time.Until(m.next); wait > 0 {
 			select {
@@ -212,6 +213,8 @@ func extension(contentType string) string {
 		return ".webp"
 	case "image/gif":
 		return ".gif"
+	case "image/avif":
+		return ".avif"
 	}
 	return ".jpg"
 }
@@ -225,6 +228,23 @@ func mediaType(contentType string) string {
 
 // openOrigin 请求原图；不是图片或者状态码不对时返回错误。
 func openOrigin(ctx context.Context, client *http.Client, raw string) (*http.Response, error) {
+	// 不让允许域名的重定向把请求带到任意地址或内网。
+	if !Allowed(raw) {
+		return nil, fmt.Errorf("图片来源不允许")
+	}
+	checked := *client
+	checked.CheckRedirect = func(request *http.Request, via []*http.Request) error {
+		if !Allowed(request.URL.String()) {
+			return fmt.Errorf("图片重定向来源不允许")
+		}
+		if len(via) >= 10 {
+			return fmt.Errorf("图片重定向次数过多")
+		}
+		if client.CheckRedirect != nil {
+			return client.CheckRedirect(request, via)
+		}
+		return nil
+	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, raw, nil)
 	if err != nil {
 		return nil, err
@@ -233,7 +253,7 @@ func openOrigin(ctx context.Context, client *http.Client, raw string) (*http.Res
 		request.Header.Set("Referer", "https://movie.douban.com/")
 	}
 	request.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36")
-	response, err := client.Do(request)
+	response, err := checked.Do(request)
 	if err != nil {
 		return nil, err
 	}

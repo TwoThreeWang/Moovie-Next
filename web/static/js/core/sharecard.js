@@ -244,7 +244,10 @@ export async function openShare(card) {
   save.removeAttribute('href');
   shareImage.hidden = true;
   system.hidden = !navigator.share;
-  dialog.querySelector('[data-act="copy"]').onclick = () => navigator.clipboard?.writeText(card.url).then(() => toast('链接已复制'), () => toast(card.url));
+  dialog.querySelector('[data-act="copy"]').onclick = async () => {
+    try { await navigator.clipboard.writeText(card.url); toast('链接已复制'); }
+    catch { prompt('复制链接', card.url); }
+  };
   system.onclick = () => navigator.share({ title: document.title, url: card.url }).catch(() => {});
   dialog.showModal();
   let blob;

@@ -1,8 +1,10 @@
 package imageproxy
 
 import (
+	"bytes"
 	"context"
-	"encoding/base64"
+	"image"
+	"image/jpeg"
 	"io"
 	"log/slog"
 	"net/http"
@@ -63,7 +65,7 @@ func TestTelegramMirror(t *testing.T) {
 			}
 			file, header, _ := r.FormFile("document")
 			stored, _ = io.ReadAll(file)
-			if header.Header.Get("Content-Type") != "image/png" || !strings.HasSuffix(header.Filename, ".png") {
+			if header.Header.Get("Content-Type") != "image/png" || !strings.HasPrefix(header.Filename, "测试电影_海报_原图_") || !strings.HasSuffix(header.Filename, ".png") {
 				http.Error(w, "bad file", http.StatusBadRequest)
 				return
 			}
@@ -86,7 +88,7 @@ func TestTelegramMirror(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	mirror := newMirror(pool, telegram.New("TOKEN", "-1001234", tg.URL, nil), logger) // 不启动后台协程，测试里手动 drain
 	mirror.gap = 0
-	handler := New(client)
+	handler := New(client, "test-secret")
 	handler.Mirror = mirror
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
@@ -95,7 +97,7 @@ func TestTelegramMirror(t *testing.T) {
 	raw := "https://img9.doubanio.com/view/photo/l/public/p1.png"
 	get := func() *httptest.ResponseRecorder {
 		recorder := httptest.NewRecorder()
-		router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/img/"+base64.RawURLEncoding.EncodeToString([]byte(raw)), nil))
+		router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, handler.URL(raw, "original", "测试电影", "poster"), nil))
 		return recorder
 	}
 
@@ -137,5 +139,77 @@ func TestTelegramMirror(t *testing.T) {
 	// 已经备份过的：Telegram 临时取不到时退回原图，但不会再排一次备份
 	if len(mirror.pending) != 0 {
 		t.Errorf("已经备份过的图片不应该再排队: %d", len(mirror.pending))
+	}
+}
+
+func TestThumbnailFromLegacyBackupAndBrokenBackupFallback(t *testing.T) {
+	pool := testdb.Pool(t)
+	var original bytes.Buffer
+	jpeg.Encode(&original, image.NewRGBA(image.Rect(0, 0, 1200, 800)), nil)
+	raw := "https://img1.doubanio.com/legacy-without-size.jpg"
+	_, err := pool.Exec(context.Background(), `INSERT INTO image_mirrors (url_hash,original_url,tg_file_id,content_type,bytes) VALUES ($1,$2,'OLD','image/jpeg',$3)`, hashURL(raw), raw, original.Len())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var broken atomic.Bool
+	tg := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/getFile") {
+			io.WriteString(w, `{"ok":true,"result":{"file_path":"documents/old.jpg"}}`)
+			return
+		}
+		if broken.Load() {
+			w.Write(original.Bytes()[:original.Len()/2])
+			return
+		}
+		w.Write(original.Bytes())
+	}))
+	defer tg.Close()
+	var originHits atomic.Int32
+	client := &http.Client{Transport: transportFunc(func(*http.Request) (*http.Response, error) {
+		originHits.Add(1)
+		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"image/jpeg"}}, Body: io.NopCloser(bytes.NewReader(original.Bytes()))}, nil
+	})}
+	h := New(client, "secret")
+	h.Mirror = newMirror(pool, telegram.New("TOKEN", "123", tg.URL, nil), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	h.markFailed(raw) // 原站失败冷却不能阻止使用完整的旧 TG 备份。
+	r := imageRouter(h)
+	link := h.URL(raw, "thumb", "旧电影", "poster")
+	w := fetchImage(r, link, nil)
+	config, _, decodeErr := image.DecodeConfig(bytes.NewReader(w.Body.Bytes()))
+	if w.Code != 200 || decodeErr != nil || config.Width != 480 || originHits.Load() != 0 {
+		t.Fatalf("旧原图备份应该能生成缩略图: %d %+v %v", w.Code, config, decodeErr)
+	}
+	if len(h.Mirror.pending) != 1 || !strings.HasPrefix(h.Mirror.pending[0].name, "旧电影_海报_缩略图_") {
+		t.Fatal("新规格必须使用片名和用途命名")
+	}
+	broken.Store(true)
+	h.mu.Lock()
+	delete(h.failed, raw)
+	h.mu.Unlock()
+	w = fetchImage(r, link, nil)
+	if w.Code != 200 || originHits.Load() != 1 {
+		t.Fatal("TG 返回不完整内容时必须回退原站，不能把坏数据当成成功图片")
+	}
+}
+
+func TestLocalFallbackDoesNotTakeUpstreamSizeKey(t *testing.T) {
+	pool := testdb.Pool(t)
+	var small bytes.Buffer
+	jpeg.Encode(&small, image.NewRGBA(image.Rect(0, 0, 300, 450)), nil)
+	raw := "https://img1.doubanio.com/view/photo/s_ratio_poster/public/p1.jpg"
+	client := &http.Client{Transport: transportFunc(func(r *http.Request) (*http.Response, error) {
+		if strings.Contains(r.URL.Path, "/l_ratio_poster/") {
+			return &http.Response{StatusCode: 404, Header: make(http.Header), Body: io.NopCloser(strings.NewReader("gone"))}, nil
+		}
+		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"image/jpeg"}}, Body: io.NopCloser(bytes.NewReader(small.Bytes()))}, nil
+	})}
+	h := New(client, "secret")
+	h.Mirror = newMirror(pool, telegram.New("TOKEN", "123", "http://127.0.0.1:1", nil), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if w := fetchImage(imageRouter(h), h.URL(raw, "display", "电影", "poster"), nil); w.Code != 200 {
+		t.Fatalf("展示图应该用来源版本兜底: %d", w.Code)
+	}
+	// 豆瓣的 display 和 original 都指向 l 图；兜底得到的小图不能记在 l 图的地址下，否则原图请求会拿到它。
+	if len(h.Mirror.pending) != 1 || h.Mirror.pending[0].raw != raw+"#moovie-display-v1" {
+		t.Fatalf("兜底缩图必须按本机缩图的 key 备份: %+v", h.Mirror.pending)
 	}
 }

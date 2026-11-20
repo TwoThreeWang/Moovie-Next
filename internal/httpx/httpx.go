@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/hex"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -20,14 +21,28 @@ func IsHTMX(c *gin.Context) bool { return c.GetHeader("HX-Request") == "true" }
 // WantsJSON 判断请求是不是接口调用（/api/ 下且不是 HTMX 片段）。
 func WantsJSON(c *gin.Context) bool {
 	path := c.Request.URL.Path
-	return strings.HasPrefix(path, "/api/") && !strings.HasPrefix(path, "/api/htmx/")
+	return c.GetHeader("Accept") == "application/json" ||
+		strings.HasPrefix(path, "/api/") && !strings.HasPrefix(path, "/api/htmx/")
 }
 
-// Error 用统一格式返回错误。接口返回 JSON，其他返回纯文本。
+// ErrorPages 为完整页面提供统一的错误页，接口和局部请求继续使用原有格式。
+func ErrorPages(render func(*gin.Context, int, string)) gin.HandlerFunc {
+	return func(c *gin.Context) { c.Set("httpx.errorPage", render) }
+}
+
+// Error 用对应请求的格式返回错误。
 func Error(c *gin.Context, status int, message string) {
+	c.Header("Cache-Control", "no-store")
 	if WantsJSON(c) {
 		c.AbortWithStatusJSON(status, gin.H{"error": message})
 		return
+	}
+	if !IsHTMX(c) && !strings.HasPrefix(c.Request.URL.Path, "/api/") {
+		if render, ok := c.Get("httpx.errorPage"); ok {
+			render.(func(*gin.Context, int, string))(c, status, message)
+			c.Abort()
+			return
+		}
 	}
 	c.Header("Content-Type", "text/plain; charset=utf-8")
 	c.String(status, message)
@@ -170,7 +185,9 @@ func (l *Limiter) sweep(now time.Time) {
 func RateLimit(limiter *Limiter) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if !limiter.Allow(c.ClientIP()) {
-			Error(c, http.StatusTooManyRequests, "操作太频繁，请稍后再试")
+			seconds := strconv.Itoa(int(math.Ceil(1 / limiter.rate)))
+			c.Header("Retry-After", seconds)
+			Error(c, http.StatusTooManyRequests, "操作太频繁，请至少等待 "+seconds+" 秒后再试。")
 			return
 		}
 		c.Next()
@@ -196,8 +213,22 @@ func QueryInt(c *gin.Context, name string, fallback int) int {
 	return value
 }
 
-// Page 读取 page 参数（从 1 开始），返回页码和对应的偏移量。
+// ParsePage 校验页码（从 1 开始，空值是第 1 页）并计算偏移。不是正整数或大到偏移会溢出时 ok 为 false。
+func ParsePage(raw string, size int) (page, offset int, ok bool) {
+	if raw == "" {
+		return 1, 0, true
+	}
+	page, err := strconv.Atoi(raw)
+	if err != nil || page < 1 || page > math.MaxInt/size {
+		return 0, 0, false
+	}
+	return page, (page - 1) * size, true
+}
+
+// Page 读取 page 参数，不合法时按第 1 页处理。
 func Page(c *gin.Context, size int) (page, offset int) {
-	page = max(1, QueryInt(c, "page", 1))
-	return page, (page - 1) * size
+	if page, offset, ok := ParsePage(c.Query("page"), size); ok {
+		return page, offset
+	}
+	return 1, 0
 }

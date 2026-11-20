@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -42,6 +43,7 @@ func (a *App) publicRoutes(r gin.IRouter) {
 	r.GET("/api/htmx/comments/:id/replies", a.replies)
 	r.GET("/list", a.listIndex)
 	r.GET("/list/:slug", a.listDetail)
+	r.POST("/api/collections/:slug/view", httpx.RateLimit(a.collectionViews), a.collectionView)
 	r.GET("/user/:id", a.userPage)
 	r.GET("/user/:id/monthly/:month", a.reportPage)
 	r.GET("/m/:id/similar", a.similarPage)
@@ -51,7 +53,6 @@ func (a *App) publicRoutes(r gin.IRouter) {
 	r.GET("/movie/:douban_id", a.legacyRedirect(""))
 	r.GET("/watch/:douban_id", a.legacyRedirect(""))
 	r.GET("/similar/:douban_id", a.legacyRedirect("/similar"))
-	r.GET("/sitemap.xml", a.sitemap)
 	r.GET("/api/htmx/m/:id/ready", a.mediaReady)
 	r.POST("/api/search-log", httpx.RateLimit(a.searchLog), a.recordSearch)
 }
@@ -85,6 +86,15 @@ func (a *App) memberRoutes(r gin.IRouter) {
 
 	// 我的
 	r.GET("/me", a.mePage)
+	r.GET("/me/collections", a.myCollections)
+	r.GET("/me/collections/favorites", a.favoriteCollections)
+	r.GET("/me/collections/new", a.collectionEdit)
+	r.GET("/me/collections/search", a.collectionSearch)
+	r.GET("/me/collections/:id", a.collectionEdit)
+	r.POST("/me/collections", a.collectionSave)
+	r.POST("/me/collections/preview", a.collectionPreview)
+	r.POST("/me/collections/:id/visibility", a.collectionVisibility)
+	r.POST("/me/collections/:id/favorite", a.collectionFavorite)
 	r.GET("/me/:kind", a.meList)
 	r.GET("/notifications", a.notificationsPage)
 	r.GET("/notifications/:id/open", a.openNotification)
@@ -186,7 +196,8 @@ func (a *App) rowChart(c *gin.Context) {
 }
 
 func (a *App) rowCollections(c *gin.Context) {
-	list, err := a.Collections.List(c.Request.Context(), 8, 0)
+	c.Header("Cache-Control", "no-store")
+	list, err := a.Collections.Browse(c.Request.Context(), "new", 8, 0)
 	if err != nil {
 		a.fail(c, err)
 		return
@@ -248,49 +259,98 @@ func (a *App) shortTopicList(ctx context.Context) []string {
 	return list
 }
 
-func discoverFilter(c *gin.Context, mediaType string) media.Filter {
-	page, offset := httpx.Page(c, discoverPageSize)
-	_ = page
-	return media.Filter{
-		Type: mediaType, Genre: c.Query("genre"), Form: c.Query("form"), Sort: c.Query("sort"),
-		Decade: httpx.QueryInt(c, "decade", 0), Limit: discoverPageSize, Offset: offset,
+func discoverFilter(c *gin.Context, mediaType string, offset int) media.Filter {
+	sort := c.Query("sort")
+	if sort != "rating" && sort != "new" {
+		sort = "hot"
 	}
+	filter := media.Filter{
+		Type: mediaType, Genre: c.Query("genre"), Sort: sort,
+		Decade: httpx.QueryInt(c, "decade", 0), Limit: discoverPageSize + 1, Offset: offset,
+	}
+	if mediaType == media.TypeShort && media.IsShortForm(c.Query("form")) {
+		filter.Form = c.Query("form")
+	}
+	return filter
+}
+
+func discoverPageURL(filter media.Filter, page int, fragment bool) string {
+	query := url.Values{}
+	if filter.Genre != "" {
+		query.Set("genre", filter.Genre)
+	}
+	if filter.Form != "" {
+		query.Set("form", filter.Form)
+	}
+	if filter.Sort != "hot" {
+		query.Set("sort", filter.Sort)
+	}
+	if filter.Decade > 0 {
+		query.Set("decade", strconv.Itoa(filter.Decade))
+	}
+	if fragment {
+		query.Set("type", filter.Type)
+		return pagedURL("/api/htmx/discover", query, page)
+	}
+	path := "/discover"
+	if filter.Type != "" {
+		path += "/" + filter.Type
+	}
+	return pagedURL(path, query, page)
+}
+
+func discoverCardsData(cards []media.Card, filter media.Filter, page int) gin.H {
+	data := gin.H{"Cards": cardViews(firstN(cards, discoverPageSize))}
+	if len(cards) > discoverPageSize {
+		data["Next"] = discoverPageURL(filter, page+1, false)
+		data["More"] = discoverPageURL(filter, page+1, true)
+	}
+	return data
 }
 
 func (a *App) discoverPage(c *gin.Context) {
 	mediaType := c.Param("type")
-	if mediaType != "" && !media.ValidType(mediaType) {
+	page, offset, valid := httpx.ParsePage(c.Query("page"), discoverPageSize)
+	if !valid || (mediaType != "" && !media.ValidType(mediaType)) {
 		a.render.NotFound(c)
 		return
 	}
-	filter := discoverFilter(c, mediaType)
+	filter := discoverFilter(c, mediaType, offset)
 	cards, err := a.Media.Discover(c.Request.Context(), filter)
 	if err != nil {
 		a.fail(c, err)
 		return
 	}
-	title, path := "发现", "/discover"
+	if page > 1 && len(cards) == 0 {
+		a.render.NotFound(c)
+		return
+	}
+	title := "发现"
 	if mediaType != "" {
-		title, path = "发现"+media.TypeLabel(mediaType), "/discover/"+mediaType
+		title += media.TypeLabel(mediaType)
 	}
 	if filter.Genre != "" {
 		title = filter.Genre + media.TypeLabel(mediaType)
 	}
-	data := gin.H{
-		"Title": title, "Nav": "discover", "Types": media.Types, "Genres": Genres,
-		"Filter": filter, "Cards": cardViews(cards), "More": moreURL(c, filter, len(cards)),
-		"SEO": a.pageSEO(path, "按类型、题材、年代浏览热门和高分的"+strings.TrimPrefix(title, "发现")+"作品。"),
+	if filter.Form != "" {
+		title = filter.Form + " · " + title
+	}
+	seo := a.pageSEO(discoverPageURL(filter, page, false),
+		"按类型、题材、年代浏览热门和高分的"+strings.TrimPrefix(title, "发现")+"作品。")
+	seo.NoIndex = mediaType == media.TypeShort || filter.Genre != "" || filter.Decade > 0 || filter.Sort != "hot"
+	if page > 1 {
+		seo.Title = title + " · 第 " + strconv.Itoa(page) + " 页"
+	}
+	data := discoverCardsData(cards, filter, page)
+	data["Title"], data["Nav"], data["SEO"] = title, "discover", seo
+	data["Types"], data["Genres"], data["Filter"] = media.Types, Genres, filter
+	if page > 1 {
+		data["Prev"] = discoverPageURL(filter, page-1, false)
 	}
 	if mediaType == media.TypeShort {
 		// 短剧频道：题材用短剧自己的标签，另有剧种一栏；排序按红果的热度、评分、上架时间。
-		// 页面先不让搜索引擎收录（和短剧详情页一样）。
-		seo := data["SEO"].(SEO)
-		seo.NoIndex = true
-		data["SEO"], data["Genres"], data["Forms"], data["Short"] = seo, a.shortTopicList(c.Request.Context()), media.ShortForms, true
-		if filter.Form != "" && media.IsShortForm(filter.Form) {
-			data["Title"] = filter.Form + " · " + data["Title"].(string)
-		}
-		if filter.Genre == "" && filter.Form == "" && filter.Offset == 0 && (filter.Sort == "" || filter.Sort == "hot") {
+		data["Genres"], data["Forms"], data["Short"] = a.shortTopicList(c.Request.Context()), media.ShortForms, true
+		if filter.Genre == "" && filter.Form == "" && filter.Offset == 0 && filter.Sort == "hot" {
 			rows := []RowView{}
 			for _, chart := range []struct{ kind, title, sub string }{
 				{ingest.ChartShortHot, "热播榜", "红果热度"}, {ingest.ChartShortNew, "新剧榜", "近三天上架"},
@@ -310,26 +370,21 @@ func (a *App) discoverPage(c *gin.Context) {
 	a.render.Page(c, http.StatusOK, "discover.html", data)
 }
 
-// moreURL 返回"加载下一页"的地址；这一页不满时返回空字符串。
-func moreURL(c *gin.Context, filter media.Filter, got int) string {
-	if got < filter.Limit {
-		return ""
-	}
-	page, _ := httpx.Page(c, discoverPageSize)
-	query := c.Request.URL.Query()
-	query.Set("page", strconv.Itoa(page+1))
-	query.Set("type", filter.Type)
-	return "/api/htmx/discover?" + query.Encode()
-}
-
 func (a *App) discoverMore(c *gin.Context) {
-	filter := discoverFilter(c, c.Query("type"))
+	mediaType := c.Query("type")
+	page, offset, valid := httpx.ParsePage(c.Query("page"), discoverPageSize)
+	if !valid || (mediaType != "" && !media.ValidType(mediaType)) {
+		c.Status(http.StatusNotFound)
+		return
+	}
+	filter := discoverFilter(c, mediaType, offset)
 	cards, err := a.Media.Discover(c.Request.Context(), filter)
 	if err != nil {
 		a.fail(c, err)
 		return
 	}
-	a.render.Partial(c, "grid_cards", gin.H{"Cards": cardViews(cards), "More": moreURL(c, filter, len(cards))})
+	// 作品可能在浏览期间被移除。空片段让滚动加载正常结束。
+	a.render.Partial(c, "grid_cards", discoverCardsData(cards, filter, page))
 }
 
 // ---------- 搜索 ----------

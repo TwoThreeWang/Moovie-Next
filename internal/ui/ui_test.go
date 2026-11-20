@@ -1,9 +1,12 @@
 package ui_test
 
 import (
-	"encoding/base64"
+	"net/http/httptest"
 	"testing"
+	"testing/fstest"
 	"time"
+
+	"github.com/gin-gonic/gin"
 
 	"moovie/internal/ui"
 	"moovie/web"
@@ -11,29 +14,34 @@ import (
 
 // 所有模板都必须能解析：模板写错时在这里就能发现，不用等到页面被访问。
 func TestTemplatesParse(t *testing.T) {
-	if _, err := ui.New(web.Files, false, nil); err != nil {
+	if _, err := ui.New(web.Files, false, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 }
 
-func TestImage(t *testing.T) {
-	cases := []struct{ raw, size, want string }{
-		{"", "s", ""},
-		{"http://img1.doubanio.com/a.jpg", "s", ""}, // 只接受 HTTPS
-		// TMDB 的图片也走站内代理，并换成对应尺寸
-		{"https://image.tmdb.org/t/p/original/abc.jpg", "s", "/img/" + base64.RawURLEncoding.EncodeToString([]byte("https://image.tmdb.org/t/p/w342/abc.jpg"))},
-		{"https://image.tmdb.org/t/p/original/abc.jpg", "l", "/img/" + base64.RawURLEncoding.EncodeToString([]byte("https://image.tmdb.org/t/p/w1280/abc.jpg"))},
-		{"https://example.com/x.jpg", "m", "https://example.com/x.jpg"},
+func TestRendererImageFunctionIsScoped(t *testing.T) {
+	files := fstest.MapFS{
+		"templates/layout.html":     {Data: []byte(`{{define "layout"}}{{template "content" .}}{{end}}`)},
+		"templates/pages/test.html": {Data: []byte(`{{define "content"}}{{img "https://image.tmdb.org/t/p/original/a.jpg" "thumb" "电影" "poster"}}{{end}}`)},
 	}
-	for _, c := range cases {
-		if got := ui.Image(c.raw, c.size); got != c.want {
-			t.Errorf("Image(%q, %q) = %q，期望 %q", c.raw, c.size, got, c.want)
+	newRenderer := func(value string) *ui.Renderer {
+		r, err := ui.New(files, true, nil, func(raw, size, title, purpose string) string { return value })
+		if err != nil {
+			t.Fatal(err)
 		}
+		return r
 	}
-	// 豆瓣图片走站内代理，并换成对应尺寸。
-	got := ui.Image("https://img9.doubanio.com/view/photo/l_ratio_poster/public/p1.jpg", "s")
-	if got == "" || got[:5] != "/img/" {
-		t.Errorf("豆瓣图片应该走 /img/ 代理，实际 %q", got)
+	one, two := newRenderer("/one"), newRenderer("/two")
+	for _, item := range []struct {
+		r    *ui.Renderer
+		want string
+	}{{one, "/one"}, {two, "/two"}, {one, "/one"}} {
+		w := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(w)
+		item.r.Page(c, 200, "test.html", nil)
+		if w.Body.String() != item.want {
+			t.Fatalf("应用之间不能互相覆盖图片签名函数: %q", w.Body.String())
+		}
 	}
 }
 

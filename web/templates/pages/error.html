@@ -1,0 +1,9 @@
+{{define "content"}}<main class="message">
+<p class="kicker">{{.Status}}</p>
+<h1>{{.Heading}}</h1>
+<p>{{.Message}}</p>
+<div class="form-actions">
+<a class="btn btn-primary" href="{{.Primary}}">{{.PrimaryText}}</a>
+<a class="btn btn-glass" href="{{.Secondary}}">{{.SecondaryText}}</a>
+</div>
+</main>{{end}}

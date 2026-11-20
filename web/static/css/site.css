@@ -444,8 +444,6 @@ img.fade { transition: opacity .7s var(--ease); }
 .btn[disabled] { opacity: .45; cursor: default; }
 
 /* 管理后台入口：只给管理员看，手机底栏放不下就不放（"我的"页里有） */
-.nav-admin { display: none; }
-@media (min-width: 900px) { .nav-admin { display: list-item; list-style: none; } }
 
 /* 页面标题区（眉标、标题、说明、补充信息、按钮）：统一的上下节奏。之前这些元素直接叠在一起，间距是 0。 */
 .page-head:not(.page-head-row) > * + * { margin-top: 10px; }
@@ -515,3 +513,101 @@ main:not(.narrow, .detail) .comments { max-width: none; }
 @media (min-width: 720px) { .to-top { right: 24px; bottom: 24px; } }
 /* 详情页窄屏吸底栏出现时让开 */
 @media (max-width: 719px) { body:has(.d-bar.show) .to-top { bottom: calc(var(--nav-bottom) + 80px); } }
+
+.collection-public-entries { list-style: none; margin: 0; }
+.collection-public-entries > li { min-width: 0; }
+.collection-entry-note { margin: 6px 0 0; color: var(--text-2); white-space: pre-wrap; overflow-wrap: anywhere; }
+.message .form-actions { justify-content: center; }
+
+/* 片单编辑器：左侧是标题简介和已选作品，右侧是固定在视口里的作品搜索；窄屏按 信息 → 搜索 → 已选 排列。 */
+.collection-editor-page { width: 100%; max-width: calc(1240px + 2 * var(--gutter)); margin-inline: auto; padding-bottom: 24px; }
+.collection-editor-page .page-head-row { align-items: flex-start; }
+.collection-editor-page .page-head .hint { max-width: 640px; }
+.collection-editor-page > .flash { max-width: none; }
+.collection-editor-state { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.collection-editor { padding: 0 var(--gutter); }
+.collection-editor .card-panel { margin: 0; max-width: none; min-width: 0; }
+.collection-editor-grid {
+  display: grid; gap: 20px; align-items: start;
+  grid-template-columns: minmax(0, 1fr) minmax(300px, 380px);
+  grid-template-areas: "info picker" "items picker";
+}
+.collection-info { grid-area: info; }
+.collection-selection { grid-area: items; }
+.collection-picker {
+  grid-area: picker; position: sticky; top: calc(var(--nav-h) + 16px);
+  max-height: calc(100vh - var(--nav-h) - 120px); grid-template-rows: auto auto auto minmax(0, 1fr);
+}
+.collection-picker h2, .collection-selection h2 { font-size: var(--fs-h2); }
+.collection-results, .collection-entries { list-style: none; margin: 0; padding: 0; }
+.collection-results { overflow: auto; overscroll-behavior: contain; }
+.collection-result {
+  display: grid; grid-template-columns: 42px minmax(0, 1fr) auto; gap: 10px; align-items: center;
+  padding: 8px 0; border-bottom: 1px solid var(--line);
+}
+.collection-result img, .collection-editor-entry img, .collection-poster-empty {
+  width: 42px; height: 63px; object-fit: cover; border-radius: 6px; background: var(--surface-2); flex: none;
+}
+/* 每行：拖动柄 | 海报 | 片名和推荐语 | 排序按钮 */
+.collection-editor-entry {
+  display: grid; grid-template-columns: 24px 42px minmax(0, 1fr) auto; gap: 8px 12px; align-items: start;
+  padding: 14px 0; border-bottom: 1px solid var(--line);
+}
+.collection-editor-entry:last-child { border-bottom: 0; }
+.collection-entry-top { display: contents; }
+.collection-editor-entry > .collection-entry-top > :is(img, .collection-poster-empty) { grid-row: span 2; }
+.collection-editor-entry textarea { grid-column: 3 / -1; width: 100%; min-height: 0; resize: vertical; }
+.collection-row-controls { grid-column: 4; grid-row: 1; display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+.collection-row-controls .btn, .collection-result .btn { min-height: 34px; padding: 4px 10px; font-size: 13px; }
+.collection-drag { grid-row: span 2; align-self: center; color: var(--text-3); cursor: grab; font-size: 20px; line-height: 1; touch-action: none; }
+.collection-undo { margin-top: 4px; }
+.collection-editor-bar {
+  position: sticky; bottom: calc(var(--nav-bottom) + 12px); z-index: 5; margin-top: 20px;
+  display: flex; align-items: center; justify-content: space-between; gap: 12px 20px; flex-wrap: wrap;
+  padding: 12px 16px; border-radius: var(--r-m); background: var(--surface-2);
+  box-shadow: 0 12px 32px -12px rgba(0, 0, 0, .7);
+}
+.collection-editor-messages { min-width: 0; flex: 1 1 220px; }
+.collection-editor-messages:has(> .hint:empty):has(> .flash[hidden]) { display: none; }
+.collection-editor-messages .flash { margin: 6px 0 0; max-width: none; }
+.collection-editor-bar .form-actions { justify-content: flex-end; }
+@media (max-width: 900px) {
+  .collection-editor-grid { grid-template-columns: minmax(0, 1fr); grid-template-areas: "info" "picker" "items"; gap: 14px; }
+  .collection-picker { position: static; max-height: none; }
+  .collection-results { max-height: 46vh; }
+}
+@media (max-width: 560px) {
+  .collection-editor-entry { grid-template-columns: 20px 42px minmax(0, 1fr); }
+  .collection-row-controls { grid-column: 1 / -1; grid-row: auto; justify-content: flex-start; }
+  .collection-row-controls .btn, .collection-result .btn { min-height: 44px; }
+  .collection-editor-bar { padding: 10px; gap: 8px; }
+  .collection-editor-bar .form-actions { flex: 1 1 100%; flex-wrap: nowrap; gap: 8px; }
+  .collection-editor-bar .form-actions > * { flex: 1 1 auto; padding-inline: 12px; }
+  .collection-editor-back { display: none; }
+}
+
+.collection-author {
+  display: inline-flex; align-items: center; gap: 12px; width: fit-content;
+  margin: 12px 0 6px; padding: 8px 12px 8px 8px; border: 1px solid var(--line);
+  border-radius: var(--r-m); background: var(--surface);
+}
+.collection-author:hover { background: var(--surface-2); }
+.collection-author strong, .collection-author .hint { display: block; }
+.collection-author > .i { color: var(--text-2); }
+.collection-stats, .collection-manage-actions {
+  display: flex; align-items: center; gap: 10px 16px; flex-wrap: wrap;
+}
+.collection-stats > span { display: inline-flex; align-items: center; gap: 5px; }
+.collection-stats .i { width: 16px; height: 16px; }
+.collection-detail-actions { margin-top: 12px; }
+.collection-manage { list-style: none; margin: 0; padding: 0; }
+.collection-manage-row {
+  display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap;
+  gap: 8px 16px; padding: 14px 0; border-bottom: 1px solid var(--line);
+}
+.collection-manage-info { flex: 1 1 220px; min-width: 0; }
+.collection-manage-title { font-size: 16px; font-weight: 650; overflow-wrap: anywhere; }
+.collection-manage-info > p { margin: 4px 0 0; }
+.collection-manage-actions > form { display: contents; }
+.collection-manage-actions .link { display: inline-flex; align-items: center; min-height: 36px; padding: 0; line-height: 1.2; }
+#author-collections { scroll-margin-top: calc(var(--nav-h) + 16px); }

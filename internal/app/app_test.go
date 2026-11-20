@@ -25,6 +25,7 @@ import (
 	"moovie/internal/app"
 	"moovie/internal/config"
 	"moovie/internal/db/testdb"
+	"moovie/internal/imageproxy"
 	"moovie/internal/mail/mailtest"
 	"moovie/internal/media"
 	"moovie/internal/pow"
@@ -219,7 +220,7 @@ func TestLoginWall(t *testing.T) {
 	player := s.get("/m3u8")
 	mustContain(t, player, "在线 M3U8 播放器 - 免费播放", `data-manual="1"`, `id="manual-form"`, `"@type":"FAQPage"`, `"@type":"WebApplication"`,
 		"我的链接会被上传吗", `<link rel="canonical" href="http://moovie.test/m3u8"`)
-	if strings.Contains(player.body, `name="robots" content="noindex"`) || !strings.Contains(s.get("/sitemap.xml").body, "/m3u8") {
+	if strings.Contains(player.body, `name="robots" content="noindex"`) || !strings.Contains(s.get("/sitemap-pages.xml").body, "/m3u8") {
 		t.Error("播放器页应该允许收录，并出现在站点地图里")
 	}
 	// 广告指纹列表谁都能取（游客的播放器也要用）；投票要登录。
@@ -332,44 +333,50 @@ func TestAllPagesRender(t *testing.T) {
 	s.htmx(http.MethodPost, "/api/library/"+itoa(show)+"/wish", nil)
 	s.htmx(http.MethodPost, "/api/library/"+itoa(film)+"/watched", url.Values{"rating": {"5"}, "comment": {"镜头相信观众"}})
 	s.json(http.MethodPost, "/api/positions", map[string]any{"items": []map[string]any{{"media_id": show, "season": 2, "episode": 1, "position": 600, "duration": 2700, "at": time.Now().UnixMilli()}}})
-	s.form("/admin/collections", url.Values{"title": {"2026 最佳"}, "slug": {"best-2026"}, "items": {itoa(show) + " | 雾港 | 年度第一\n" + itoa(film)}, "featured": {"on"}})
+	s.seedPublishedCollection("best-2026", "2026 最佳", []int64{show, film}, map[int64]string{show: "年度第一"})
 	s.form("/api/feedback", url.Values{"kind": {"bug"}, "content": {"搜索打不开"}})
 	month := time.Now().Format("2006-01")
 
 	pages := map[string][]string{
-		"/":                                {"雾港 第二季", "继续观看", "今日更新", "/api/htmx/row/foryou"},
-		"/discover":                        {"雾港 第二季", "回声"},
-		"/discover/tv?genre=悬疑&sort=new":   {"雾港 第二季"},
-		"/search?q=雾港":                     {`value="雾港"`, "我的源"},
-		"/foryou":                          {"为你推荐"},
-		showPath:                           {"雾港 第二季", "播放源", "选集", "继续播放", "第 1 集", `data-media="`, "剧照"},
-		filmPath:                           {"回声", "播放源"},
-		"/play/" + itoa(show) + "?s=2&e=2": {"雾港 第二季", `data-episode="2"`, "来源", "弹幕"},
-		"/play/local":                      {`data-local="1"`, "这部作品不在作品库里"},
-		"/changelog":                       {"更新记录", "热搜榜"},
-		"/me":                              {"evan", "观看历史", "想看", "看过", "管理后台", "观影报告"},
-		"/me/wish":                         {"雾港 第二季"},
-		"/me/watched":                      {"回声", "★★★★★"},
-		"/me/history":                      {"雾港 第二季", "第 1 集"},
-		"/notifications":                   {"还没有通知"},
-		"/settings":                        {"播放源", "订阅地址", "播放源会自动同步过去", "豆瓣同步", "公开我的观影主页"},
-		"/cinema":                          {"镜头相信观众", "回声"},
-		"/cinema?tab=following":            {"你关注的人还没有写短评"},
-		"/list":                            {"2026 最佳"},
-		"/list/best-2026":                  {"2026 最佳", "年度第一", "回声"},
-		"/feedback":                        {"搜索打不开", "版权投诉"},
-		"/user/1":                          {"evan", "镜头相信观众"},
-		"/user/1/monthly/" + month:         {"观影报告", "部看过"},
-		"/admin":                           {"管理后台", "刷新热门榜单"},
-		"/admin/users":                     {"evan@example.com"},
-		"/admin/media":                     {"雾港 第二季", "红果短剧链接"},
-		"/admin/media?q=回声":                {"回声"},
-		"/admin/jobs":                      {"任务"},
-		"/admin/filters":                   {"添加屏蔽词"},
-		"/admin/feedback":                  {"搜索打不开"},
-		"/admin/collections":               {"2026 最佳"},
-		"/admin/collections/1":             {"编辑片单", "年度第一"},
-		"/admin/collections/new":           {"新建片单"},
+		"/":                                   {"雾港 第二季", "继续观看", "今日更新", "/api/htmx/row/foryou"},
+		"/discover":                           {"雾港 第二季", "回声"},
+		"/discover/tv?genre=悬疑&sort=new":      {"雾港 第二季"},
+		"/search?q=雾港":                        {`value="雾港"`, "我的源"},
+		"/foryou":                             {"为你推荐"},
+		showPath:                              {"雾港 第二季", "播放源", "选集", "继续播放", "第 1 集", `data-media="`, "剧照"},
+		filmPath:                              {"回声", "播放源"},
+		"/play/" + itoa(show) + "?s=2&e=2":    {"雾港 第二季", `data-episode="2"`, "来源", "弹幕"},
+		"/play/local":                         {`data-local="1"`, "这部作品不在作品库里"},
+		"/changelog":                          {"更新记录", "热搜榜"},
+		"/me":                                 {"evan", "观看历史", "想看", "看过", "管理后台", "观影报告"},
+		"/me/wish":                            {"雾港 第二季"},
+		"/me/watched":                         {"回声", "★★★★★"},
+		"/me/history":                         {"雾港 第二季", "第 1 集"},
+		"/notifications":                      {"还没有通知"},
+		"/settings":                           {"播放源", "订阅地址", "播放源会自动同步过去", "豆瓣同步", "公开我的观影主页"},
+		"/cinema":                             {"镜头相信观众", "回声"},
+		"/cinema?tab=following":               {"你关注的人还没有写短评"},
+		"/list":                               {"2026 最佳"},
+		"/list/best-2026":                     {"2026 最佳", "年度第一", "回声"},
+		"/feedback":                           {"搜索打不开", "版权投诉"},
+		"/user/1":                             {"evan", "镜头相信观众"},
+		"/user/1/monthly/" + month:            {"观影报告", "部看过"},
+		"/admin":                              {"管理后台", "刷新热门榜单", "待审核片单"},
+		"/admin/users":                        {"evan@example.com"},
+		"/admin/media":                        {"雾港 第二季", "红果短剧链接"},
+		"/admin/media?q=回声":                   {"回声"},
+		"/admin/jobs":                         {"任务"},
+		"/admin/filters":                      {"添加屏蔽词"},
+		"/admin/feedback":                     {"搜索打不开"},
+		"/admin/collections?status=published": {"2026 最佳"},
+		"/admin/collections/1":                {"下架片单", "年度第一"},
+		"/me/collections/new":                 {"新建片单"},
+		"/me/collections":                     {"我的片单", "2026 最佳"},
+	}
+	// 片单在顶部菜单里，管理后台只从「我的」进入。
+	if nav := s.get("/discover").body; !strings.Contains(nav, `<a class="nav-link" href="/list"`) ||
+		strings.Contains(nav, `<a class="nav-link" href="/admin"`) || strings.Contains(nav, `<a class="chip-l" href="/list">`) {
+		t.Error("顶部菜单应有片单、没有管理；发现页不再放片单入口")
 	}
 	for path, wants := range pages {
 		r := s.get(path)
@@ -385,7 +392,7 @@ func TestAllPagesRender(t *testing.T) {
 	for path, wants := range map[string][]string{
 		"/api/htmx/row/foryou":                     {"为你推荐", "白夜"},
 		"/api/htmx/row/chart/tv":                   {"热门剧集", "雾港 第二季"},
-		"/api/htmx/row/collections":                {"精选片单", "2026 最佳"},
+		"/api/htmx/row/collections":                {"最新片单", "2026 最佳"},
 		"/api/htmx/search?q=雾港":                    {"雾港 第二季"},
 		"/api/htmx/discover?type=movie&page=1":     {"回声"},
 		"/api/htmx/m/" + itoa(film) + "/comments":  {"镜头相信观众", "短评"},
@@ -696,7 +703,7 @@ func TestStaticFiles(t *testing.T) {
 	if r := s.get("/static/../go.mod"); r.status == http.StatusOK {
 		t.Error("不能读到静态目录之外的文件")
 	}
-	if r := s.get("/img/" + "aHR0cHM6Ly9ldmlsLmV4YW1wbGUvYS5qcGc"); r.status != http.StatusBadRequest {
+	if r := s.get("/img/" + "aHR0cHM6Ly9ldmlsLmV4YW1wbGUvYS5qcGc"); r.status != http.StatusForbidden || r.header.Get("Cache-Control") != "no-store" {
 		t.Errorf("图片代理不能访问豆瓣以外的地址，实际 %d", r.status)
 	}
 }
@@ -810,7 +817,7 @@ func TestPublicPages(t *testing.T) {
 		t.Fatalf("未登录时详情页应该能打开，实际 %d", detail.status)
 	}
 	mustContain(t, detail, "雾港 第二季", `<meta name="description"`, `<link rel="canonical" href="http://moovie.test/m/`+itoa(show)+`"`,
-		`property="og:image"`, `"@type":"TVSeries"`, `"name":"陈默"`, "登录后，可以用你自己配置的播放源播放", `/auth/login?redirect=%2Fm%2F`+itoa(show))
+		`property="og:image"`, `"@type":"TVSeason"`, `"seasonNumber":2`, `"name":"陈默"`, "登录后，可以用你自己配置的播放源播放", `/auth/login?redirect=%2Fm%2F`+itoa(show))
 	for _, unwanted := range []string{`src="/static/js/pages/detail.js`, "src-status", "hx-post=\"/api/library"} {
 		if strings.Contains(detail.body, unwanted) {
 			t.Errorf("未登录的详情页不应该有 %q", unwanted)
@@ -864,10 +871,9 @@ func TestPublicPages(t *testing.T) {
 
 	robots := s.get("/robots.txt")
 	mustContain(t, robots, "Allow: /", "Disallow: /play/", "Disallow: /api/", "Sitemap: http://moovie.test/sitemap.xml")
-	sitemap := s.get("/sitemap.xml")
-	if sitemap.status != http.StatusOK || !strings.Contains(sitemap.body, "<loc>http://moovie.test/m/"+itoa(show)+"</loc>") || !strings.Contains(sitemap.body, "/trends") {
-		t.Errorf("站点地图不对: %d %.300s", sitemap.status, sitemap.body)
-	}
+	mustContain(t, s.get("/sitemap.xml"), "<sitemapindex", "/sitemap-media-1.xml", "/sitemap-pages.xml")
+	mustContain(t, s.get("/sitemap-media-1.xml"), "<loc>http://moovie.test/m/"+itoa(show)+"</loc>")
+	mustContain(t, s.get("/sitemap-pages.xml"), "<loc>http://moovie.test/trends</loc>")
 
 	// 主页：没公开的看不到，公开后不登录也能看
 	s.register("evan")
@@ -1198,7 +1204,7 @@ func TestShareCards(t *testing.T) {
 	s.register("evan")
 	film := s.seedMedia("36000003", "回声", media.TypeMovie, nil)
 	s.htmx(http.MethodPost, "/api/library/"+itoa(film)+"/watched", url.Values{"rating": {"5"}, "comment": {"镜头相信观众"}})
-	s.form("/admin/collections", url.Values{"title": {"年度最佳"}, "slug": {"best"}, "items": {itoa(film)}})
+	s.seedPublishedCollection("best", "年度最佳", []int64{film}, nil)
 
 	cards := func(body string) []map[string]any {
 		var list []map[string]any
@@ -1239,7 +1245,7 @@ func TestExportAndDeleteAccount(t *testing.T) {
 	s := newSite(t)
 	s.register("evan") // 管理员
 	film := s.seedMedia("36000004", "回声", media.TypeMovie, nil)
-	s.form("/admin/collections", url.Values{"title": {"年度最佳"}, "slug": {"best"}, "items": {itoa(film)}})
+	s.seedPublishedCollection("best", "年度最佳", []int64{film}, nil)
 	admin := s.client
 
 	s.client = s.browser()
@@ -1370,7 +1376,7 @@ func TestKeyringSync(t *testing.T) {
 func TestCopyrightContact(t *testing.T) {
 	s := newSite(t)
 	mustContain(t, s.get("/dmca"), "版权投诉", `href="/feedback?kind=dmca"`, `mailto:hello@moovie.test`, "不需要注册账号")
-	mustContain(t, s.get("/changelog"), "v5.0.0", "2026-11-16", "💥 破坏性变更 (Breaking Changes)", "✨ 新增 (Added)", "登录即同步")
+	mustContain(t, s.get("/changelog"), "v5.1.0", "2026-11-20", "v5.0.0", "2026-11-16", "💥 破坏性变更 (Breaking Changes)", "✨ 新增 (Added)", "登录即同步")
 }
 
 // ---------- 后台：内容审核、禁言封禁、广告指纹、趋势 ----------
@@ -1524,11 +1530,11 @@ func TestShortDramaPages(t *testing.T) {
 	detail := s.get("/m/" + itoa(id))
 	mustContain(t, detail, "短剧 · 漫剧 · 全 135 集", "红果 9.0", "hongguoduanju.com/detail?series_id=7706890402913078297", `name="robots" content="noindex`)
 	// 封面走站内代理，缩放到要的宽度。
-	cover := "/img/" + base64.RawURLEncoding.EncodeToString([]byte("https://p6-novel.byteimg.com/novel-pic/abc~tplv-shrink:640:0.image"))
+	cover := html.EscapeString(imageproxy.New(nil, "test-secret").URL("https://p6-novel.byteimg.com/novel-pic/abc~tplv-shrink:640:0.image", "display", "帐中香第二季", "poster"))
 	if !strings.Contains(detail.body, cover) {
 		t.Error("详情页的大图应该用 640 宽的封面并走站内代理")
 	}
-	if sitemap := s.get("/sitemap.xml"); strings.Contains(sitemap.body, "/m/"+itoa(id)+"<") {
+	if sitemap := s.get("/sitemap-media-1.xml"); strings.Contains(sitemap.body, "/m/"+itoa(id)+"<") {
 		t.Error("短剧不应该进站点地图")
 	}
 	found := s.get("/api/htmx/search?q=" + url.QueryEscape("帐中香"))

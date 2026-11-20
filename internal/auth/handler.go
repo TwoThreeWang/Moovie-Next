@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/url"
@@ -219,30 +220,62 @@ func (h *Handler) updateUsername(c *gin.Context) {
 }
 
 func (h *Handler) updatePassword(c *gin.Context) {
+	c.Header("Cache-Control", "no-store")
+	fail := func(status int, code, message string) {
+		if wantsJSON(c) {
+			c.JSON(status, gin.H{"error": message})
+			return
+		}
+		done(c, "account", code)
+	}
 	user := Current(c)
 	if bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(c.PostForm("current"))) != nil {
-		done(c, "account", "password_wrong")
+		fail(http.StatusBadRequest, "password_wrong", "当前密码不正确，密码尚未修改。")
 		return
 	}
 	password := c.PostForm("password")
-	if validatePassword(password) != "" {
-		done(c, "account", "password_weak")
+	if message := validatePassword(password); message != "" {
+		fail(http.StatusBadRequest, "password_weak", message)
+		return
+	}
+	var keyring *PasswordKeyring
+	if raw := c.PostForm("keyring"); raw != "" {
+		var candidate PasswordKeyring
+		if len(raw) > 8192 || json.Unmarshal([]byte(raw), &candidate) != nil || !candidate.Valid() {
+			fail(http.StatusBadRequest, "keyring_required", "加密配置格式不正确，密码尚未修改。")
+			return
+		}
+		keyring = &candidate
+	} else if wantsJSON(c) {
+		fail(http.StatusBadRequest, "keyring_required", "缺少重新加密的账号配置，密码尚未修改。请刷新页面后重试。")
 		return
 	}
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {
-		done(c, "account", "failed")
+		fail(http.StatusInternalServerError, "failed", "密码修改失败，请稍后重试。")
 		return
 	}
-	epoch, err := h.users.SetPassword(c.Request.Context(), user.ID, string(hash))
+	epoch, version, err := h.users.SetPasswordAndKeyring(c.Request.Context(), user.ID, user.SessionEpoch, string(hash), keyring)
+	if errors.Is(err, ErrPasswordConflict) {
+		fail(http.StatusConflict, "password_conflict", "账号或同步配置已发生变化，密码尚未修改。请刷新页面后重试。")
+		return
+	}
+	if errors.Is(err, ErrKeyringRequired) {
+		fail(http.StatusBadRequest, "keyring_required", "请启用浏览器加密并刷新页面，密码与账号配置需要一起更新。")
+		return
+	}
 	if err != nil {
 		c.Error(err)
-		done(c, "account", "failed")
+		fail(http.StatusInternalServerError, "failed", "密码与账号配置修改失败，请稍后重试。")
 		return
 	}
 	// 其他设备的登录已经失效，当前设备换一张新凭证继续用。
 	user.SessionEpoch = epoch
 	h.sessions.SignIn(c, user)
+	if wantsJSON(c) {
+		c.JSON(http.StatusOK, gin.H{"redirect": "/settings?saved=account#account", "keyring_version": version})
+		return
+	}
 	done(c, "account", "")
 }
 

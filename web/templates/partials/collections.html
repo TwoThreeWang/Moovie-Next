@@ -1,0 +1,10 @@
+{{define "collection_pager"}}
+{{if or .Prev .Next}}<nav class="form-actions pad" aria-label="片单分页">
+{{with .Prev}}<a class="btn btn-glass" href="{{.}}" rel="prev">上一页</a>{{end}}
+{{with .Next}}<a class="btn btn-glass" href="{{.}}" rel="next">下一页</a>{{end}}
+</nav>{{end}}
+{{end}}
+
+{{define "collection_entries"}}
+{{if .Entries}}<ol class="grid collection-public-entries">{{range .Entries}}<li>{{template "card" .Card}}{{with .Note}}<p class="collection-entry-note">{{.}}</p>{{end}}</li>{{end}}</ol>{{else}}<p class="empty">这份片单暂时没有可见作品。</p>{{end}}
+{{end}}

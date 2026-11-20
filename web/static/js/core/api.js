@@ -9,8 +9,8 @@ export const userId = () => document.body?.dataset.user ?? '';
 export const userKey = (name) => `u${userId()}:${name}`;
 
 /** 调用本站接口。json 非空时以 JSON 发送。 */
-export function api(path, { method = 'GET', json, keepalive = false, headers = {} } = {}) {
-  const init = { method, credentials: 'same-origin', keepalive, headers: { 'X-CSRF-Token': csrfToken(), ...headers } };
+export function api(path, { method = 'GET', json, keepalive = false, headers = {}, signal, cache } = {}) {
+  const init = { method, credentials: 'same-origin', keepalive, signal, cache, headers: { 'X-CSRF-Token': csrfToken(), ...headers } };
   if (json !== undefined) {
     init.body = JSON.stringify(json);
     init.headers['Content-Type'] = 'application/json';
@@ -27,6 +27,16 @@ export function toast(message, duration = 2200) {
   el.classList.add('show');
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => el.classList.remove('show'), duration);
+}
+
+/** 后台同步失败时保留可见提示，不用一闪而过的成功提示掩盖失败。 */
+export function showSyncError(message) {
+  let el = document.getElementById('account-sync-error');
+  if (!el) {
+    el = h('p', { id: 'account-sync-error', class: 'flash error', role: 'alert' });
+    (document.querySelector('main') ?? document.body).prepend(el);
+  }
+  el.textContent = '账号同步失败：' + message;
 }
 
 /** 创建元素。文字一律走 textContent，资源站返回的内容不会被当成 HTML 解析。 */

@@ -3,20 +3,19 @@ package ui
 
 import (
 	"bytes"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"html/template"
 	"io/fs"
 	"net/http"
-	"net/url"
 	"path"
-	"regexp"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
+
+	"moovie/internal/httpx"
 )
 
 // Renderer 持有解析好的模板。
@@ -24,6 +23,7 @@ type Renderer struct {
 	fsys   fs.FS
 	reload bool
 	common func(c *gin.Context) gin.H
+	image  func(string, string, string, string) string
 
 	mu       sync.RWMutex
 	pages    map[string]*template.Template
@@ -32,8 +32,12 @@ type Renderer struct {
 
 // New 创建渲染器。reload 为 true 时每次请求都重新读模板（开发用）。
 // common 返回每个页面都需要的数据（当前用户、CSRF 令牌等）。
-func New(fsys fs.FS, reload bool, common func(c *gin.Context) gin.H) (*Renderer, error) {
-	renderer := &Renderer{fsys: fsys, reload: reload, common: common}
+// image 生成模板里 img 函数的图片地址（片名、规格都参与签名），每个应用用自己的密钥；为 nil 时图片地址为空。
+func New(fsys fs.FS, reload bool, common func(c *gin.Context) gin.H, image func(raw, size, title, purpose string) string) (*Renderer, error) {
+	if image == nil {
+		image = func(string, string, string, string) string { return "" }
+	}
+	renderer := &Renderer{fsys: fsys, reload: reload, common: common, image: image}
 	if err := renderer.load(); err != nil {
 		return nil, err
 	}
@@ -45,7 +49,7 @@ func (r *Renderer) load() error {
 	if err != nil {
 		return err
 	}
-	base := template.New("base").Funcs(Funcs)
+	base := template.New("base").Funcs(Funcs).Funcs(template.FuncMap{"img": r.image})
 	if len(partialFiles) > 0 {
 		if base, err = base.ParseFS(r.fsys, partialFiles...); err != nil {
 			return fmt.Errorf("解析片段模板: %w", err)
@@ -140,55 +144,10 @@ func (r *Renderer) Partial(c *gin.Context, name string, data gin.H) {
 
 // NotFound 渲染 404 页面。
 func (r *Renderer) NotFound(c *gin.Context) {
-	r.Page(c, http.StatusNotFound, "message.html", gin.H{"Title": "页面不存在", "Heading": "页面不存在", "Message": "你访问的页面不存在，或者已经被移除。"})
+	httpx.Error(c, http.StatusNotFound, "你访问的页面不存在，或者已经被移除。")
 }
 
 // ---------- 模板函数 ----------
-
-var (
-	doubanSize  = regexp.MustCompile(`/(s|m|l)_ratio_poster/|/(s|m|l)/public/`)
-	tmdbSize    = regexp.MustCompile(`/t/p/[a-z0-9]+/`)
-	hongguoSize = regexp.MustCompile(`tplv-shrink:[0-9]+:[0-9]+`)
-)
-
-// Image 把图片地址转成适合展示的地址。size 取 s / m / l。
-//
-// 豆瓣图片有防盗链，必须经过站内图片代理；TMDB 图片可以直接引用，只需要换成合适的尺寸。
-func Image(raw, size string) string {
-	if raw == "" {
-		return ""
-	}
-	parsed, err := url.Parse(raw)
-	if err != nil || parsed.Scheme != "https" {
-		return ""
-	}
-	host := strings.ToLower(parsed.Hostname())
-	switch {
-	case strings.HasSuffix(host, ".doubanio.com"):
-		sized := doubanSize.ReplaceAllStringFunc(raw, func(match string) string {
-			if strings.Contains(match, "ratio_poster") {
-				return "/" + size + "_ratio_poster/"
-			}
-			return "/" + size + "/public/"
-		})
-		return "/img/" + base64.RawURLEncoding.EncodeToString([]byte(sized))
-	case strings.HasSuffix(host, "-novel.byteimg.com"):
-		// 红果的封面按宽度缩放：地址里的 tplv-shrink:640:0 换成要的宽度。也走站内代理，统一备份。
-		width := map[string]string{"s": "320", "m": "480", "l": "640"}[size]
-		if width == "" {
-			width = "480"
-		}
-		return "/img/" + base64.RawURLEncoding.EncodeToString([]byte(hongguoSize.ReplaceAllString(raw, "tplv-shrink:"+width+":0")))
-	case host == "image.tmdb.org":
-		// TMDB 的图片也走站内代理：统一备份到 Telegram，也不让浏览器直接连第三方。
-		width := map[string]string{"s": "w342", "m": "w780", "l": "w1280"}[size]
-		if width == "" {
-			width = "w780"
-		}
-		return "/img/" + base64.RawURLEncoding.EncodeToString([]byte(tmdbSize.ReplaceAllString(raw, "/t/p/"+width+"/")))
-	}
-	return raw
-}
 
 // TimeAgo 把时间显示成"3 小时前"这样的相对时间。接受 time.Time 或 *time.Time。
 func TimeAgo(value any) string {
@@ -220,7 +179,6 @@ func TimeAgo(value any) string {
 
 // Funcs 是所有模板可用的函数。
 var Funcs = template.FuncMap{
-	"img":     Image,
 	"timeago": TimeAgo,
 	"join":    strings.Join,
 	"ratings": func() []int { return []int{5, 4, 3, 2, 1} },

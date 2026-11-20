@@ -62,6 +62,9 @@ func TestMonthlyReport(t *testing.T) {
 	if report.Percentile != 100 || report.PersonaTitle != "线索收集者" || len(report.Posters) != 1 {
 		t.Errorf("排名、身份或海报墙不对: %+v", report)
 	}
+	if len(report.Posters) == 1 && (report.Posters[0].Title != "作品10" || report.Posters[0].URL != "https://img1.doubanio.com/a.jpg") {
+		t.Errorf("海报必须保留作品片名用于图片备份命名: %+v", report.Posters)
+	}
 	if report.Label() != "2026 年 10 月" || report.Hours() != 9 {
 		t.Errorf("展示用的方法不对: %q %d", report.Label(), report.Hours())
 	}

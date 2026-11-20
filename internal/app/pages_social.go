@@ -3,43 +3,57 @@ package app
 import (
 	"errors"
 	"net/http"
+	"net/url"
 	"strconv"
 
 	"github.com/gin-gonic/gin"
 
 	"moovie/internal/auth"
-	"moovie/internal/collections"
 	"moovie/internal/feedback"
 	"moovie/internal/httpx"
 	"moovie/internal/social"
-	"moovie/internal/ui"
 )
 
 func (a *App) cinemaPage(c *gin.Context) {
+	const pageSize = 20
 	following := c.Query("tab") == "following"
-	page, offset := httpx.Page(c, 20)
-	if following && auth.Current(c) == nil {
-		c.Redirect(http.StatusFound, "/auth/login?redirect=%2Fcinema%3Ftab%3Dfollowing")
+	page, offset, valid := httpx.ParsePage(c.Query("page"), pageSize)
+	if !valid {
+		a.render.NotFound(c)
 		return
 	}
-	comments, err := a.Social.Feed(c.Request.Context(), viewerID(c), following, 20, offset)
+	if following && auth.Current(c) == nil {
+		c.Redirect(http.StatusFound, "/auth/login?redirect="+url.QueryEscape(cinemaURL(following, page)))
+		return
+	}
+	if following {
+		c.Header("Cache-Control", "private, no-store")
+	}
+	comments, err := a.Social.Feed(c.Request.Context(), viewerID(c), following, pageSize+1, offset)
 	if err != nil {
 		a.fail(c, err)
 		return
 	}
-	data := gin.H{"Title": "影院", "Nav": "discover", "Comments": comments, "Following": following,
-		"SEO": a.pageSEO("/cinema", "大家最近看了什么、怎么评价。")}
-	base := "/cinema?"
-	if following {
-		base += "tab=following&"
+	if page > 1 && len(comments) == 0 {
+		a.render.NotFound(c)
+		return
 	}
-	if len(comments) == 20 {
-		data["Next"] = base + "page=" + strconv.Itoa(page+1)
-	}
+	seo := a.pageSEO(cinemaURL(following, page), "大家最近看了什么、怎么评价。")
+	seo.NoIndex = following
 	if page > 1 {
-		data["Prev"] = base + "page=" + strconv.Itoa(page-1)
+		seo.Title = "影院 · 第 " + strconv.Itoa(page) + " 页"
 	}
+	data := gin.H{"Title": "影院", "Nav": "discover", "Comments": firstN(comments, pageSize), "Following": following, "SEO": seo}
+	setPager(data, page, len(comments) > pageSize, func(page int) string { return cinemaURL(following, page) })
 	a.render.Page(c, http.StatusOK, "cinema.html", data)
+}
+
+func cinemaURL(following bool, page int) string {
+	query := url.Values{}
+	if following {
+		query.Set("tab", "following")
+	}
+	return pagedURL("/cinema", query, page)
 }
 
 func (a *App) toggleLike(c *gin.Context) {
@@ -154,65 +168,6 @@ func (a *App) toggleFollow(c *gin.Context) {
 	a.render.Partial(c, "follow_button", gin.H{"Profile": profile})
 }
 
-// ---------- 片单 ----------
-
-func (a *App) listIndex(c *gin.Context) {
-	list, err := a.Collections.List(c.Request.Context(), 60, 0)
-	if err != nil {
-		a.fail(c, err)
-		return
-	}
-	a.render.Page(c, http.StatusOK, "lists.html", gin.H{"Title": "片单", "Nav": "discover", "Collections": list,
-		"SEO": a.pageSEO("/list", "编辑整理的主题片单。")})
-}
-
-func (a *App) listDetail(c *gin.Context) {
-	ctx := c.Request.Context()
-	collection, err := a.Collections.BySlug(ctx, c.Param("slug"))
-	if errors.Is(err, collections.ErrNotFound) {
-		a.render.NotFound(c)
-		return
-	}
-	if err != nil {
-		a.fail(c, err)
-		return
-	}
-	items, err := a.Collections.Items(ctx, collection.ID)
-	if err != nil {
-		a.fail(c, err)
-		return
-	}
-	related, err := a.Collections.RelatedTo(ctx, collection.ID)
-	if err != nil {
-		a.fail(c, err)
-		return
-	}
-	cards := make([]CardView, 0, len(items))
-	for _, item := range items {
-		sub := item.Note
-		if sub == "" {
-			sub = defaultSub(item.Card)
-		}
-		cards = append(cards, CardView{Card: item.Card, Href: mediaHref(item.Card.ID), Sub: sub})
-	}
-	seo := a.pageSEO("/list/"+collection.Slug, clip(collection.Description+" 共 "+strconv.Itoa(collection.Count)+" 部。", 150))
-	if len(collection.Covers) > 0 {
-		seo.Image = a.absolute(ui.Image(collection.Covers[0], "l"))
-	}
-	// 结构化数据：这是一份作品清单
-	entries := make([]map[string]any, 0, len(cards))
-	for index, card := range cards {
-		entries = append(entries, map[string]any{"@type": "ListItem", "position": index + 1, "name": card.Card.Title, "url": a.absolute(card.Href)})
-	}
-	seo.JSONLD = map[string]any{"@context": "https://schema.org", "@graph": []any{
-		map[string]any{"@type": "ItemList", "name": collection.Title, "description": collection.Description, "numberOfItems": len(entries), "itemListElement": entries},
-		breadcrumbs([][2]string{{"首页", a.absolute("/")}, {"片单", a.absolute("/list")}, {collection.Title, a.absolute("/list/" + collection.Slug)}}),
-	}}
-	a.render.Page(c, http.StatusOK, "list.html", gin.H{"Card": a.listCard(collection, cards),
-		"Title": collection.Title, "Nav": "discover", "Collection": collection, "Cards": cards, "Related": related, "SEO": seo,
-	})
-}
-
 // ---------- 反馈 ----------
 
 func (a *App) feedbackPage(c *gin.Context) {
@@ -284,7 +239,7 @@ var docs = map[string]doc{
 			"作品库里没有的作品，其观看历史在你的浏览器里加密后才上传。密钥只在你的设备上，服务器无法解密。",
 			"广告跳过功能的指纹库只有指纹和票数，不记录是谁投的票，也不记录指纹来自哪里。",
 		}},
-		{"公开范围", []string{"你的观影主页默认不公开，可以在设置里打开。短评对所有登录用户可见。"}},
+		{"公开范围", []string{"你的观影记录和报告默认不公开，可以在设置里打开。新片单仅自己可见，开启链接访问后，持有链接的人可以查看。通过审核的片单会显示在广场和作者主页。公开片单的浏览量按日去重，访客的去重记录仅用于近期热度。短评对所有登录用户可见。"}},
 		{"你的权利", []string{
 			"导出：在「设置 → 我的数据」可以随时下载你在本站的全部数据（JSON），或者想看和看过的列表（CSV）。加密的观看历史由你的设备解密后一起导出。",
 			"注销：在「设置 → 注销账号」可以注销。账号和它的所有数据会立即删除，无法恢复；你提交过的反馈会保留，但不再和你关联。注销时会给你的邮箱发一封确认邮件。",

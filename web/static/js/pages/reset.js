@@ -1,5 +1,9 @@
 // 设置新密码：用脚本提交，成功后用新密码重新加密钥匙圈（设备密钥和订阅地址），再进首页。
+import { showFormError, syncThenEnter } from '../core/signin.js';
+
 const form = document.querySelector('form[action="/auth/reset"]');
+
+const showError = (message) => showFormError(form, message);
 
 form?.addEventListener('submit', async (ev) => {
   ev.preventDefault();
@@ -12,22 +16,14 @@ form?.addEventListener('submit', async (ev) => {
     result = await response.json();
   } catch {
     button.disabled = false;
-    form.submit(); // 退回普通提交
+    showError('未能确认密码设置结果，请检查网络，必要时尝试使用新密码登录。');
     return;
   }
   if (!response.ok) {
-    let flash = form.querySelector('.flash.error');
-    if (!flash) { flash = document.createElement('p'); flash.className = 'flash error'; flash.setAttribute('role', 'alert'); form.querySelector('h1').after(flash); }
-    flash.textContent = result.error || '设置失败，请重试';
+    showError(result.error || '设置失败，请重试');
     button.disabled = false;
     return;
   }
   document.body.dataset.user = String(result.user_id);
-  button.textContent = '正在同步播放源…';
-  try {
-    const { afterLogin } = await import('../core/keyring.js');
-    const outcome = await Promise.race([afterLogin(password), new Promise((resolve) => setTimeout(() => resolve('timeout'), 12000))]);
-    if (outcome === 'fresh') sessionStorage.setItem('mv:keyringFresh', '1');
-  } catch { /* 下次登录时再同步 */ }
-  location.href = result.redirect || '/';
+  await syncThenEnter({ form, button, password, redirect: result.redirect, failedPrefix: '密码已重置并登录，但账号同步未完成：' });
 });

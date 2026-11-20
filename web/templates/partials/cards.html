@@ -1,9 +1,9 @@
-{{define "card"}}<a class="card" href="{{.Href}}" data-id="{{.ID}}" data-title="{{.Title}}" data-meta="{{.Sub}}" data-img="{{img .Poster "s"}}">
-<div class="card-art">{{if .Poster}}<img src="{{img .Poster "s"}}" width="204" height="306" loading="lazy" decoding="async" alt="">{{end}}{{if .Badge}}<span class="badge badge-new">{{.Badge}}</span>{{end}}{{if rating .Rating}}<span class="score-chip">{{rating .Rating}}</span>{{end}}</div>
+{{define "card"}}<a class="card" href="{{.Href}}" data-id="{{.ID}}" data-title="{{.Title}}" data-meta="{{.Sub}}" data-img="{{img .Poster "thumb" .Title "poster"}}">
+<div class="card-art">{{if .Poster}}<img src="{{img .Poster "thumb" .Title "poster"}}" width="204" height="306" loading="lazy" decoding="async" alt="">{{end}}{{if .Badge}}<span class="badge badge-new">{{.Badge}}</span>{{end}}{{if rating .Rating}}<span class="score-chip">{{rating .Rating}}</span>{{end}}</div>
 <span class="card-title">{{.Title}}</span><span class="card-meta">{{.Sub}}</span></a>{{end}}
 
-{{define "card_wide"}}<a class="card card-wide" href="{{.Href}}" data-no-prerender data-id="{{.ID}}" data-title="{{.Title}}" data-meta="{{.Sub}}" data-img="{{img .Poster "s"}}" data-history="1" data-at="{{.At}}">
-<div class="card-art">{{if .Backdrop}}<img src="{{img .Backdrop "m"}}" width="480" height="270" loading="lazy" decoding="async" alt="">{{else if .Poster}}<img src="{{img .Poster "m"}}" width="480" height="270" loading="lazy" decoding="async" alt="">{{end}}
+{{define "card_wide"}}<a class="card card-wide" href="{{.Href}}" data-no-prerender data-id="{{.ID}}" data-title="{{.Title}}" data-meta="{{.Sub}}" data-img="{{img .Poster "thumb" .Title "poster"}}" data-history="1" data-at="{{.At}}">
+<div class="card-art">{{if .Backdrop}}<img src="{{img .Backdrop "thumb" .Title "still"}}" width="480" height="270" loading="lazy" decoding="async" alt="">{{else if .Poster}}<img src="{{img .Poster "thumb" .Title "poster"}}" width="480" height="270" loading="lazy" decoding="async" alt="">{{end}}
 <div class="card-over"><span class="card-title">{{.Title}}</span><span class="card-meta">{{.Sub}}</span></div>
 <div class="progress"><i style="--p:{{.Pct}}%"></i></div></div></a>{{end}}
 
@@ -14,13 +14,13 @@
 <div class="row-head"><span class="sk-line" style="width:140px"></span></div>
 <div class="rail {{.Class}}" aria-hidden="true">{{range seq 1 8}}<div class="card skeleton"><div class="card-art"></div><div class="card-title"></div></div>{{end}}</div></section>{{end}}
 
-{{define "row_collections"}}<section class="row"><div class="row-head"><h2 class="row-title">精选片单</h2><a class="row-more" href="/list">全部<svg class="i"><use href="#i-chev-r"/></svg></a></div>
+{{define "row_collections"}}<section class="row"><div class="row-head"><h2 class="row-title">最新片单</h2><a class="row-more" href="/list">全部<svg class="i"><use href="#i-chev-r"/></svg></a></div>
 <div class="rail rail-banner">{{range .Collections}}{{template "collection_card" .}}{{end}}</div></section>{{end}}
 
 {{define "collection_card"}}<a class="card card-banner" href="/list/{{.Slug}}">
-<div class="card-art"><div class="covers">{{range .Covers}}<img src="{{img . "s"}}" loading="lazy" decoding="async" alt="">{{end}}</div>
-<div class="card-over"><span class="card-title">{{.Title}}</span><span class="card-meta">{{.Count}} 部{{if .Description}} · {{truncate .Description 28}}{{end}}</span></div></div></a>{{end}}
+<div class="card-art"><div class="covers">{{range .Covers}}<img src="{{img .URL "thumb" .Title "poster"}}" loading="lazy" decoding="async" alt="">{{end}}</div>
+<div class="card-over"><span class="card-title">{{.Title}}</span><span class="card-meta">{{.Count}} 部 · {{.AuthorName}}{{if .Description}} · {{truncate .Description 28}}{{end}}</span></div></div></a>{{end}}
 
-{{define "grid_cards"}}{{range .Cards}}{{template "card" .}}{{end}}{{if .More}}<div class="grid-more" data-lazy hx-get="{{.More}}" hx-trigger="near once" hx-swap="outerHTML"></div>{{end}}{{end}}
+{{define "grid_cards"}}{{range .Cards}}{{template "card" .}}{{end}}{{if .More}}<nav class="pager grid-more" aria-label="作品分页" data-lazy hx-get="{{.More}}" hx-trigger="near once" hx-swap="outerHTML"><a class="btn btn-glass" href="{{.Next}}" rel="next" data-no-prerender>下一页</a></nav>{{end}}{{end}}
 
 {{define "search_results"}}{{if .Cards}}<div class="grid">{{range .Cards}}{{template "card" .}}{{end}}</div>{{else}}<p class="empty">作品库里没有找到“{{.Query}}”。可以换个关键词，或者在下面“我的源”里找找。</p>{{end}}{{end}}

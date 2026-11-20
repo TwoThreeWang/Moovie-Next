@@ -1,4 +1,4 @@
-// 设置页：订阅地址管理和设备配对。这些内容只保存在这台设备上。
+// 设置页：订阅先加密保存到账号，收到确认后在本机生效。
 import { h, toast } from '../core/api.js';
 import * as idb from '../core/idb.js';
 import { userKey } from '../core/api.js';
@@ -6,6 +6,18 @@ import * as sources from '../core/sources.js';
 
 const $ = (id) => document.getElementById(id);
 const form = $('sub-form'), input = $('sub-url'), status = $('sub-status'), table = $('src-table');
+let saving = false;
+function busy(value) {
+  saving = value;
+  input.disabled = value;
+  for (const button of form.querySelectorAll('button')) button.disabled = value;
+}
+function failure(error) {
+  status.textContent = error.message || '保存失败，请稍后重试。';
+  status.classList.add('error');
+  status.setAttribute('role', 'alert');
+}
+globalThis.addEventListener?.('moovie:subscription-change', () => { if (!saving) render().catch(failure); });
 
 function timeAgo(at) {
   const minutes = Math.floor((Date.now() - at) / 60000);
@@ -53,19 +65,24 @@ async function probe() {
 
 form.addEventListener('submit', async (ev) => {
   ev.preventDefault();
+  if (saving) return;
   const url = input.value.trim();
-  if (!url) return;
-  status.textContent = '正在读取订阅…';
+  if (!url) { failure(new Error('请输入订阅地址；如需删除，请点击“清除”。')); return; }
+  busy(true);
+  status.classList.remove('error');
+  status.setAttribute('role', 'status');
+  status.textContent = '正在校验订阅并加密保存到账号…';
   try {
-    await sources.setSubscription(url);
+    const { saveSubscriptionToAccount } = await import('../core/keyring.js');
+    await saveSubscriptionToAccount(url);
     await render();
-    toast('订阅已保存，登录这个账号的其他设备会自动同步');
-    sync();
+    $('account-sync-error')?.remove();
+    status.textContent += ' 已保存到账号。';
+    toast('订阅已保存到账号');
     probe();
   } catch (error) {
-    status.textContent = error.message;
-    status.classList.add('error');
-  }
+    failure(error);
+  } finally { busy(false); }
 });
 input.addEventListener('input', () => status.classList.remove('error'));
 
@@ -82,37 +99,65 @@ $('sub-refresh').addEventListener('click', async () => {
     await render();
     probe();
   } catch (error) {
-    status.textContent = error.message;
+    failure(error);
   }
 });
 
 $('sub-clear').addEventListener('click', async () => {
+  if (saving) return;
   if (!confirm('清除订阅地址？登录这个账号的其他设备也会一起清除。')) return;
-  await sources.clearSubscription();
-  input.value = '';
-  await render();
-  toast('已清除');
-  sync();
+  busy(true);
+  status.classList.remove('error');
+  status.textContent = '正在从账号清除订阅…';
+  try {
+    const { clearSubscriptionFromAccount } = await import('../core/keyring.js');
+    await clearSubscriptionFromAccount();
+    $('account-sync-error')?.remove();
+    input.value = '';
+    await render();
+    toast('账号订阅已清除');
+  } catch (error) { failure(error); }
+  finally { busy(false); }
 });
 
-render();
+render().catch(failure);
 
 // ---------- 账号同步 ----------
-// 订阅地址改了就加密上传，登录同一个账号的其他设备会自动拿到（见 core/keyring.js）。
-const sync = () => import('../core/keyring.js').then((m) => m.pushKeyring()).catch(() => {});
-
-// 改密码：先让服务器改，成功后用新密码重新加密钥匙圈，再回到设置页。
+// 先准备新密文，再与密码一起提交；服务器在一个事务里更新，成功后更新本机密钥。
 document.querySelector('form[action="/settings/password"]')?.addEventListener('submit', async (ev) => {
   ev.preventDefault();
-  const formEl = ev.currentTarget, password = formEl.querySelector('[name="password"]').value;
-  let response;
+  const formEl = ev.currentTarget, button = formEl.querySelector('button');
+  if (button.disabled) return;
+  const password = formEl.querySelector('[name="password"]').value;
+  const current = formEl.querySelector('[name="current"]').value;
+  let notice = formEl.querySelector('[data-password-status]');
+  if (!notice) { notice = h('p', { class: 'hint', role: 'status', 'data-password-status': '' }); formEl.append(notice); }
+  notice.classList.remove('error');
+  notice.setAttribute('role', 'status');
+  notice.textContent = '正在准备加密数据…';
+  button.disabled = true;
   try {
-    response = await fetch(formEl.action, { method: 'POST', body: new FormData(formEl), credentials: 'same-origin' });
-  } catch { toast('网络不通，请稍后再试'); return; }
-  if (response.url.includes('saved=')) {
-    try { const { passwordChanged } = await import('../core/keyring.js'); await passwordChanged(password); } catch { /* 下次登录时会重新加密 */ }
-  }
-  location.href = response.url;
+    const { preparePasswordChange, finishPasswordChange } = await import('../core/keyring.js');
+    const prepared = await preparePasswordChange(password, current);
+    const data = new FormData(formEl);
+    data.set('keyring', JSON.stringify(prepared.wire));
+    notice.textContent = '正在修改密码并保存账号配置…';
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 15000);
+    let response, result;
+    try {
+      response = await fetch(formEl.action, { method: 'POST', body: data, credentials: 'same-origin', headers: { Accept: 'application/json' }, signal: controller.signal });
+      result = await response.json();
+    } catch { throw new Error('未能确认修改结果，请检查网络，必要时使用新密码重新登录确认。'); }
+    finally { clearTimeout(timer); }
+    if (!response.ok) throw new Error(result.error || '密码修改失败，请稍后重试。');
+    await finishPasswordChange(prepared, result.keyring_version);
+    location.href = result.redirect;
+  } catch (error) {
+    notice.textContent = error.message || '修改失败，请稍后重试。';
+    notice.classList.add('error');
+    notice.setAttribute('role', 'alert');
+  } finally { button.disabled = false; }
 });
 
 // ---------- 导出数据 ----------

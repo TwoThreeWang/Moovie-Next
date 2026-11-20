@@ -184,16 +184,18 @@ func main() {
 	must(err)
 
 	lists := collections.NewStore(pool)
-	_, err = lists.Save(ctx, collections.Draft{
-		OwnerID: demo.ID, Slug: "harbor-noir", Title: "潮湿的悬疑", Description: "雾、码头、旧案。适合下雨天看。", Featured: true,
-		MediaIDs: []int64{ids["雾港"], second, ids["白夜追凶者"], ids["回声"], ids["梦境收藏家"]}, Notes: map[int64]string{second: "比第一季更稳"},
-	})
-	must(err)
-	_, err = lists.Save(ctx, collections.Draft{
-		OwnerID: demo.ID, Slug: "family-night", Title: "一家人一起看", Description: "不吵不闹，老少皆宜。",
-		MediaIDs: []int64{ids["云边小卖部"], ids["小小的我"], ids["秘密花园 2"], ids["山海食堂"]},
-	})
-	must(err)
+	for _, draft := range []collections.Draft{
+		{OwnerID: demo.ID, Slug: "harbor-noir", Title: "潮湿的悬疑", Description: "雾、码头、旧案。适合下雨天看。", Submit: true,
+			MediaIDs: []int64{ids["雾港"], second, ids["白夜追凶者"], ids["回声"], ids["梦境收藏家"]}, Notes: map[int64]string{second: "比第一季更稳"}},
+		{OwnerID: demo.ID, Slug: "family-night", Title: "一家人一起看", Description: "不吵不闹，老少皆宜。", Submit: true,
+			MediaIDs: []int64{ids["云边小卖部"], ids["小小的我"], ids["秘密花园 2"], ids["山海食堂"]}},
+	} {
+		id, err := lists.Save(ctx, draft)
+		must(err)
+		list, err := lists.ByID(ctx, id)
+		must(err)
+		must(lists.Review(ctx, id, demo.ID, list.UpdatedAt, "approve", ""))
+	}
 
 	// 假资源站第 1 集开头那段"广告"的指纹：预先确认 5 次，这样打开就能看到自动跳过。
 	// 片中的另一段不预置，用来看"这一段是广告吗"的询问。

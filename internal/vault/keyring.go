@@ -73,6 +73,7 @@ func keyringWire(k *Keyring) wireKeyring {
 }
 
 func (h *Handler) getKeyring(c *gin.Context) {
+	c.Header("Cache-Control", "no-store")
 	k, err := h.store.GetKeyring(c.Request.Context(), auth.Current(c).ID)
 	if errors.Is(err, ErrNoKeyring) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "none"})
@@ -83,11 +84,11 @@ func (h *Handler) getKeyring(c *gin.Context) {
 		httpx.Error(c, http.StatusInternalServerError, "读取失败")
 		return
 	}
-	c.Header("Cache-Control", "no-store")
 	c.JSON(http.StatusOK, keyringWire(k))
 }
 
 func (h *Handler) putKeyring(c *gin.Context) {
+	c.Header("Cache-Control", "no-store")
 	user := auth.Current(c)
 	if !h.limit.Allow("k" + strconv.FormatInt(user.ID, 10)) {
 		httpx.Error(c, http.StatusTooManyRequests, "操作太频繁")

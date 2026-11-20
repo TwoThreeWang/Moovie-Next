@@ -14,7 +14,6 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"moovie/internal/auth"
-	"moovie/internal/collections"
 	"moovie/internal/feedback"
 	"moovie/internal/httpx"
 	"moovie/internal/ingest"
@@ -49,9 +48,8 @@ func (a *App) adminRoutes(r gin.IRouter) {
 	r.GET("/feedback", a.adminFeedback)
 	r.POST("/feedback/:id", a.adminFeedbackRespond)
 	r.GET("/collections", a.adminCollections)
-	r.GET("/collections/:id", a.adminCollectionEdit)
-	r.POST("/collections", a.adminCollectionSave)
-	r.POST("/collections/:id/delete", a.adminCollectionDelete)
+	r.GET("/collections/:id", a.adminCollectionReview)
+	r.POST("/collections/:id", a.adminCollectionDecision)
 }
 
 // adminBack 回到来源页面，并带上一条提示。
@@ -98,6 +96,11 @@ func (a *App) adminDashboard(c *gin.Context) {
 		a.fail(c, err)
 		return
 	}
+	pendingCollections, err := a.Collections.PendingCount(ctx)
+	if err != nil {
+		a.fail(c, err)
+		return
+	}
 	fingerprints, confirmed, rejected, err := a.AdSkip.Counts(ctx)
 	if err != nil {
 		a.fail(c, err)
@@ -125,7 +128,7 @@ func (a *App) adminDashboard(c *gin.Context) {
 		"Mail": a.Mail.Enabled(), "DoubanProxy": a.Config.DoubanProxy != "",
 		"DoubanPace": pacerStatus(a.Ingest.Douban.Pace), "Backlog": a.backlogText(ctx),
 		"Users": userCount, "MediaTotal": total, "MediaComplete": complete, "MediaHidden": hidden, "MediaEmbedded": embedded,
-		"Jobs": jobCounts, "OpenFeedback": openFeedback,
+		"Jobs": jobCounts, "OpenFeedback": openFeedback, "PendingCollections": pendingCollections,
 		"Fingerprints": fingerprints, "FingerprintsConfirmed": confirmed, "FingerprintsRejected": rejected,
 		"TMDB": a.Ingest.TMDB.Enabled(), "AI": a.Ingest.AI.Enabled(), "Embedder": a.Ingest.Embedder.Enabled(),
 	})
@@ -482,102 +485,6 @@ func (a *App) adminFeedbackRespond(c *gin.Context) {
 		return
 	}
 	adminBack(c, "/admin/feedback", "已保存")
-}
-
-// ---------- 片单 ----------
-
-func (a *App) adminCollections(c *gin.Context) {
-	list, err := a.Collections.List(c.Request.Context(), 200, 0)
-	if err != nil {
-		a.fail(c, err)
-		return
-	}
-	a.adminPage(c, "admin_collections.html", "片单", "collections", gin.H{"Collections": list})
-}
-
-func (a *App) adminCollectionEdit(c *gin.Context) {
-	ctx := c.Request.Context()
-	data := gin.H{"Collection": collections.Collection{}, "ItemsText": "", "RelatedText": ""}
-	if c.Param("id") != "new" {
-		id, ok := httpx.ParamID(c, "id")
-		if !ok {
-			return
-		}
-		collection, err := a.Collections.ByID(ctx, id)
-		if errors.Is(err, collections.ErrNotFound) {
-			a.render.NotFound(c)
-			return
-		}
-		if err != nil {
-			a.fail(c, err)
-			return
-		}
-		items, err := a.Collections.Items(ctx, id)
-		if err != nil {
-			a.fail(c, err)
-			return
-		}
-		lines := make([]string, 0, len(items))
-		for _, item := range items {
-			lines = append(lines, strings.TrimRight(strconv.FormatInt(item.Card.ID, 10)+" | "+item.Card.Title+" | "+item.Note, " |"))
-		}
-		data["Collection"], data["ItemsText"] = collection, strings.Join(lines, "\n")
-	}
-	a.adminPage(c, "admin_collection.html", "编辑片单", "collections", data)
-}
-
-// parseCollectionItems 解析片单编辑框：每行一部作品，格式是"作品 ID | 片名（仅供阅读）| 备注"。
-func parseCollectionItems(text string) (ids []int64, notes map[int64]string) {
-	notes = map[int64]string{}
-	seen := map[int64]bool{}
-	for _, line := range strings.Split(text, "\n") {
-		parts := strings.Split(line, "|")
-		id, err := strconv.ParseInt(strings.TrimSpace(parts[0]), 10, 64)
-		if err != nil || id <= 0 || seen[id] {
-			continue
-		}
-		seen[id] = true
-		ids = append(ids, id)
-		if len(parts) >= 3 {
-			notes[id] = strings.TrimSpace(strings.Join(parts[2:], "|"))
-		}
-	}
-	return ids, notes
-}
-
-func (a *App) adminCollectionSave(c *gin.Context) {
-	id, _ := strconv.ParseInt(c.PostForm("id"), 10, 64)
-	ids, notes := parseCollectionItems(c.PostForm("items"))
-	saved, err := a.Collections.Save(c.Request.Context(), collections.Draft{
-		ID: id, OwnerID: auth.Current(c).ID, Slug: c.PostForm("slug"), Title: c.PostForm("title"),
-		Description: strings.TrimSpace(c.PostForm("description")), Featured: c.PostForm("featured") == "on",
-		MediaIDs: ids, Notes: notes,
-	})
-	if errors.Is(err, collections.ErrInvalid) {
-		httpx.Error(c, http.StatusBadRequest, "保存失败：标题不能为空；地址只能用小写字母、数字和连字符，并且不能和别的片单重复")
-		return
-	}
-	if errors.Is(err, collections.ErrNotFound) {
-		a.render.NotFound(c)
-		return
-	}
-	if err != nil {
-		a.fail(c, err)
-		return
-	}
-	c.Redirect(http.StatusSeeOther, "/admin/collections/"+strconv.FormatInt(saved, 10)+"?notice="+url.QueryEscape("已保存"))
-}
-
-func (a *App) adminCollectionDelete(c *gin.Context) {
-	id, ok := httpx.ParamID(c, "id")
-	if !ok {
-		return
-	}
-	if err := a.Collections.Delete(c.Request.Context(), id); err != nil {
-		a.fail(c, err)
-		return
-	}
-	c.Redirect(http.StatusSeeOther, "/admin/collections?notice="+url.QueryEscape("片单已删除"))
 }
 
 // backlogText 说明还有多少作品在等采集、最早的等了多久、照现在的速度大概多久能做完。
