@@ -1376,7 +1376,7 @@ func TestKeyringSync(t *testing.T) {
 func TestCopyrightContact(t *testing.T) {
 	s := newSite(t)
 	mustContain(t, s.get("/dmca"), "版权投诉", `href="/feedback?kind=dmca"`, `mailto:hello@moovie.test`, "不需要注册账号")
-	mustContain(t, s.get("/changelog"), "v5.1.0", "2026-11-20", "v5.0.0", "2026-11-16", "💥 破坏性变更 (Breaking Changes)", "✨ 新增 (Added)", "登录即同步")
+	mustContain(t, s.get("/changelog"), "v5.1.1", "兼容 TVBox 配置", "v5.1.0", "2026-11-20", "v5.0.0", "2026-11-16", "💥 破坏性变更 (Breaking Changes)", "✨ 新增 (Added)", "登录即同步")
 }
 
 // ---------- 后台：内容审核、禁言封禁、广告指纹、趋势 ----------

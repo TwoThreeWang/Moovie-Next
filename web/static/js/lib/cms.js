@@ -4,9 +4,11 @@
 // 这里只做解析，不发请求，方便测试。
 import { plainText } from './title.js';
 import { numberEpisodes } from './episode.js';
+import { readTVBox } from './tvbox.js';
 
 const MAX_ITEMS = 40;
 const MAX_EPISODES = 3000;
+const MAX_SOURCES = 60;
 
 /** 拼出搜索接口的地址。只查第一页：很短的关键词可能匹配到非常多的结果。 */
 export function searchURL(api, keyword) {
@@ -138,13 +140,23 @@ export function parseResponse(text) {
  * 校验订阅文件的内容，返回 { sources, errors }。
  * 每个源需要稳定的 key；没有 key 的用接口地址生成一个。
  */
-export function parseSubscription(text) {
+export function parseSubscription(text, base) {
   let data;
-  try { data = JSON.parse(text); } catch { return { sources: [], errors: ['订阅文件不是合法的 JSON'] }; }
+  try { data = JSON.parse(text); } catch { data = undefined; }
+  // TVBox 配置的兼容导入（见 tvbox.js）。删除这个功能时去掉这一段。
+  const tvbox = readTVBox(text, data, base, MAX_SOURCES);
+  if (tvbox?.error) return { sources: [], errors: [tvbox.error] };
+  if (tvbox) return checkSources(tvbox.sources, tvbox.notes);
+
+  if (data === undefined) return { sources: [], errors: ['订阅文件不是合法的 JSON'] };
   const list = Array.isArray(data) ? data : data?.sources;
   if (!Array.isArray(list)) return { sources: [], errors: ['订阅文件里没有 sources 列表'] };
+  return checkSources(list, []);
+}
+
+function checkSources(list, notes) {
   const sources = [], errors = [], seen = new Set();
-  for (const entry of list.slice(0, 60)) {
+  for (const entry of list.slice(0, MAX_SOURCES)) {
     const name = plainText(entry?.name).slice(0, 30) || '未命名';
     const checked = checkURL(entry?.api ?? '');
     if (!checked.url) { // HTTP 接口也收：查询由本站转发
@@ -157,7 +169,8 @@ export function parseSubscription(text) {
     seen.add(key);
     sources.push({ key, name, api: checked.url });
   }
-  return { sources, errors };
+  // 没有可用的源时 errors[0] 会作为失败原因显示，导入说明放在前面
+  return { sources, errors: sources.length ? [...errors, ...notes] : [...notes, ...errors] };
 }
 
 /** 简单的 32 位字符串哈希（FNV-1a），只用来给没有 key 的源生成一个稳定的标识。 */

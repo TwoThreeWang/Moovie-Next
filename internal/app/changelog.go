@@ -36,6 +36,15 @@ var changeKinds = map[string]string{
 
 var releases = []release{
 	{
+		Version: "5.1.1", Date: "2026-11-20",
+		Summary: "订阅地址可以直接填 TVBox 配置，其中网页能用的站点会自动导入。",
+		Groups: []changeGroup{
+			{"added", []changeItem{
+				{"兼容 TVBox 配置", "在「设置 → 播放源」里可以直接填 TVBox 配置地址：自动导入其中苹果 CMS 类型（type 0 / 1）的站点，配置里的注释、多余逗号和相对路径都能识别。需要 TVBox 爬虫的站点、解析接口和直播源网页里用不了，会跳过并在源列表下面说明跳过了多少。加密的配置和多仓配置暂不支持，会给出明确提示。"},
+			}},
+		},
+	},
+	{
 		Version: "5.1.0", Date: "2026-11-20",
 		Summary: "片单开放给所有人：自己建、自己排，投稿审核通过后出现在片单广场和你的主页。顶部菜单新增「片单」入口；订阅同步、图片加载和部署也更稳了。",
 		Groups: []changeGroup{

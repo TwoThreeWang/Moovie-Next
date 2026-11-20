@@ -97,7 +97,7 @@ async function readCheckedSubscription(url) {
   } catch (error) {
     throw new Error(error.code === 'http' ? `读取订阅失败（${error.message}）` : error.code === 'timeout' ? '读取订阅失败：对方响应太慢' : '读取订阅失败：地址打不开');
   }
-  const { sources, errors } = parseSubscription(text);
+  const { sources, errors } = parseSubscription(text, url);
   if (!sources.length) throw new Error(errors[0] ?? '订阅里没有可用的源');
   return { url, sources, errors, fetchedAt: Date.now() };
 }
