@@ -335,6 +335,50 @@ if (userId() && !HTMLScriptElement.supports?.('speculationrules') && !location.p
   }, { passive: true });
 }
 
+// ---------- 离开页面时取消没下完的图片 ----------
+// 点了站内链接之后，浏览器还会接着下载这一页没下完的图片，直到新页面回来才停。网络慢的时候，
+// 新页面的 HTML 要和这些图片抢带宽，点了好久才跳转。所以离开前把没下完的图片地址先收起来
+// （移到 data-parked-* 里），浏览器就会放弃这些请求。下完的图片不动。
+// 如果最后没有离开（下载文件、204、导航被取消），或者用户从后退缓存回到这一页，再放回去重新加载。
+const PARK_ATTRS = ['srcset', 'src'];
+let parkTimer = 0;
+function parkImages() {
+  for (const img of d.images) {
+    if (img.complete) continue;
+    const picture = img.parentElement?.tagName === 'PICTURE' ? img.parentElement : null;
+    for (const el of [...(picture ? $$('source', picture) : []), img]) {
+      for (const attr of PARK_ATTRS) {
+        if (!el.hasAttribute(attr)) continue;
+        el.setAttribute('data-parked-' + attr, el.getAttribute(attr));
+        el.removeAttribute(attr);
+      }
+    }
+  }
+  clearTimeout(parkTimer);
+  parkTimer = setTimeout(unparkImages, 10000);
+}
+function unparkImages() {
+  clearTimeout(parkTimer);
+  for (const el of $$('[data-parked-src], [data-parked-srcset]')) {
+    for (const attr of PARK_ATTRS) {
+      const value = el.getAttribute('data-parked-' + attr);
+      if (value === null) continue;
+      el.removeAttribute('data-parked-' + attr);
+      el.setAttribute(attr, value);
+    }
+  }
+}
+// 挂在 window 上：比 document 上的点击处理晚执行，能看到它们有没有 preventDefault
+addEventListener('click', (ev) => {
+  if (ev.defaultPrevented || ev.button !== 0 || ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.altKey) return;
+  const link = ev.target.closest?.('a[href]');
+  if (!link || link.hasAttribute('download') || (link.target && link.target !== '_self') || link.origin !== location.origin) return;
+  // 只是跳到本页的某个位置，不算离开
+  if (link.pathname === location.pathname && link.search === location.search && link.hash) return;
+  parkImages();
+});
+addEventListener('pageshow', (ev) => { if (ev.persisted) unparkImages(); });
+
 // ---------- 键盘 ----------
 let focusLoaded = false;
 d.addEventListener('keydown', (ev) => {
