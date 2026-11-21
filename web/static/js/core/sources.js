@@ -6,7 +6,7 @@
 import * as idb from './idb.js';
 import { userKey } from './api.js';
 import { checkURL, searchURL, parseResponse, parseSubscription } from '../lib/cms.js';
-import { bestMatch, searchKeyword } from '../lib/match.js';
+import { bestMatch, hiddenMatch, searchKeyword } from '../lib/match.js';
 
 const QUERY_TIMEOUT = 8000; // 转发要多走一段路，给够时间
 const SUBSCRIPTION_TTL = 6 * 3600 * 1000;
@@ -139,7 +139,7 @@ export async function clearSubscription() {
   await idb.del('kv', userKey('subscription'));
   await idb.del('kv', userKey('health'));
   for (const prefix of [userKey('last:')]) for (const { key } of await idb.entries('kv', prefix)) await idb.del('kv', key);
-  for (const { key } of await idb.entries('cache', userKey('m:'))) await idb.del('cache', key);
+  for (const prefix of ['m:', 'm2:']) for (const { key } of await idb.entries('cache', userKey(prefix))) await idb.del('cache', key);
   globalThis.dispatchEvent?.(new CustomEvent('moovie:subscription-change'));
 }
 
@@ -193,7 +193,8 @@ const ERROR_TEXT = { timeout: '超时', network: '无法连接', http: '接口�
  * 有缓存时先通过 onUpdate 给出缓存，缓存不够新时再在后台刷新并再次调用 onUpdate。
  */
 export async function findForMedia(media, { onUpdate, force = false, signal } = {}) {
-  const cacheKey = userKey('m:' + media.id);
+  // 键名带版本：匹配规则变了（比如开始排除预告片、枪版）就换一个，旧结果不再拿来用。
+  const cacheKey = userKey('m2:' + media.id);
   const cached = await idb.get('cache', cacheKey);
   if (cached && !force && Date.now() - cached.at < RESULT_KEEP) {
     onUpdate?.(cached, { cached: true, done: Date.now() - cached.at < RESULT_FRESH });
@@ -207,12 +208,13 @@ export async function findForMedia(media, { onUpdate, force = false, signal } = 
   }
   const keyword = searchKeyword(media);
   await Promise.all(sources.map(async (source) => {
-    const entry = { key: source.key, name: source.name, status: 'none', ms: 0, item: null, message: '' };
+    const entry = { key: source.key, name: source.name, status: 'none', ms: 0, item: null, message: '', hidden: '' };
     try {
       const { items, ms } = await querySource(source, keyword, { signal });
       entry.ms = ms;
       const match = bestMatch(media, items);
       if (match) { entry.status = 'ok'; entry.item = match.item; }
+      else entry.hidden = hiddenMatch(media, items); // 只有预告片或枪版：不能播，但告诉用户为什么
     } catch (error) {
       entry.status = 'error';
       entry.message = ERROR_TEXT[error.code] ?? '出错';

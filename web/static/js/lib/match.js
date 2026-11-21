@@ -1,11 +1,48 @@
 // 在资源站的搜索结果里，找出哪些条目是我们要的那部作品。
 import { normalizeTitle, splitSeason } from './title.js';
 
+// 不完整的版本：预告片、花絮这类，和影院偷拍的枪版（TC、TS、CAM、抢先版）。资源站常把它们标在片名、备注或分类里，
+// 还经常填上正片的豆瓣 ID，所以不能只靠片名排除。
+// 英文缩写只按完整的词匹配（前后不是字母），免得误伤 HDTV、"tsm3u8" 或片名里碰巧带这几个字母的。
+const TRAILER = /预告|片花|花絮|trailer/i;
+const CAM = /枪版|抢先版|(?<![a-z])(?:hd)?(?:tc|ts|cam)(?![a-z])/i;
+
 /**
- * 给一条搜索结果打分。0 表示不是这部作品。
+ * 这条搜索结果是不是不完整的版本：'trailer'（预告片、花絮）、'cam'（枪版）或 ''（正常）。
+ * 只看片名、备注、分类；正片里夹带的预告线路、预告单集在解析播放列表时就去掉了（见 cms.js）。
+ */
+export function incompleteKind(item) {
+  const fields = [item.name, item.remarks, item.typeName].filter(Boolean);
+  if (fields.some((text) => TRAILER.test(text))) return 'trailer';
+  if (fields.some((text) => CAM.test(text))) return 'cam';
+  return '';
+}
+
+/** 播放列表里的一集或一条线路是不是预告、花絮（有的资源站把它们夹在正片里）。 */
+export function isExtra(label) {
+  return TRAILER.test(String(label ?? ''));
+}
+
+/**
+ * 给一条搜索结果打分。0 表示不是这部作品。预告片、枪版一律算 0。
  * media: { title, original_title, aliases, year, type, season, douban_id }
  */
 export function scoreItem(media, item) {
+  return incompleteKind(item) ? 0 : rawScore(media, item);
+}
+
+/**
+ * 如果这个源里唯一像是这部作品的，只有预告片或枪版，返回 'trailer' 或 'cam'，用来告诉用户"有，但隐藏了"。
+ */
+export function hiddenMatch(media, items) {
+  for (const item of items) {
+    const kind = incompleteKind(item);
+    if (kind && rawScore(media, item) > 59) return kind;
+  }
+  return '';
+}
+
+function rawScore(media, item) {
   if (media.douban_id && item.doubanId && item.doubanId === media.douban_id) return 100;
   const series = media.type && media.type !== 'movie';
   if (item.type && media.type && (item.type === 'movie') !== (media.type === 'movie')) return 0;
@@ -68,6 +105,7 @@ export function sameWork(media, items) {
   if (!title) return null;
   let unsure = null;
   for (const item of items) {
+    if (incompleteKind(item)) continue;
     if (normalizeTitle(item.name) !== title) continue;
     if (item.type && media.type && (item.type === 'movie') !== (media.type === 'movie')) continue;
     if (media.year && item.year) {

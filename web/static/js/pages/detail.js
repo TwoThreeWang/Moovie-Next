@@ -17,6 +17,9 @@ function describe(item) {
   return parts.join(' · ');
 }
 
+// 源里只有预告片或枪版时（见 match.js 的 incompleteKind），不能播，但说明一下为什么
+const HIDDEN_TEXT = { trailer: '只有预告片，已隐藏', cam: '只有枪版，已隐藏' };
+
 function row(entry) {
   if (entry.status === 'ok') {
     const insecure = entry.item.lines.every((line) => line.episodes.every((episode) => episode.insecure));
@@ -29,7 +32,7 @@ function row(entry) {
       h('span', { class: 'lat' + (entry.ms < 800 ? ' good' : ''), text: entry.ms + 'ms' }));
   }
   return h('div', { class: 'src-row is-off' }, icon('layers'), h('span', { class: 'src-name', text: entry.name }),
-    h('span', { class: 'src-desc', text: entry.status === 'error' ? entry.message : '没有找到这部作品' }));
+    h('span', { class: 'src-desc', text: entry.status === 'error' ? entry.message : HIDDEN_TEXT[entry.hidden] ?? '没有找到这部作品' }));
 }
 
 // 源很多时只显示前 10 个（能播的排在前面），其余点"展开全部"再看。展开后重新查询也保持展开。
@@ -50,7 +53,10 @@ function render(result, { done }) {
   list.replaceChildren(...rows);
   if (!done) { status.textContent = `正在查询… 已找到 ${found} 个`; return; }
   if (found) status.textContent = `${found} 个源可以播放`;
-  else {
+  else if (result.entries.some((entry) => entry.hidden)) {
+    status.textContent = '';
+    list.prepend(h('p', { class: 'hint', text: '你的源里目前只有预告片或枪版（已隐藏），还没有正片。' }));
+  } else {
     status.textContent = '';
     list.prepend(h('p', { class: 'hint' }, '你的源里没有找到这部作品。可以', h('a', { href: '/search?q=' + encodeURIComponent(media.title), text: '在搜索页直接搜源' }), '，或者换一批源。'));
   }

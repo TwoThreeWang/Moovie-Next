@@ -218,7 +218,8 @@ function onEntries(result, { done }) {
   srcStatus.textContent = state.options.length ? '播放失败会自动切换到下一个' : '';
   if (state.options.length || state.started) return;
   const found = state.entries.some((e) => e.status === 'ok');
-  showMessage(h('p', { text: found ? `你的源里没有第 ${state.episode} 集。` : '你的源里没有找到这部作品。' }),
+  const hidden = state.entries.some((e) => e.hidden); // 只有预告片或枪版，见 match.js 的 incompleteKind
+  showMessage(h('p', { text: found ? `你的源里没有第 ${state.episode} 集。` : hidden ? '你的源里目前只有预告片或枪版（已隐藏），还没有正片。' : '你的源里没有找到这部作品。' }),
     h('button', { class: 'btn btn-glass', type: 'button', text: '重新查询', onclick: () => { message.hidden = true; findSources(true); } }),
     local ? h('a', { class: 'btn btn-glass', href: '/search?q=' + encodeURIComponent(state.media.title), text: '换个名字搜' }) : null);
 }

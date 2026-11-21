@@ -5,6 +5,7 @@
 import { plainText } from './title.js';
 import { numberEpisodes } from './episode.js';
 import { readTVBox } from './tvbox.js';
+import { isExtra } from './match.js';
 
 const MAX_ITEMS = 40;
 const MAX_EPISODES = 3000;
@@ -48,11 +49,13 @@ export function parsePlayLists(playFrom, playURL) {
   const names = String(playFrom ?? '').split('$$$');
   const lines = [];
   String(playURL ?? '').split('$$$').forEach((block, index) => {
+    if (isExtra(plainText(names[index]))) return; // 整条线路都是预告、花絮
     const episodes = [];
     for (const part of block.split('#')) {
       if (episodes.length >= MAX_EPISODES) break;
       const cut = part.lastIndexOf('$');
       const label = plainText(cut >= 0 ? part.slice(0, cut) : '');
+      if (isExtra(label)) continue; // 夹在正片里的预告、花絮：不进选集，也不占集数
       const raw = (cut >= 0 ? part.slice(cut + 1) : part).trim();
       if (!raw) continue;
       const checked = checkURL(raw);

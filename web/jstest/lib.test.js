@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { normalizeTitle, splitSeason, chineseNumber, plainText } from '../static/js/lib/title.js';
 import { parseEpisodeLabel, numberEpisodes } from '../static/js/lib/episode.js';
 import { searchURL, checkURL, typeFromName, parsePlayLists, parseResponse, parseSubscription } from '../static/js/lib/cms.js';
-import { scoreItem, bestMatch, findEpisode, searchKeyword, sameWork } from '../static/js/lib/match.js';
+import { scoreItem, bestMatch, findEpisode, searchKeyword, sameWork, incompleteKind, hiddenMatch } from '../static/js/lib/match.js';
 
 test('片名规范化和服务器端一致', () => {
   assert.equal(normalizeTitle('雾港 第二季'), '雾港第二季');
@@ -208,4 +208,37 @@ test('换源找同一部：片名要完全一样，年份相同才算确定', ()
   assert.equal(sameWork(media, items.slice(0, 2)), null);
   assert.equal(sameWork({ title: '回声', year: 0, type: 'movie' }, [{ name: '回声', year: 2025, type: 'movie' }]).sure, false, '自己没年份时也不确定');
   assert.equal(sameWork({ title: '', year: 0 }, items), null);
+});
+
+test('预告片、花絮和枪版不算正片', () => {
+  // 资源站常给预告片填上正片的豆瓣 ID：豆瓣 ID 相同也不能选它
+  const trailer = item({ name: '雾港 第二季（预告片）', doubanId: '36000001', remarks: '预告片' });
+  const feature = item({ name: '雾港 第二季', doubanId: '36000001', remarks: '更新至12集' });
+  assert.equal(scoreItem(MEDIA, trailer), 0);
+  assert.equal(bestMatch(MEDIA, [trailer, feature]).item, feature, '同一个源里正片和预告片都有时选正片');
+  assert.equal(bestMatch(MEDIA, [trailer]), null, '只有预告片算没找到');
+  assert.equal(hiddenMatch(MEDIA, [trailer]), 'trailer', '但能说明是因为只有预告片');
+  assert.equal(hiddenMatch(MEDIA, [item({ name: '别的剧', remarks: '预告片' })]), '', '不是这部作品的预告片不算');
+
+  const kinds = {
+    'remarks:TC中字': 'cam', 'remarks:HDTC': 'cam', 'remarks:HD-TS 国语': 'cam', 'remarks:枪版': 'cam', 'name:回声 抢先版': 'cam', 'remarks:CAM': 'cam',
+    'remarks:花絮': 'trailer', 'typeName:预告片': 'trailer', 'remarks:片花': 'trailer', 'remarks:Trailer': 'trailer',
+    'remarks:HD中字': '', 'remarks:HDTV': '', 'remarks:更新至12集': '', 'name:TCL 电视': '', 'name:Totsuki': '', 'remarks:4K': '', 'typeName:国产剧': '',
+  };
+  for (const [field, want] of Object.entries(kinds)) {
+    const [key, value] = field.split(':');
+    assert.equal(incompleteKind(item({ name: '回声', [key]: value })), want, field);
+  }
+  const movie = { title: '回声', year: 2024, type: 'movie' };
+  assert.equal(sameWork(movie, [item({ name: '回声', year: 2024, remarks: 'TC' })]), null, '没有元数据的作品换源时也跳过枪版');
+});
+
+test('正片里夹带的预告、花絮不进选集', () => {
+  const lines = parsePlayLists('量子$$$预告', [
+    '预告片$https://a.example/t.m3u8#第1集$https://a.example/1.m3u8#第2集$https://a.example/2.m3u8#花絮1$https://a.example/x.m3u8',
+    '预告$https://a.example/t2.m3u8',
+  ].join('$$$'));
+  assert.equal(lines.length, 1, '整条都是预告的线路去掉');
+  assert.deepEqual(lines[0].episodes.map((e) => [e.label, e.number]), [['第1集', 1], ['第2集', 2]], '预告、花絮不占集数');
+  assert.equal(parsePlayLists('', '预告片$https://a.example/t.m3u8').length, 0, '只有预告的电影没有可播的线路');
 });
