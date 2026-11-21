@@ -40,6 +40,17 @@
 .covers { position: absolute; inset: 0; display: grid; grid-template-columns: repeat(4, 1fr); }
 .covers img { width: 100%; height: 100%; object-fit: cover; }
 .card-banner .card-art { background: var(--surface); }
+/* 图上压字的卡（片单横幅、观看历史）：底部渐变衬底，亮色海报 / 剧照上也看得清字。
+   剧照卡（.still）没有文字，不加。这里不写 content，免得盖掉 .card-art-local 的片名首字 */
+.card-banner .card-art::before { content: ""; position: absolute; z-index: 1; pointer-events: none; }
+.card-banner .card-art::before, .card-wide:not(.still) .card-art::before {
+  inset: 0;
+  background: linear-gradient(to bottom, rgba(0, 0, 0, 0) 25%, rgba(0, 0, 0, .55) 55%, rgba(0, 0, 0, .9));
+}
+.card-banner .card-over, .card-wide .card-over { text-shadow: 0 1px 8px rgba(0, 0, 0, .6); }
+.card-banner .card-over .card-meta, .card-wide .card-over .card-meta { color: rgba(255, 255, 255, .78); }
+/* 片单标题最多两行 */
+.card-banner .card-over .card-title { white-space: normal; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; line-height: 1.25; }
 
 /* ---------- 表单和面板 ---------- */
 .form { display: grid; gap: 14px; }
