@@ -18,7 +18,11 @@
 <pre>{
   "version": 1,
   "sources": [
-    { "key": "a", "name": "我的源 A", "api": "https://example.com/api.php/provide/vod/" }
+    {
+      "key": "a",
+      "name": "我的源 A",
+      "api": "https://example.com/api.php/provide/vod/"
+    }
   ]
 }</pre>
 <p class="hint">每个源需要一个不变的 key。目前支持苹果 CMS 格式的 JSON 和 XML 接口。</p>
@@ -78,8 +82,8 @@
 </section>
 <section class="card-panel" id="data">
 <h2>我的数据</h2>
-<p class="hint">导出你在本站的所有数据：账号信息、想看和看过、评分、短评、回复、播放进度、弹幕、关注、反馈。没有元数据的作品的观看历史在服务器上是加密的，导出时由这台设备解密后一起放进文件。</p>
-<div class="form-actions"><a class="btn btn-glass" href="/settings/export.json" data-export download>导出全部（JSON）</a><a class="btn btn-glass" href="/settings/export.csv" download>导出想看和看过（CSV，可用 Excel 打开）</a></div>
+<p class="hint">导出你在本站的所有数据：账号信息、想看和看过、评分、短评、回复、播放进度、弹幕、关注、反馈。没有元数据的作品的观看历史在服务器上是加密的，导出时由这台设备解密后一起放进文件。想看和看过也可以单独导出成 CSV，用 Excel 就能打开。</p>
+<div class="form-actions"><a class="btn btn-glass" href="/settings/export.json" data-export download>导出全部（JSON）</a><a class="btn btn-glass" href="/settings/export.csv" download>导出想看和看过（CSV）</a></div>
 </section>
 
 <section class="card-panel danger-zone" id="danger">
