@@ -26,15 +26,33 @@ d.addEventListener('htmx:sendError', () => toast('网络连接失败'));
 // 局部加载时顶部的细进度条：请求超过 150ms 才出现。懒加载的内容行不算（用户没在等它）。
 const loadingBar = $('#loading-bar');
 let pending = 0, barTimer = 0;
+const startBar = () => {
+  clearTimeout(barTimer);
+  barTimer = setTimeout(() => { loadingBar.classList.remove('done'); void loadingBar.offsetWidth; loadingBar.classList.add('run'); }, 150);
+};
 d.addEventListener('htmx:beforeRequest', (ev) => {
   const elt = ev.detail.elt;
   if (!loadingBar || elt?.matches?.('[data-lazy], .grid-more, .fetching')) return;
   elt.dataset.bar = '1';
-  if (pending++ === 0) {
-    clearTimeout(barTimer);
-    barTimer = setTimeout(() => { loadingBar.classList.remove('done'); void loadingBar.offsetWidth; loadingBar.classList.add('run'); }, 150);
-  }
+  if (pending++ === 0) startBar();
 });
+// 整页跳转也显示：添加到桌面后没有浏览器的加载指示，点了链接要等下一页回来才有反应。
+// 等这次点击的所有处理函数跑完再看有没有被拦下（HTMX、站内的返回按钮等会自己处理）。
+if (loadingBar) {
+  const leaving = (ev, target, sameTab) => setTimeout(() => { if (!ev.defaultPrevented && sameTab && target) startBar(); });
+  d.addEventListener('click', (ev) => {
+    const link = ev.target.closest?.('a[href]');
+    if (!link || ev.button !== 0 || ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.altKey || link.hasAttribute('download')) return;
+    const samePage = link.pathname === location.pathname && link.search === location.search;
+    leaving(ev, link.origin === location.origin && !samePage, !link.target || link.target === '_self');
+  });
+  d.addEventListener('submit', (ev) => {
+    const form = ev.target;
+    leaving(ev, !form.matches('[hx-get], [hx-post], [hx-put], [hx-patch], [hx-delete]'), !form.target || form.target === '_self');
+  });
+  // 从前进后退缓存里恢复的页面，把上次离开时的进度条收起来。
+  addEventListener('pageshow', (ev) => { if (ev.persisted) { clearTimeout(barTimer); loadingBar.classList.remove('run', 'done'); } });
+}
 d.addEventListener('htmx:afterRequest', (ev) => {
   if (!loadingBar || ev.detail.elt?.dataset?.bar !== '1') return;
   delete ev.detail.elt.dataset.bar;
@@ -70,6 +88,7 @@ const onScroll = () => {
   ticking = true;
   requestAnimationFrame(() => {
     nav?.classList.toggle('is-scrolled', scrollY > 24);
+    d.documentElement.classList.toggle('scrolled', scrollY > 4);
     dTop?.classList.toggle('is-scrolled', scrollY > 280);
     toTop?.classList.toggle('show', scrollY > innerHeight * 1.2);
     if (filters) filters.classList.toggle('is-stuck', filters.getBoundingClientRect().top <= parseFloat(getComputedStyle(filters).top) + 1);

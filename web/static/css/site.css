@@ -267,9 +267,12 @@ body.bare .doc { margin: 0 auto; }
   }
   .app-back svg.i { width: 20px; height: 20px; }
   .has-back .page-head { padding-left: calc(var(--gutter) + 46px); }
-  /* 状态栏底下加一层渐变，滚动时文字不会和时间、电量叠在一起 */
-  body::after { content: ""; position: fixed; inset: 0 0 auto 0; height: var(--safe-top); z-index: 60; pointer-events: none;
-    background: linear-gradient(rgba(10, 10, 12, .85), rgba(10, 10, 12, .4)); }
+  /* 状态栏底下加一层渐变，滚动时文字不会和时间、电量叠在一起。
+     只在页面滚动后出现：停在顶部时盖在背景光晕上，看起来是一条黑条。 */
+  body::after { content: ""; position: fixed; inset: 0 0 auto 0; height: calc(var(--safe-top) + 14px); z-index: 60; pointer-events: none;
+    background: linear-gradient(rgba(10, 10, 12, .88), rgba(10, 10, 12, .7) var(--safe-top), transparent);
+    opacity: 0; transition: opacity .2s; }
+  .scrolled body::after { opacity: 1; }
   body { overscroll-behavior-y: none; }
 }
 
@@ -323,7 +326,7 @@ body.bare .doc { margin: 0 auto; }
 @media (min-width: 1200px) { .nav-login { margin: 0 0 0 auto; } }
 
 /* 局部加载时顶部的细进度条（老系统的小巧思）：请求超过 150ms 才出现，避免一闪而过 */
-.loading-bar { position: fixed; z-index: 100; inset: 0 0 auto 0; height: 2px; pointer-events: none; opacity: 0; transform-origin: 0 50%; transform: scaleX(0);
+.loading-bar { position: fixed; z-index: 100; inset: var(--safe-top) 0 auto 0; height: 2px; pointer-events: none; opacity: 0; transform-origin: 0 50%; transform: scaleX(0);
   background: linear-gradient(90deg, #a23840, var(--brand), #f39a8f); box-shadow: 0 0 10px rgba(226, 96, 93, .6); }
 .loading-bar.run { opacity: 1; transform: scaleX(.85); transition: transform 8s cubic-bezier(.1, .7, .1, 1), opacity .2s; }
 .loading-bar.done { opacity: 0; transform: scaleX(1); transition: transform .2s ease-out, opacity .3s .15s; }
