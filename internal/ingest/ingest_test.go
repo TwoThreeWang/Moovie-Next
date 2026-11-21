@@ -37,7 +37,8 @@ func seedShow(fake *providerstest.Fake) {
 	fake.TMDB["/3/tv/4455"] = map[string]any{
 		"name": "雾港", "original_name": "Fog Harbor", "overview": "TMDB 的简介", "poster_path": "/tmdb-poster.jpg",
 		"vote_average": 8.1, "vote_count": 321, "episode_run_time": []int{45}, "status": "Returning Series",
-		"seasons": []map[string]any{{"season_number": 1, "episode_count": 12}, {"season_number": 2, "episode_count": 10}},
+		"first_air_date": "2024-03-01", "popularity": 66.6,
+		"seasons": []map[string]any{{"season_number": 1, "episode_count": 12}, {"season_number": 2, "episode_count": 10, "air_date": "2026-10-08"}},
 		"images":  map[string]any{"backdrops": []map[string]any{{"file_path": "/b1.jpg"}}},
 	}
 	fake.TMDB["/3/tv/4455/season/2"] = map[string]any{"episodes": []map[string]any{
@@ -434,5 +435,115 @@ func TestChartsBlendSources(t *testing.T) {
 	service.RefreshCharts(ctx)
 	if after, _ := service.Media.Chart(ctx, media.TypeMovie, 50); len(after) != len(titles) || after[0].Title != titles[0] {
 		t.Errorf("豆瓣取不到时榜单应该保持原样: %d 条", len(after))
+	}
+}
+
+// 补资料时一并记下这一季的首播日期和 TMDB 近期关注度。
+func TestEnrichRecordsSeasonReleaseDate(t *testing.T) {
+	service, fake := newService(t)
+	seedShow(fake)
+	pool := testdb.Pool(t)
+	ctx := context.Background()
+	id, err := service.EnsureDouban(ctx, providers.DoubanItem{ID: "36000001", Title: "雾港 第二季", Kind: "tv"}, "", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Refresh(ctx, id, jobs.Job{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Enrich(ctx, id, jobs.Job{}); err != nil {
+		t.Fatal(err)
+	}
+	var released string
+	var popularity float64
+	var checked bool
+	if err := pool.QueryRow(ctx, `SELECT release_date::text, popularity_tmdb, release_checked FROM media WHERE id = $1`, id).
+		Scan(&released, &popularity, &checked); err != nil {
+		t.Fatal(err)
+	}
+	if released != "2026-10-08" || popularity < 66 || popularity > 67 || !checked {
+		t.Errorf("第二季应该记下这一季的首播日期: %s %v %v", released, popularity, checked)
+	}
+}
+
+// 补日期的任务：按已知的 TMDB 编号读一次详情；TMDB 上没有的也记为查过；巡检会把没查过的排进队列。
+func TestReleaseBackfill(t *testing.T) {
+	service, fake := newService(t)
+	pool := testdb.Pool(t)
+	ctx := context.Background()
+	fake.TMDB["/3/movie/603"] = map[string]any{"title": "黑客帝国", "release_date": "1999-03-31", "popularity": 41.2}
+	add := func(doubanID, tmdbID string) int64 {
+		id, _, err := service.Media.EnsureDouban(ctx, doubanID, media.Patch{"title": doubanID})
+		if err != nil {
+			t.Fatal(err)
+		}
+		pool.Exec(ctx, `UPDATE media SET tmdb_id = $2, media_type = 'movie' WHERE id = $1`, id, tmdbID)
+		return id
+	}
+	found := add("42000001", "movie/603")
+	missing := add("42000002", "movie/999")
+
+	if err := service.Sweep(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var queued int
+	pool.QueryRow(ctx, `SELECT count(*) FROM jobs WHERE kind = $1`, ingest.KindRelease).Scan(&queued)
+	if queued != 2 {
+		t.Errorf("巡检应该把两部没查过日期的排进队列，实际 %d", queued)
+	}
+
+	for _, id := range []int64{found, missing} {
+		if err := service.Release(ctx, id, jobs.Job{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var released *string
+	var checked bool
+	pool.QueryRow(ctx, `SELECT release_date::text, release_checked FROM media WHERE id = $1`, found).Scan(&released, &checked)
+	if released == nil || *released != "1999-03-31" || !checked {
+		t.Errorf("应该补上上映日期: %v %v", released, checked)
+	}
+	pool.QueryRow(ctx, `SELECT release_date::text, release_checked FROM media WHERE id = $1`, missing).Scan(&released, &checked)
+	if released != nil || !checked {
+		t.Errorf("TMDB 上没有的应该记为查过、日期留空: %v %v", released, checked)
+	}
+	if pending, _ := service.Media.NeedsRelease(ctx, ingest.KindRelease, 10); len(pending) != 0 {
+		t.Errorf("都查过了，不该再挑中: %v", pending)
+	}
+}
+
+// 每天的关注度：当天的导出文件还没生成时用前一天的；只更新作品库里有的 TMDB 条目，剧集的几季都更新。
+func TestRefreshPopularityFromExports(t *testing.T) {
+	service, fake := newService(t)
+	pool := testdb.Pool(t)
+	ctx := context.Background()
+	yesterday := time.Now().UTC().AddDate(0, 0, -1)
+	name := func(prefix string) string {
+		return prefix + "_" + yesterday.Format("01_02_2006") + ".json.gz"
+	}
+	fake.Exports[name("movie_ids")] = []map[string]any{{"id": 603, "popularity": 41.2}, {"id": 1, "popularity": 999}}
+	fake.Exports[name("tv_series_ids")] = []map[string]any{{"id": 77, "popularity": 9.5}}
+	ids := map[string]int64{}
+	for doubanID, tmdbID := range map[string]string{"43000001": "movie/603", "43000002": "tv/77", "43000003": "tv/77"} {
+		id, _, err := service.Media.EnsureDouban(ctx, doubanID, media.Patch{"title": doubanID})
+		if err != nil {
+			t.Fatal(err)
+		}
+		pool.Exec(ctx, `UPDATE media SET tmdb_id = $2 WHERE id = $1`, id, tmdbID)
+		ids[doubanID] = id
+	}
+	if err := service.RefreshPopularity(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for doubanID, want := range map[string]float64{"43000001": 41.2, "43000002": 9.5, "43000003": 9.5} {
+		var got float64
+		pool.QueryRow(ctx, `SELECT popularity_tmdb::float8 FROM media WHERE id = $1`, ids[doubanID]).Scan(&got)
+		if got < want-0.01 || got > want+0.01 {
+			t.Errorf("%s 的关注度应该是 %v，实际 %v", doubanID, want, got)
+		}
+	}
+	delete(fake.Exports, name("tv_series_ids"))
+	if err := service.RefreshPopularity(ctx); err == nil {
+		t.Error("连前一天的文件都没有时应该报错，下次再试")
 	}
 }

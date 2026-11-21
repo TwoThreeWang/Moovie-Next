@@ -33,6 +33,10 @@ const (
 	KindEmbed    = "media.embed"
 	KindCharts   = "charts.refresh"
 	KindSweep    = "media.sweep"
+	// KindRelease 给加上上映日期之前就入库的作品补日期，不在那条链上，subject 是作品 ID。
+	KindRelease = "media.release"
+	// KindPopularity 每天用 TMDB 的导出文件更新全部作品的近期关注度。
+	KindPopularity = "tmdb.popularity"
 )
 
 // maxSemanticRunes 是语义描述最多保留的字数，和老系统一致（向量模型一次读不了更多）。
@@ -105,7 +109,7 @@ func (s *Service) next(ctx context.Context, kind string, id int64, job jobs.Job)
 // Register 把任务处理函数和周期任务注册到 Worker。
 func (s *Service) Register(worker *jobs.Worker) {
 	for kind, run := range map[string]func(context.Context, int64, jobs.Job) error{
-		KindRefresh: s.Refresh, KindEnrich: s.Enrich, KindSemantic: s.Semantic, KindEmbed: s.Embed,
+		KindRefresh: s.Refresh, KindEnrich: s.Enrich, KindSemantic: s.Semantic, KindEmbed: s.Embed, KindRelease: s.Release,
 	} {
 		worker.Handle(kind, func(ctx context.Context, job jobs.Job) error {
 			id, err := strconv.ParseInt(job.Subject, 10, 64)
@@ -119,6 +123,8 @@ func (s *Service) Register(worker *jobs.Worker) {
 	worker.Handle(KindSweep, func(ctx context.Context, _ jobs.Job) error { return s.Sweep(ctx) })
 	worker.Every(KindCharts, 6*time.Hour)
 	worker.Every(KindSweep, time.Hour)
+	worker.Handle(KindPopularity, func(ctx context.Context, _ jobs.Job) error { return s.RefreshPopularity(ctx) })
+	worker.Every(KindPopularity, 24*time.Hour)
 	s.registerShort(worker)
 }
 
@@ -468,7 +474,69 @@ func (s *Service) refreshTMDB(ctx context.Context, id int64) error {
 	if err := s.Media.ApplyPatch(ctx, id, media.ProviderTMDB, patch); err != nil {
 		return err
 	}
+	if err := s.Media.SetRelease(ctx, id, details.ReleaseOf(m.Season), details.Popularity); err != nil {
+		return err
+	}
 	return s.Media.AddAliases(ctx, id, details.Title, details.OriginalTitle)
+}
+
+// Release 给加上上映日期之前就入库的作品补日期和近期关注度：只按已知的 TMDB 编号读一次详情，别的资料都不动，
+// 所以不会引起重新写语义描述。TMDB 上没有这个条目时也记为查过，不再重试。
+func (s *Service) Release(ctx context.Context, id int64, _ jobs.Job) error {
+	if !s.TMDB.Enabled() {
+		return jobs.ErrSkip
+	}
+	m, err := s.Media.Get(ctx, id)
+	if errors.Is(err, media.ErrNotFound) {
+		return jobs.ErrSkip
+	}
+	if err != nil {
+		return err
+	}
+	kind, number, _ := strings.Cut(m.TMDBID, "/")
+	tmdbID, _ := strconv.Atoi(number)
+	if tmdbID <= 0 || (kind != "movie" && kind != "tv") {
+		return s.Media.SetRelease(ctx, id, nil, 0)
+	}
+	details, err := s.TMDB.Details(ctx, kind, tmdbID)
+	if errors.Is(err, providers.ErrNotFound) {
+		return s.Media.SetRelease(ctx, id, nil, 0)
+	}
+	if err != nil {
+		return err
+	}
+	return s.Media.SetRelease(ctx, id, details.ReleaseOf(m.Season), details.Popularity)
+}
+
+// RefreshPopularity 用 TMDB 每天的导出文件（全部电影、全部剧集各一个文件）更新作品库里所有作品的近期关注度。
+// 当天的文件 UTC 早上才生成，还没有时用前一天的。不占 TMDB 的 API 配额。
+func (s *Service) RefreshPopularity(ctx context.Context) error {
+	if !s.TMDB.Enabled() {
+		return nil
+	}
+	index, err := s.Media.TMDBIndex(ctx)
+	if err != nil || len(index) == 0 {
+		return err
+	}
+	var ids []int64
+	var values []float64
+	today := time.Now().UTC()
+	for _, kind := range []string{"movie", "tv"} {
+		for _, day := range []time.Time{today, today.AddDate(0, 0, -1)} {
+			err = s.TMDB.Popularity(ctx, kind, day, func(tmdbID int, popularity float64) {
+				for _, id := range index[kind+"/"+strconv.Itoa(tmdbID)] {
+					ids, values = append(ids, id), append(values, popularity)
+				}
+			})
+			if !errors.Is(err, providers.ErrNotFound) {
+				break
+			}
+		}
+		if err != nil {
+			return fmt.Errorf("读取 TMDB %s 导出文件: %w", kind, err)
+		}
+	}
+	return s.Media.SetPopularity(ctx, ids, values)
 }
 
 // 热门榜的综合：三个来源各自给出一个名次表，每部作品的分数 = Σ 权重 ÷ (chartDamping + 名次)。
@@ -592,6 +660,8 @@ func (s *Service) Sweep(ctx context.Context) error {
 		{KindSemantic, s.AI.Enabled(), -2, func() ([]int64, error) { return s.Media.NeedsSemantic(ctx, KindSemantic, KindEnrich, 100) }},
 		{KindEmbed, s.Embedder.Enabled(), -2, func() ([]int64, error) { return s.Media.MissingEmbedding(ctx, KindEmbed, 200) }},
 		{KindShortRefresh, s.Hongguo != nil, PriorityRoutine, func() ([]int64, error) { return s.Media.StaleShort(ctx, KindShortRefresh, 300) }},
+		// 补上映日期：每个作品只问 TMDB 一次，补完就不再挑中。
+		{KindRelease, s.TMDB.Enabled(), -2, func() ([]int64, error) { return s.Media.NeedsRelease(ctx, KindRelease, 1000) }},
 	} {
 		if !item.enabled {
 			continue

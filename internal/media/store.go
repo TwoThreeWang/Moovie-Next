@@ -378,27 +378,81 @@ func (s *Store) Discover(ctx context.Context, filter Filter) ([]Card, error) {
 		add("m.year >= ?", filter.Decade)
 		add("m.year <= ?", filter.Decade+9)
 	}
-	order := "m.votes_tmdb DESC, m.rating_douban DESC, m.id DESC"
+	// 最热：先是首页热门榜上的（豆瓣热门 + TMDB 一周趋势 + 本站最近 7 天在看的，见 ingest.RefreshCharts），
+	// 按榜上的名次；其余按 TMDB 的近期关注度（每天更新），没有 TMDB 数据的再按累计评分人数。
+	from := `media m LEFT JOIN (SELECT media_id, kind, min(rank) AS rank FROM chart_items GROUP BY media_id, kind) ch
+  ON ch.media_id = m.id AND ch.kind = m.media_type`
+	order := "ch.rank IS NULL, ch.rank, m.popularity_tmdb DESC, m.votes_tmdb DESC, m.id DESC"
+	plain := "media m" // 不按榜单排的几种不用连 chart_items
 	switch {
 	case short && filter.Sort == "rating":
-		order = "m.rating_hongguo DESC, m.heat DESC, m.id DESC"
+		from, order = plain, "m.rating_hongguo DESC, m.heat DESC, m.id DESC"
 	case short && filter.Sort == "new":
 		// 红果的 series_id 随时间递增、位数相同：按它倒序就是最新上架的在前，走 hongguo_id 的唯一索引。
 		where = append(where, "m.hongguo_id <> ''")
-		order = "m.hongguo_id DESC"
+		from, order = plain, "m.hongguo_id DESC"
 	case short:
-		order = "m.heat DESC, m.id DESC" // 和 media_short_heat_idx 的顺序一致
+		from, order = plain, "m.heat DESC, m.id DESC" // 和 media_short_heat_idx 的顺序一致
 	case filter.Sort == "rating":
-		order = "m.rating_douban DESC, m.id DESC"
+		from, order = plain, "m.rating_douban DESC, m.id DESC"
 	case filter.Sort == "new":
-		order = "m.year DESC, m.id DESC"
+		// 最新：按上映日期（剧集是这一季的首播日期）。还没上映的不列出来；没有日期的按年份，排在那一年的最后。
+		where = append(where, "(m.release_date IS NULL OR m.release_date <= current_date)",
+			"(m.release_date IS NOT NULL OR m.year <= extract(year FROM current_date))")
+		from, order = plain, "COALESCE(m.release_date, CASE WHEN m.year > 0 THEN make_date(m.year, 1, 1) END) DESC NULLS LAST, m.id DESC"
 	}
 	if filter.Limit <= 0 || filter.Limit > 60 {
 		filter.Limit = 30
 	}
 	args = append(args, filter.Limit, max(0, filter.Offset))
-	return scanCards(s.pool.Query(ctx, `SELECT `+cardColumns+` FROM media m WHERE `+strings.Join(where, " AND ")+
+	return scanCards(s.pool.Query(ctx, `SELECT `+cardColumns+` FROM `+from+` WHERE `+strings.Join(where, " AND ")+
 		` ORDER BY `+order+` LIMIT $`+strconv.Itoa(len(args)-1)+` OFFSET $`+strconv.Itoa(len(args)), args...))
+}
+
+// SetRelease 记下 TMDB 给的上映日期和近期关注度，并标记这部作品已经向 TMDB 查过日期（查不到也算查过）。
+// released 为 nil 时保留原来的日期；popularity 为 0 时保留原来的关注度。
+func (s *Store) SetRelease(ctx context.Context, id int64, released *time.Time, popularity float64) error {
+	_, err := s.pool.Exec(ctx, `UPDATE media SET release_date = COALESCE($2::date, release_date),
+popularity_tmdb = CASE WHEN $3::float8 > 0 THEN $3::float8 ELSE popularity_tmdb END, release_checked = true WHERE id = $1`,
+		id, released, popularity)
+	return err
+}
+
+// NeedsRelease 返回有 TMDB 条目、还没查过上映日期的长剧（这个字段加上之前就入库的作品）。
+func (s *Store) NeedsRelease(ctx context.Context, jobKind string, limit int) ([]int64, error) {
+	return s.ids(ctx, `SELECT id FROM media m WHERE media_type <> 'short' AND tmdb_id <> '' AND NOT release_checked AND `+idle+`
+ORDER BY id LIMIT $2`, jobKind, limit)
+}
+
+// TMDBIndex 返回作品库里每个 TMDB 条目（如 "movie/603"、"tv/1399"）对应的作品 ID。剧集的几季共用一个 TMDB 条目。
+func (s *Store) TMDBIndex(ctx context.Context) (map[string][]int64, error) {
+	rows, err := s.pool.Query(ctx, `SELECT id, tmdb_id FROM media WHERE media_type <> 'short' AND tmdb_id <> ''`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	index := map[string][]int64{}
+	for rows.Next() {
+		var id int64
+		var key string
+		if err := rows.Scan(&id, &key); err != nil {
+			return nil, err
+		}
+		index[key] = append(index[key], id)
+	}
+	return index, rows.Err()
+}
+
+// SetPopularity 批量写入 TMDB 的近期关注度，ids 和 values 一一对应。
+func (s *Store) SetPopularity(ctx context.Context, ids []int64, values []float64) error {
+	for start := 0; start < len(ids); start += 5000 {
+		end := min(start+5000, len(ids))
+		if _, err := s.pool.Exec(ctx, `UPDATE media m SET popularity_tmdb = v.p
+FROM unnest($1::bigint[], $2::float8[]) AS v(id, p) WHERE m.id = v.id AND m.popularity_tmdb <> v.p::real`, ids[start:end], values[start:end]); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Search 在作品库里按片名和别名搜索。匹配程度相同时，短剧排在电影、剧集后面。

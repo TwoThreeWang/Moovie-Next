@@ -308,3 +308,116 @@ func TestExternalIDsSharedAcrossSeasons(t *testing.T) {
 		}
 	}
 }
+
+// 发现页的"最热"：热门榜上的按名次排在前面，其余按 TMDB 近期关注度，再按累计评分人数。
+// "最新"：按上映日期；没上映的不列；没有日期的按年份排在那一年的最后。
+func TestDiscoverSortsByRecentHeatAndReleaseDate(t *testing.T) {
+	pool := testdb.Pool(t)
+	store := media.NewStore(pool)
+	ctx := context.Background()
+	now := time.Now()
+	day := func(days int) *time.Time { d := now.AddDate(0, 0, days); return &d }
+	add := func(doubanID, title string, year int, released *time.Time, popularity float64, votes int) int64 {
+		id := seed(t, store, doubanID, title, year, media.TypeMovie)
+		if _, err := pool.Exec(ctx, `UPDATE media SET release_date = $2, popularity_tmdb = $3, votes_tmdb = $4 WHERE id = $1`,
+			id, released, popularity, votes); err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	thisYear := now.Year()
+	classic := add("40000001", "老经典", 1994, nil, 3, 30000)
+	trending := add("40000002", "最近很火", thisYear, day(-40), 900, 200)
+	charted := add("40000003", "榜上第一", thisYear, day(-3), 10, 50)
+	quiet := add("40000004", "冷门新片", thisYear, day(-1), 1, 5)
+	unreleased := add("40000005", "还没上映", thisYear, day(30), 500, 0)
+	yearOnly := add("40000006", "只有年份", thisYear-1, nil, 0, 0) // 去年：排在今年所有有日期的后面，不受今天是几月影响
+	nextYear := add("40000007", "明年的片", thisYear+1, nil, 0, 0)
+	if err := store.ReplaceChart(ctx, media.TypeMovie, []int64{charted}); err != nil {
+		t.Fatal(err)
+	}
+	titles := func(sort string) []int64 {
+		cards, err := store.Discover(ctx, media.Filter{Type: media.TypeMovie, Sort: sort})
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids := make([]int64, 0, len(cards))
+		for _, card := range cards {
+			ids = append(ids, card.ID)
+		}
+		return ids
+	}
+	if got, want := titles("hot"), []int64{charted, trending, unreleased, classic, quiet, nextYear, yearOnly}; !equalIDs(got, want) {
+		t.Errorf("最热的顺序不对:\n got %v\nwant %v", got, want)
+	}
+	if got := titles(""); !equalIDs(got, titles("hot")) {
+		t.Errorf("没给排序时应该和最热一样: %v", got)
+	}
+	if got, want := titles("new"), []int64{quiet, charted, trending, yearOnly, classic}; !equalIDs(got, want) {
+		t.Errorf("最新的顺序不对（没上映的和明年的不该出现）:\n got %v\nwant %v", got, want)
+	}
+	// 全部类型时也能按榜单排（几类的榜单名次放在一起比）
+	if cards, err := store.Discover(ctx, media.Filter{Sort: "hot"}); err != nil || len(cards) == 0 || cards[0].ID != charted {
+		t.Errorf("全部类型的最热应该以榜上的开头: %v %v", cards, err)
+	}
+}
+
+// 补日期的进度：查过的不再挑中；日期和关注度为空时保留原值。批量更新关注度按 TMDB 编号对上各季。
+func TestReleaseAndPopularityUpdates(t *testing.T) {
+	pool := testdb.Pool(t)
+	store := media.NewStore(pool)
+	ctx := context.Background()
+	movie := seed(t, store, "41000001", "电影", 2020, media.TypeMovie)
+	season1 := seed(t, store, "41000002", "某剧", 2021, media.TypeTV)
+	season2 := seed(t, store, "41000003", "某剧 第二季", 2023, media.TypeTV)
+	noTMDB := seed(t, store, "41000004", "没有 TMDB", 2020, media.TypeMovie)
+	pool.Exec(ctx, `UPDATE media SET tmdb_id = 'movie/603' WHERE id = $1`, movie)
+	pool.Exec(ctx, `UPDATE media SET tmdb_id = 'tv/77' WHERE id = ANY($1)`, []int64{season1, season2})
+
+	pending, err := store.NeedsRelease(ctx, "media.release", 10)
+	if err != nil || !equalIDs(pending, []int64{movie, season1, season2}) {
+		t.Fatalf("应该挑出有 TMDB 编号、没查过的: %v %v", pending, err)
+	}
+	released := time.Date(2020, 5, 1, 0, 0, 0, 0, time.UTC)
+	if err := store.SetRelease(ctx, movie, &released, 12.5); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetRelease(ctx, movie, nil, 0); err != nil {
+		t.Fatal(err)
+	}
+	var date time.Time
+	var popularity float64
+	pool.QueryRow(ctx, `SELECT release_date, popularity_tmdb FROM media WHERE id = $1`, movie).Scan(&date, &popularity)
+	if !date.Equal(released) || popularity != 12.5 {
+		t.Errorf("空值不该清掉已有的日期和关注度: %v %v", date, popularity)
+	}
+	if pending, _ := store.NeedsRelease(ctx, "media.release", 10); !equalIDs(pending, []int64{season1, season2}) {
+		t.Errorf("查过的不该再挑中: %v", pending)
+	}
+
+	index, err := store.TMDBIndex(ctx)
+	if err != nil || len(index["tv/77"]) != 2 || len(index["movie/603"]) != 1 || len(index) != 2 {
+		t.Fatalf("TMDB 编号索引不对: %v %v", index, err)
+	}
+	if err := store.SetPopularity(ctx, []int64{season1, season2, movie}, []float64{80, 80, 7}); err != nil {
+		t.Fatal(err)
+	}
+	var values []float64
+	pool.QueryRow(ctx, `SELECT array_agg(popularity_tmdb::float8 ORDER BY id) FROM media WHERE id = ANY($1)`,
+		[]int64{movie, season1, season2, noTMDB}).Scan(&values)
+	if len(values) != 4 || values[0] != 7 || values[1] != 80 || values[2] != 80 || values[3] != 0 {
+		t.Errorf("批量更新关注度不对: %v", values)
+	}
+}
+
+func equalIDs(got, want []int64) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			return false
+		}
+	}
+	return true
+}

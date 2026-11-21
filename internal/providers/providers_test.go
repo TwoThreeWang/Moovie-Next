@@ -107,8 +107,8 @@ func TestTMDBDetailsAndSeason(t *testing.T) {
 	fake.TMDB["/3/find/tt1234567"] = map[string]any{"tv_results": []map[string]any{{"id": 4455}}}
 	fake.TMDB["/3/tv/4455"] = map[string]any{
 		"name": "雾港", "original_name": "Fog Harbor", "overview": "简介", "poster_path": "/p.jpg", "vote_average": 8.1, "vote_count": 321,
-		"episode_run_time": []int{45}, "status": "Returning Series",
-		"seasons":      []map[string]any{{"season_number": 1, "episode_count": 12}, {"season_number": 2, "episode_count": 10}},
+		"episode_run_time": []int{45}, "status": "Returning Series", "first_air_date": "2024-03-01", "popularity": 88.5,
+		"seasons":      []map[string]any{{"season_number": 1, "episode_count": 12}, {"season_number": 2, "episode_count": 10, "air_date": "2026-10-08"}},
 		"images":       map[string]any{"backdrops": []map[string]any{{"file_path": "/b1.jpg"}, {"file_path": "/b2.jpg"}}},
 		"external_ids": map[string]any{"imdb_id": "tt1234567"},
 	}
@@ -125,6 +125,24 @@ func TestTMDBDetailsAndSeason(t *testing.T) {
 	if err != nil || details.Title != "雾港" || details.Runtime != 45 || details.Ended || details.IMDbID != "tt1234567" ||
 		len(details.Backdrops) != 2 || details.Backdrops[0] != "https://image.tmdb.org/t/p/original/b1.jpg" || len(details.Seasons) != 2 {
 		t.Fatalf("详情解析不对: %+v err=%v", details, err)
+	}
+	date := func(value *time.Time) string {
+		if value == nil {
+			return "nil"
+		}
+		return value.Format("2006-01-02")
+	}
+	if details.Popularity != 88.5 || date(details.ReleaseOf(1)) != "2024-03-01" || date(details.ReleaseOf(2)) != "2026-10-08" || date(details.ReleaseOf(3)) != "nil" {
+		t.Errorf("剧集的日期和关注度不对: popularity=%v 第一季=%s 第二季=%s 第三季=%s",
+			details.Popularity, date(details.ReleaseOf(1)), date(details.ReleaseOf(2)), date(details.ReleaseOf(3)))
+	}
+	fake.TMDB["/3/movie/603"] = map[string]any{"title": "黑客帝国", "release_date": "1999-03-31", "popularity": 41.2}
+	if movie, err := tmdb.Details(ctx, "movie", 603); err != nil || date(movie.ReleaseOf(1)) != "1999-03-31" || movie.Popularity != 41.2 {
+		t.Errorf("电影的上映日期不对: %+v %v", movie, err)
+	}
+	fake.TMDB["/3/movie/604"] = map[string]any{"title": "没日期", "release_date": ""}
+	if movie, err := tmdb.Details(ctx, "movie", 604); err != nil || movie.ReleaseOf(1) != nil {
+		t.Errorf("没有日期时应该是 nil: %+v %v", movie, err)
 	}
 	episodes, err := tmdb.Season(ctx, 4455, 2)
 	if err != nil || len(episodes) != 2 || episodes[0].AirDate == nil || episodes[1].AirDate != nil || episodes[0].Runtime != 46 {
@@ -309,5 +327,32 @@ func TestDoubanThrottleSlowsDown(t *testing.T) {
 	}
 	if interval, _ := douban.Pace.Status(); interval <= 10*time.Millisecond {
 		t.Errorf("被限流后应该放慢: %s", interval)
+	}
+}
+
+// 每日导出文件：按日期拼文件名，解压后逐行读取，坏行跳过；当天的文件还没有时返回 ErrNotFound。
+func TestTMDBPopularityExport(t *testing.T) {
+	fake := providerstest.New(t)
+	fake.Exports["movie_ids_11_02_2026.json.gz"] = []map[string]any{{"id": 603, "popularity": 41.2, "adult": false}, {"id": 604, "popularity": 0.6}}
+	fake.Exports["tv_series_ids_11_02_2026.json.gz"] = []map[string]any{{"id": 77, "popularity": 9.5}}
+	tmdb := fake.TMDBClient()
+	ctx := context.Background()
+	day := time.Date(2026, 11, 2, 23, 0, 0, 0, time.FixedZone("UTC+8", 8*3600)) // UTC 是 11 月 2 日
+	got := map[int]float64{}
+	if err := tmdb.Popularity(ctx, "movie", day, func(id int, popularity float64) { got[id] = popularity }); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[603] != 41.2 || got[604] != 0.6 {
+		t.Errorf("电影导出文件读得不对: %v", got)
+	}
+	tv := map[int]float64{}
+	if err := tmdb.Popularity(ctx, "tv", day, func(id int, popularity float64) { tv[id] = popularity }); err != nil || tv[77] != 9.5 {
+		t.Errorf("剧集导出文件读得不对: %v %v", tv, err)
+	}
+	if err := tmdb.Popularity(ctx, "movie", day.AddDate(0, 0, 1), func(int, float64) {}); !errors.Is(err, providers.ErrNotFound) {
+		t.Errorf("文件还没生成时应该返回 ErrNotFound，实际 %v", err)
+	}
+	if err := tmdb.Popularity(ctx, "person", day, func(int, float64) {}); err == nil {
+		t.Error("不认识的类型应该报错")
 	}
 }

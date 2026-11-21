@@ -2,6 +2,7 @@
 package providerstest
 
 import (
+	"compress/gzip"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -28,6 +29,8 @@ type Fake struct {
 	Wikidata map[string][]map[string]string
 	// TMDB：路径 → 响应 JSON。
 	TMDB map[string]any
+	// Exports：TMDB 每日导出文件名（如 "movie_ids_11_22_2026.json.gz"）→ 文件里的每一行。
+	Exports map[string][]map[string]any
 	// AIDown、EmbedDown 为 true 时，AI 对话接口、向量接口返回 500。
 	AIDown, EmbedDown bool
 	// Prompts 记录 AI 收到的每一条用户消息。
@@ -43,6 +46,7 @@ func New(t *testing.T) *Fake {
 	fake := &Fake{
 		Subjects: map[string]map[string]any{}, Suggest: map[string][]map[string]any{}, Popular: map[string][]map[string]any{},
 		Interests: map[string][]map[string]any{}, Wikidata: map[string][]map[string]string{}, TMDB: map[string]any{},
+		Exports: map[string][]map[string]any{},
 	}
 	fake.Server = httptest.NewServer(http.HandlerFunc(fake.serve))
 	t.Cleanup(fake.Server.Close)
@@ -56,7 +60,7 @@ func (f *Fake) Douban() *providers.Douban {
 
 // TMDBClient 返回指向假服务器的 TMDB 客户端。
 func (f *Fake) TMDBClient() *providers.TMDB {
-	return &providers.TMDB{HTTP: f.Server.Client(), Base: f.Server.URL, Token: "test-token"}
+	return &providers.TMDB{HTTP: f.Server.Client(), Base: f.Server.URL, Files: f.Server.URL, Token: "test-token"}
 }
 
 // WikidataClient 返回指向假服务器的 Wikidata 客户端。
@@ -179,6 +183,19 @@ func (f *Fake) serve(w http.ResponseWriter, r *http.Request) {
 		vector := make([]float32, providers.EmbeddingDimensions)
 		vector[0] = 1
 		writeJSON(w, map[string]any{"data": []map[string]any{{"embedding": vector}}})
+	case strings.HasPrefix(path, "/p/exports/"):
+		lines, ok := f.Exports[strings.TrimPrefix(path, "/p/exports/")]
+		if !ok {
+			http.Error(w, "AccessDenied", http.StatusForbidden) // 和 S3 一样：文件不存在时返回 403
+			return
+		}
+		w.Header().Set("Content-Type", "application/octet-stream")
+		zipped := gzip.NewWriter(w)
+		for _, line := range lines {
+			json.NewEncoder(zipped).Encode(line)
+		}
+		zipped.Write([]byte("not json\n")) // 坏行应该被跳过
+		zipped.Close()
 	case strings.HasPrefix(path, "/3/"):
 		if r.Header.Get("Authorization") != "Bearer test-token" {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
