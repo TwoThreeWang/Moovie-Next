@@ -65,7 +65,7 @@
 想用买的 Clash 订阅：网站本身不认识 Shadowsocks、VMess、Trojan 这些协议，所以另外跑一个 mihomo（Clash.Meta 内核）容器，把订阅变成一个 HTTP / SOCKS5 代理，再把 `DOUBAN_PROXY` 指过去。仓库里不带 mihomo 的配置，需要自己部署，建议：
 
 - 单独的容器、单独的 Docker 网络：不用 host 网络、不建 TUN 网卡、不要额外权限，不向宿主机开放端口，宿主机的网络不受影响。
-- 网站和 worker 的容器加入 mihomo 所在的网络后，在 `.env` 里填 `DOUBAN_PROXY=http://mihomo:7890`；mihomo 只接受 Docker 内网的连接，也可以再加用户名密码。
+- mihomo 放在 `mihomo_default` 网络里（`docker-compose.yml` 已让网站和 worker 加入这个网络），在 `.env` 里填 `DOUBAN_PROXY=http://mihomo:7890`；mihomo 只接受 Docker 内网的连接，也可以再加用户名密码。
 - 节点放在一个轮询的负载均衡组里，连续的请求从不同的节点出去；健康检查用通用地址，不额外打扰豆瓣。填了订阅链接的配置文件不要提交到仓库。
 
 ## 热门榜

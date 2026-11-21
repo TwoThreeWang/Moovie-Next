@@ -1,4 +1,5 @@
-# docker compose up -d --build；数据库、Ollama、WARP 使用 postgres_default 网络里的已有服务。
+# docker compose up -d --build；数据库、Ollama、WARP 使用 postgres_default 网络里的已有服务，
+# 豆瓣代理 mihomo 使用 mihomo_default 网络里的已有服务（两个网络都要先存在）。
 # 根目录 .env 是唯一配置入口；这里只做各容器的变量映射，说明见 docs/deploy.md。
 x-proxy-env: &proxy-env
   HTTP_PROXY: "${HTTP_PROXY-${OUTBOUND_PROXY-}}"
@@ -19,6 +20,8 @@ x-runtime: &runtime
 
 x-app: &app
   <<: *runtime
+  # 网站和 worker 额外加入 mihomo 的网络，DOUBAN_PROXY=http://mihomo:7890 才能连上；弹幕服务不需要。
+  networks: [postgres_default, mihomo_default]
   image: moovie:local
   env_file: .env
   stop_grace_period: 20s
@@ -83,4 +86,6 @@ services:
 
 networks:
   postgres_default:
+    external: true
+  mihomo_default:
     external: true

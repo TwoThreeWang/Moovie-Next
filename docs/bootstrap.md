@@ -19,11 +19,11 @@ LEGACY_DB_NAME=moovie_v2 go run ./cmd/migrate-legacy -dry-run
 在 Docker 部署的服务器上，用镜像里的命令运行（先 `docker compose build`）：
 
 ```bash
-docker compose run --rm --no-deps -e LEGACY_DB_NAME=moovie_v2 web ./migrate-legacy -dry-run
+docker compose run --rm --no-deps -e LEGACY_DB_NAME=moovie_v2 --entrypoint ./migrate-legacy web -dry-run
 ```
 
 ```bash
-docker compose run --rm --no-deps -e LEGACY_DB_NAME=moovie_v2 web ./migrate-legacy
+docker compose run --rm --no-deps -e LEGACY_DB_NAME=moovie_v2 --entrypoint ./migrate-legacy web
 ```
 
 ## 临时：示例订阅
@@ -38,7 +38,7 @@ LEGACY_DB_NAME=moovie_v2 go run ./cmd/migrate-legacy -sources data/example-sourc
 
 ```bash
 mkdir -p data
-docker compose run --rm --no-deps -e LEGACY_DB_NAME=moovie_v2 -v "$PWD/data:/app/out" web ./migrate-legacy -sources /app/out/example-sources.json
+docker compose run --rm --no-deps -e LEGACY_DB_NAME=moovie_v2 -v "$PWD/data:/app/out" --entrypoint ./migrate-legacy web -sources /app/out/example-sources.json
 ```
 
 然后在 `.env` 里设置 `EXAMPLE_SUBSCRIPTION_FILE=data/example-sources.json` 并重启。同一个地址只留一个（HTTP 的也留着，查询由本站转发），key 用接口的域名。`data/` 已经加进 `.gitignore`。不配置这个变量时，接口返回 404，设置页也没有按钮。

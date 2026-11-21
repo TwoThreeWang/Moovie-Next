@@ -1,7 +1,7 @@
 # 部署
 
 一台装好 Docker 的服务器，跑三个容器：网站（`moovie-web`）、后台任务（`moovie-worker`）、弹幕服务（`moovie-danmu`）。
-数据库、Ollama、Cloudflare WARP 用服务器上已有的，都在外部网络 `postgres_default` 里。
+数据库、Ollama、Cloudflare WARP 用服务器上已有的，都在外部网络 `postgres_default` 里；豆瓣代理 mihomo 在外部网络 `mihomo_default` 里。两个网络都要先存在，否则 `docker compose up` 会报错。
 
 | 文件 | 作用 |
 | --- | --- |
@@ -110,7 +110,7 @@ Caddy 一行就够：`moovie.example.com { reverse_proxy 127.0.0.1:5200 }`。
 | 请求 | 怎么走 |
 | --- | --- |
 | 豆瓣、TMDB、Wikidata、AI、Telegram、作品图片 | `OUTBOUND_PROXY`（默认 `socks5://cloudflare-warp:1080`）。写成空值就直连；需要按协议区分时用 `HTTP_PROXY`、`HTTPS_PROXY` |
-| 豆瓣（配了 `DOUBAN_PROXY` 时） | 走 `DOUBAN_PROXY`，比如自建的 mihomo；网站和 worker 的容器要加入代理所在的 Docker 网络，见 [作品资料](metadata.md#豆瓣请求节奏) |
+| 豆瓣（配了 `DOUBAN_PROXY` 时） | 走 `DOUBAN_PROXY`，比如自建的 mihomo；`docker-compose.yml` 已让网站和 worker 加入 `mihomo_default` 网络，见 [作品资料](metadata.md#豆瓣请求节奏) |
 | 播放源查询的转发（`/api/relay`） | 直连，不走代理；只允许连公网地址 |
 | 数据库、Ollama、弹幕服务、内网地址 | 直连（列在 `NO_PROXY` 里） |
 | 视频 | 不经过服务器，由用户的浏览器直接加载 |
