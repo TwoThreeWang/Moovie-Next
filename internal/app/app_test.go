@@ -706,6 +706,14 @@ func TestStaticFiles(t *testing.T) {
 	if r := s.get("/img/" + "aHR0cHM6Ly9ldmlsLmV4YW1wbGUvYS5qcGc"); r.status != http.StatusForbidden || r.header.Get("Cache-Control") != "no-store" {
 		t.Errorf("图片代理不能访问豆瓣以外的地址，实际 %d", r.status)
 	}
+
+	// HEAD 按 GET 处理，只回状态码和响应头；不存在的地址仍然是 404。
+	for path, want := range map[string]int{"/": http.StatusOK, "/discover": http.StatusOK, "/static/css/app.css": http.StatusOK, "/no-such-page": http.StatusNotFound} {
+		head := s.do(s.client, http.MethodHead, path, nil, nil)
+		if head.status != want || head.body != "" || head.header.Get("Content-Type") == "" {
+			t.Errorf("HEAD %s: %d %q body=%d 字节，应该是 %d", path, head.status, head.header.Get("Content-Type"), len(head.body), want)
+		}
+	}
 }
 
 // ---------- 添加到桌面 ----------

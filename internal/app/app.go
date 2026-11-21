@@ -290,8 +290,8 @@ func (a *App) RegisterJobs(worker *jobs.Worker) {
 	worker.Every("mail.prune", 24*time.Hour)
 }
 
-// Router 创建路由。
-func (a *App) Router() *gin.Engine {
+// Router 创建路由。HEAD 请求按 GET 处理，见 httpx.HeadAsGet。
+func (a *App) Router() http.Handler {
 	if !a.Config.Dev() {
 		gin.SetMode(gin.ReleaseMode)
 	}
@@ -352,7 +352,7 @@ func (a *App) Router() *gin.Engine {
 
 	admin := member.Group("/admin", auth.RequireAdmin())
 	a.adminRoutes(admin)
-	return router
+	return httpx.HeadAsGet(router)
 }
 
 // accessLog 记录访问日志。只记方法、路径、状态码和耗时；不记查询参数和请求体，

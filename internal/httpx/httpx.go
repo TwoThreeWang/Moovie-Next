@@ -232,3 +232,16 @@ func Page(c *gin.Context, size int) (page, offset int) {
 	}
 	return 1, 0
 }
+
+// HeadAsGet 让 HEAD 请求按 GET 处理。路由只注册了 GET，不这样的话 HEAD 全都落到 404，
+// 在线监控、链接检查和部分爬虫会以为页面不存在。响应体由 net/http 丢弃：
+// 它按连接上原始请求的方法判断，这里只改交给路由的那份副本。
+func HeadAsGet(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodHead {
+			r = r.Clone(r.Context())
+			r.Method = http.MethodGet
+		}
+		next.ServeHTTP(w, r)
+	})
+}
