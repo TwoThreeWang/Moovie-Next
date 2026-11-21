@@ -142,12 +142,15 @@ body.bare .doc { margin: 0 auto; }
 .landing-grid p { color: var(--text-2); font-size: 14px; line-height: 1.6; }
 
 /* ---------- 详情页：播放源、选集 ---------- */
-.src-list { display: grid; gap: 6px; padding: 0 var(--gutter); }
+/* 列宽限定在容器内（minmax(0, 1fr)）：源名、片名、报错很长时不撑宽页面，超出的用省略号。
+   源名最多占一半，剩下的给说明 */
+.src-list { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; padding: 0 var(--gutter); }
 .d-aside .src-list { padding: 0; }
-.src-row { display: flex; align-items: center; gap: 10px; min-height: 52px; padding: 8px 14px; border-radius: 12px; background: var(--surface); font-size: 14px; }
+.src-row { display: flex; align-items: center; gap: 10px; min-height: 52px; min-width: 0; padding: 8px 14px; border-radius: 12px; background: var(--surface); font-size: 14px; }
+.src-row > .i { flex: none; }
 .src-row.is-off { color: var(--text-3); background: transparent; border: 1px dashed var(--line); }
-.src-name { font-weight: 600; white-space: nowrap; }
-.src-desc { color: var(--text-3); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.src-name { flex: 0 1 auto; max-width: 50%; min-width: 0; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.src-desc { flex: 1 1 0; color: var(--text-3); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .lat { margin-left: auto; font-size: 12px; color: var(--text-3); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .lat.good { color: var(--ok); }
 .src-empty { display: grid; gap: 12px; justify-items: start; padding: 18px; border-radius: var(--r-m); background: var(--surface); color: var(--text-2); }
@@ -344,9 +347,11 @@ body.bare .doc { margin: 0 auto; }
 .loading-bar.run { opacity: 1; transform: scaleX(.85); transition: transform 8s cubic-bezier(.1, .7, .1, 1), opacity .2s; }
 .loading-bar.done { opacity: 0; transform: scaleX(1); transition: transform .2s ease-out, opacity .3s .15s; }
 
-/* 海报加载中的闪光占位（老系统的小巧思）：图片加载完就停，不在后台一直跑动画 */
+/* 海报加载中的闪光占位（老系统的小巧思）：图片加载完就停。这种动画每一帧都要重画，
+   所以只有在屏幕上的卡片才动（in-view 由 app.js 的 IntersectionObserver 加上），屏幕外和还没开始加载的懒加载图片都停着 */
 @keyframes shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
-.card-art.is-loading { background: linear-gradient(90deg, var(--surface) 25%, var(--surface-2) 50%, var(--surface) 75%); background-size: 200% 100%; animation: shimmer 1.4s linear infinite; }
+.card-art.is-loading { background: linear-gradient(90deg, var(--surface) 25%, var(--surface-2) 50%, var(--surface) 75%); background-size: 200% 100%; animation: shimmer 1.4s linear infinite paused; }
+.card-art.is-loading.in-view { animation-play-state: running; }
 .card-art.is-loading img { opacity: 0; }
 .card-art img { transition: opacity .25s; }
 /* 大图（详情页、首页轮播）加载完再渐显，不会先黑一下再突然出现。is-loaded 由 <head> 里的 imageGuard 加上；

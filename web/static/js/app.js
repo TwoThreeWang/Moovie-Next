@@ -402,13 +402,22 @@ if (actions && bar && 'IntersectionObserver' in window) {
 }
 
 // ---------- 初始化：首屏，以及每次 htmx 换入新内容 ----------
-// 海报加载中显示闪光占位，加载完（或失败）就停。
+// 海报加载中显示闪光占位，加载完（或失败）就停。动画只在卡片进入屏幕时才跑（见 site.css），
+// 滚出屏幕就停：网络慢的时候几十张卡片同时在加载，全部一起动会让滚动和点击变卡。
+const shimmerIO = 'IntersectionObserver' in window && new IntersectionObserver((entries) => {
+  for (const entry of entries) entry.target.classList.toggle('in-view', entry.isIntersecting);
+});
 function shimmer(root) {
   for (const image of $$('.card-art > img', root)) {
     if (image.complete) continue; // 已经加载完；失败的已经被换成了默认图（见 modules.go 的 imageGuard）
     const art = image.parentElement;
     art.classList.add('is-loading');
-    const done = () => art.classList.remove('is-loading');
+    if (shimmerIO) shimmerIO.observe(art);
+    else art.classList.add('in-view');
+    const done = () => {
+      art.classList.remove('is-loading', 'in-view');
+      if (shimmerIO) shimmerIO.unobserve(art);
+    };
     image.addEventListener('load', done, { once: true });
     image.addEventListener('error', done, { once: true });
   }
