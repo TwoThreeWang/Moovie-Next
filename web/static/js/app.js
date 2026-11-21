@@ -311,14 +311,20 @@ for (const button of $$('[data-more]')) {
 }
 
 // ---------- 预取：没有 Speculation Rules 的浏览器（Safari / Firefox） ----------
-if (userId() && !HTMLScriptElement.supports?.('speculationrules')) {
+// HTML 不能被浏览器缓存，自己 fetch 一遍打开时还是要重新请求，所以交给 Service Worker 取回放在内存里，
+// 打开时由它直接交出（规则见 sw.js 的"预取交接"）。还没有 Service Worker 接管的页面不预取。
+// 播放页离开时会保存进度，预取的页面可能比进度旧，所以播放页上不预取。
+if (userId() && !HTMLScriptElement.supports?.('speculationrules') && !location.pathname.startsWith('/play')) {
   const done = new Set();
   const prefetch = (link) => {
-    if (!link || link.hasAttribute('data-no-prerender') || link.origin !== location.origin || /^\/(play|auth|admin)/.test(link.pathname)) return;
+    const worker = navigator.serviceWorker?.controller;
+    if (!worker || !link || link.hasAttribute('data-no-prerender') || link.hasAttribute('download') || link.target === '_blank'
+      || link.origin !== location.origin || /^\/(play|auth|admin|notifications)(\/|$)/.test(link.pathname)) return;
     const url = link.href.split('#')[0];
     if (done.has(url) || url === location.href.split('#')[0]) return;
     done.add(url);
-    fetch(url, { credentials: 'same-origin', priority: 'low' }).catch(() => {});
+    setTimeout(() => done.delete(url), 10000); // 和 Service Worker 里的有效期一致，过期后可以再取
+    worker.postMessage({ type: 'prefetch', url });
   };
   let hoverTimer;
   d.addEventListener('touchstart', (ev) => prefetch(ev.target.closest?.('a[href]')), { passive: true });
