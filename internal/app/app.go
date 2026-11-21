@@ -91,7 +91,7 @@ type App struct {
 
 // Options 让测试可以替换外部依赖。
 type Options struct {
-	// HTTP 是访问外部来源用的客户端，默认带 20 秒超时。
+	// HTTP 是访问外部来源用的客户端，默认带 60 秒超时。
 	HTTP *http.Client
 	// Douban、TMDB、Wikidata、AI、Embedder、Danmu、Hongguo 为 nil 时按配置创建。
 	Douban   *providers.Douban
@@ -118,7 +118,7 @@ type Options struct {
 func New(cfg config.Config, pool *db.Pool, log *slog.Logger, options Options) (*App, error) {
 	client := options.HTTP
 	if client == nil {
-		client = &http.Client{Timeout: 20 * time.Second}
+		client = &http.Client{Timeout: time.Minute}
 	}
 	app := &App{
 		Config: cfg, Pool: pool, Log: log,
@@ -172,12 +172,12 @@ func New(cfg config.Config, pool *db.Pool, log *slog.Logger, options Options) (*
 	}
 	ai := options.AI
 	if ai == nil {
-		// 不用流式输出时，大模型要把整段写完才返回，十几秒到一分钟都正常，超时要给够。
-		ai = &providers.OpenAI{HTTP: &http.Client{Timeout: 3 * time.Minute}, BaseURL: cfg.AIBaseURL, Key: cfg.AIKey, Model: cfg.AIModel}
+		// 非流式输出需要等模型生成完，给慢模型和上游排队留足时间；任务租约需长于此超时。
+		ai = &providers.OpenAI{HTTP: &http.Client{Timeout: 10 * time.Minute}, BaseURL: cfg.AIBaseURL, Key: cfg.AIKey, Model: cfg.AIModel}
 	}
 	embedder := options.Embedder
 	if embedder == nil {
-		embedder = &providers.OpenAI{HTTP: &http.Client{Timeout: time.Minute}, BaseURL: cfg.EmbeddingBaseURL, Key: cfg.EmbeddingKey, Model: cfg.EmbeddingModel}
+		embedder = &providers.OpenAI{HTTP: &http.Client{Timeout: 3 * time.Minute}, BaseURL: cfg.EmbeddingBaseURL, Key: cfg.EmbeddingKey, Model: cfg.EmbeddingModel}
 	}
 	danmu := options.Danmu
 	if danmu == nil {
@@ -404,22 +404,32 @@ func (a *App) static(router *gin.Engine) {
 		etags[name] = `"` + hex.EncodeToString(sum[:8]) + `"`
 		return etags[name]
 	}
-	router.GET("/static/*path", func(c *gin.Context) {
+	serve := func(c *gin.Context, name string) {
 		// 带版本号的地址内容不会变，可以长期缓存；其余的每次用 ETag 确认有没有变化。
 		if c.Query("v") != "" && !a.Config.Dev() {
 			c.Header("Cache-Control", "public, max-age=31536000, immutable")
 		} else {
 			c.Header("Cache-Control", "no-cache")
 		}
-		if value := etag(strings.TrimPrefix(c.Param("path"), "/")); value != "" {
+		if value := etag(name); value != "" {
 			c.Header("ETag", value)
 			if c.GetHeader("If-None-Match") == value {
 				c.Status(http.StatusNotModified)
 				return
 			}
 		}
+		c.Request.URL.Path = "/static/" + name
 		server.ServeHTTP(c.Writer, c.Request)
-	})
+	}
+	router.GET("/static/*path", func(c *gin.Context) { serve(c, strings.TrimPrefix(c.Param("path"), "/")) })
+	// 不少手机浏览器添加到桌面时不看页面里的 <link>，直接到网站根路径下取这几个固定文件名的图标。
+	for path, name := range map[string]string{
+		"/apple-touch-icon.png":             "img/apple-touch-icon.png",
+		"/apple-touch-icon-precomposed.png": "img/apple-touch-icon.png",
+		"/favicon.ico":                      "img/favicon-64.png",
+	} {
+		router.GET(path, func(c *gin.Context) { serve(c, name) })
+	}
 }
 
 // fail 记录错误并返回 500。

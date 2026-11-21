@@ -730,9 +730,11 @@ func TestInstallSupport(t *testing.T) {
 			t.Errorf("图标 %s 打不开: %d", icon.Src, r.status)
 		}
 	}
-	for _, path := range []string{"/static/img/apple-touch-icon.png", "/static/img/favicon-64.png"} {
-		if r := s.get(path); r.status != http.StatusOK {
-			t.Errorf("%s 打不开: %d", path, r.status)
+	// 根路径下的几个是手机浏览器添加到桌面时自己去取的固定地址。
+	for _, path := range []string{"/static/img/apple-touch-icon.png", "/static/img/favicon-64.png",
+		"/apple-touch-icon.png", "/apple-touch-icon-precomposed.png", "/favicon.ico"} {
+		if r := s.get(path); r.status != http.StatusOK || r.header.Get("Content-Type") != "image/png" {
+			t.Errorf("%s 打不开: %d %q", path, r.status, r.header.Get("Content-Type"))
 		}
 	}
 
