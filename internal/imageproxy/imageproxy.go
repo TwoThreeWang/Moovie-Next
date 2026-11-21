@@ -103,22 +103,23 @@ func (h *Handler) serve(c *gin.Context) {
 	ctx := c.Request.Context()
 	budget := &reservation{memory: h.memory, ctx: ctx}
 	defer budget.release()
-	if data, contentType, ok := h.readBackup(budget, key); ok {
+	wait := waitsFor(size)
+	if data, contentType, ok := h.readBackup(budget, key, wait.backup); ok {
 		h.write(c, contentType, "telegram", data)
 		return
 	}
-	data, contentType, from, err := h.readSource(budget, target, resize > 0)
+	data, contentType, from, err := h.readSource(budget, target, resize > 0, wait)
 	if err != nil && size != "original" && target != ref.URL {
 		// 单张图片缺少上游的小尺寸版本时，用来源版本（或它的 TG 备份）在本机缩图。
 		// 结果按本机缩图的 key 备份：上游尺寸地址可能被别的规格共用（豆瓣的 display 和 original 都是 l 图），
 		// 不能让缩小的兜底图占用它。
 		resize = resizeEdge(size)
 		key = backupKey(ref.URL, size, resize)
-		if data, contentType, ok := h.readBackup(budget, key); ok {
+		if data, contentType, ok := h.readBackup(budget, key, wait.backup); ok {
 			h.write(c, contentType, "telegram", data)
 			return
 		}
-		data, contentType, from, err = h.readSource(budget, ref.URL, true)
+		data, contentType, from, err = h.readSource(budget, ref.URL, true, wait)
 	}
 	if err != nil {
 		h.fail(c)
@@ -131,7 +132,7 @@ func (h *Handler) serve(c *gin.Context) {
 		case <-ctx.Done():
 			return
 		}
-		data, contentType, err = resizeImage(data, contentType, resize, budget.take)
+		data, contentType, err = resizeImageQuality(data, contentType, resize, jpegQuality(size), budget.take)
 		if err != nil {
 			h.fail(c)
 			return
@@ -148,6 +149,18 @@ func backupKey(source, size string, resize int) string {
 		return source + "#moovie-" + size + "-v1"
 	}
 	return source
+}
+
+// waits 是一次请求里读 Telegram 备份、回源各自最多等多久。外层 HTTP 客户端的超时是一分钟，
+// 图片等不了那么久：卡住的请求还占着全站共用的执行位（slots），会拖慢其他人的图片。
+// 备份读不回来就改从来源取；来源也超时就返回失败，失败不会被 CDN 缓存。原图大，给得宽一些。
+type waits struct{ backup, source time.Duration }
+
+var waitsFor = func(size string) waits { // 变量：测试里换成很短的时间
+	if size == "original" {
+		return waits{backup: 20 * time.Second, source: 40 * time.Second}
+	}
+	return waits{backup: 6 * time.Second, source: 15 * time.Second}
 }
 
 // reservation 记录一次请求占用的内存额度，请求结束时一并归还。
@@ -173,15 +186,17 @@ func (r *reservation) release() {
 	}
 }
 
-func (h *Handler) readBackup(budget *reservation, key string) ([]byte, string, bool) {
+func (h *Handler) readBackup(budget *reservation, key string, wait time.Duration) ([]byte, string, bool) {
 	if h.Mirror == nil {
 		return nil, "", false
 	}
-	record, found, err := h.Mirror.Lookup(budget.ctx, key)
+	ctx, cancel := context.WithTimeout(budget.ctx, wait)
+	defer cancel()
+	record, found, err := h.Mirror.Lookup(ctx, key)
 	if err != nil || !found || record.Bytes <= 0 || record.Bytes > maxImageBytes || budget.take(int64(record.Bytes)) != nil {
 		return nil, "", false
 	}
-	body, err := h.Mirror.Open(budget.ctx, record)
+	body, err := h.Mirror.Open(ctx, record)
 	if err != nil {
 		return nil, "", false
 	}
@@ -193,16 +208,18 @@ func (h *Handler) readBackup(budget *reservation, key string) ([]byte, string, b
 	return data, record.ContentType, true
 }
 
-func (h *Handler) readSource(budget *reservation, target string, backup bool) ([]byte, string, string, error) {
+func (h *Handler) readSource(budget *reservation, target string, backup bool, wait waits) ([]byte, string, string, error) {
 	if backup {
-		if data, typ, ok := h.readBackup(budget, target); ok {
+		if data, typ, ok := h.readBackup(budget, target, wait.backup); ok {
 			return data, typ, "telegram", nil
 		}
 	}
 	if h.recentlyFailed(target) {
 		return nil, "", "", fmt.Errorf("图片来源冷却中")
 	}
-	response, err := openOrigin(budget.ctx, h.client, target)
+	ctx, cancel := context.WithTimeout(budget.ctx, wait.source)
+	defer cancel()
+	response, err := openOrigin(ctx, h.client, target)
 	if err != nil {
 		h.markFailed(target)
 		return nil, "", "", err

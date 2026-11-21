@@ -72,6 +72,16 @@ func TestImageSources(t *testing.T) {
 		{"https://p6-novel.byteimg.com/a~tplv-shrink:640:0.image", "original", "poster", "https://p6-novel.byteimg.com/a~tplv-shrink:640:0.image", 0},
 		{"https://img1.doubanio.com/a.jpg", "thumb", "poster", "https://img1.doubanio.com/a.jpg", 480},
 		{"https://img1.doubanio.com/a.jpg", "display", "poster", "https://img1.doubanio.com/a.jpg", 1280},
+		// 手机的卡片图和大海报：豆瓣、TMDB 取大一档在本机缩小（缩图时优先用 Telegram 里大一档的备份）；红果直接要需要的宽度
+		{"https://img1.doubanio.com/view/photo/l_ratio_poster/public/a.jpg", "card", "poster", "https://img1.doubanio.com/view/photo/m_ratio_poster/public/a.jpg", 360},
+		{"https://img1.doubanio.com/view/photo/m_ratio_poster/public/a.jpg", "hero", "poster", "https://img1.doubanio.com/view/photo/l_ratio_poster/public/a.jpg", 1080},
+		{tmdb, "card", "poster", "https://image.tmdb.org/t/p/w342/a.jpg", 360},
+		{tmdb, "hero", "poster", "https://image.tmdb.org/t/p/w780/a.jpg", 1080},
+		{tmdb, "card", "still", "https://image.tmdb.org/t/p/w780/a.jpg", 0},
+		{"https://p6-novel.byteimg.com/a~tplv-shrink:640:0.image", "card", "poster", "https://p6-novel.byteimg.com/a~tplv-shrink:240:0.image", 0},
+		{"https://p6-novel.byteimg.com/a~tplv-shrink:640:0.image", "hero", "poster", "https://p6-novel.byteimg.com/a~tplv-shrink:720:0.image", 0},
+		{"https://img1.doubanio.com/a.jpg", "card", "poster", "https://img1.doubanio.com/a.jpg", 360},
+		{"https://img1.doubanio.com/a.jpg", "hero", "poster", "https://img1.doubanio.com/a.jpg", 1080},
 	}
 	for _, c := range cases {
 		target, resize := (imageRef{URL: c.raw, Purpose: c.purpose}).source(c.size)

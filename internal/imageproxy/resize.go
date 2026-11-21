@@ -26,9 +26,27 @@ func readImage(body io.Reader, limit int64) ([]byte, error) {
 	return data, nil
 }
 
-// resizeImage 把图片缩到最长边 edge 以内。图片本来就不大于 edge，或者格式本机解不了时，原样返回。
-// reserve 在解码前为位图预留内存。
+// jpegQuality 是本机缩图后的 JPEG 质量。手机用的两种图压得更狠：卡片在屏幕上只有一百多像素宽，
+// 大海报上面还叠着渐变和文字，看不出区别。实测 12 张豆瓣海报，card（约 240 宽、质量 60）合计是原来 thumb 的 19%；
+// 3 张详情页大海报，hero（约 720 宽、质量 65）是原来 display 的 38%。
+func jpegQuality(size string) int {
+	switch size {
+	case "card":
+		return 60
+	case "hero":
+		return 65
+	}
+	return 82
+}
+
+// resizeImage 把图片缩到最长边 edge 以内，JPEG 质量 82。
 func resizeImage(data []byte, contentType string, edge int, reserve func(int64) error) ([]byte, string, error) {
+	return resizeImageQuality(data, contentType, edge, 82, reserve)
+}
+
+// resizeImageQuality 把图片缩到最长边 edge 以内。图片本来就不大于 edge，或者格式本机解不了时，原样返回。
+// reserve 在解码前为位图预留内存。
+func resizeImageQuality(data []byte, contentType string, edge, quality int, reserve func(int64) error) ([]byte, string, error) {
 	config, _, err := image.DecodeConfig(bytes.NewReader(data))
 	if errors.Is(err, image.ErrFormat) {
 		return data, contentType, nil
@@ -61,6 +79,6 @@ func resizeImage(data []byte, contentType string, edge int, reserve func(int64) 
 		err = png.Encode(&out, dest)
 		return out.Bytes(), "image/png", err
 	}
-	err = jpeg.Encode(&out, dest, &jpeg.Options{Quality: 82})
+	err = jpeg.Encode(&out, dest, &jpeg.Options{Quality: quality})
 	return out.Bytes(), "image/jpeg", err
 }

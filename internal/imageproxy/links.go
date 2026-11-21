@@ -68,7 +68,13 @@ func (h *Handler) verify(encoded string, query url.Values) (imageRef, string, er
 	return ref, size, nil
 }
 
-func validSize(size string) bool       { return size == "thumb" || size == "display" || size == "original" }
+// 规格：
+//   - card：手机上的海报卡片（约 240px 宽）。卡片在手机上约 110px 宽，按 2 倍屏给，3 倍屏上看不出区别，字节少一半多；
+//   - hero：手机上详情页、首页轮播顶部的大海报（约 720px 宽），同样按 2 倍屏给；
+//   - thumb：桌面高清屏的卡片、宽卡片；display：桌面的大图；original：来源提供的原图。
+func validSize(size string) bool {
+	return size == "card" || size == "hero" || size == "thumb" || size == "display" || size == "original"
+}
 func validPurpose(purpose string) bool { return purpose == "poster" || purpose == "still" }
 
 func cleanTitle(title string) string {
@@ -97,7 +103,7 @@ func cleanTitle(title string) string {
 
 func (r imageRef) filename(size, contentType, key string) string {
 	purpose := map[string]string{"poster": "海报", "still": "剧照"}[r.Purpose]
-	label := map[string]string{"thumb": "缩略图", "display": "展示图", "original": "原图"}[size]
+	label := map[string]string{"card": "卡片图", "hero": "手机大图", "thumb": "缩略图", "display": "展示图", "original": "原图"}[size]
 	return r.Title + "_" + purpose + "_" + label + "_" + hex.EncodeToString(hashURL(key))[:8] + extension(contentType)
 }
 
@@ -116,7 +122,7 @@ func (r imageRef) source(size string) (target string, resize int) {
 	switch {
 	case strings.HasSuffix(host, ".doubanio.com") && doubanSize.MatchString(parsed.Path):
 		letter := "l"
-		if size == "thumb" {
+		if size == "thumb" || size == "card" {
 			letter = "m"
 		}
 		parsed.Path = doubanSize.ReplaceAllStringFunc(parsed.Path, func(match string) string {
@@ -125,21 +131,30 @@ func (r imageRef) source(size string) (target string, resize int) {
 			}
 			return "/" + letter + "/public/"
 		})
+		if size == "card" || size == "hero" {
+			// 豆瓣的 m 图 540px 宽、l 图 1080px 宽，手机用不了这么大：在本机缩小。
+			// 通常直接用它们在 Telegram 的备份来缩，不请求豆瓣。
+			return parsed.String(), resizeEdge(size)
+		}
 		return parsed.String(), 0
 	case host == "image.tmdb.org" && tmdbSize.MatchString(parsed.Path):
-		width := "original"
+		width, resize := "original", 0
 		if size != "original" {
 			if r.Purpose == "still" {
-				width = map[string]string{"thumb": "w780", "display": "w1280"}[size]
+				width = map[string]string{"card": "w780", "hero": "w1280", "thumb": "w780", "display": "w1280"}[size]
 			} else {
-				width = map[string]string{"thumb": "w342", "display": "w780"}[size]
+				width = map[string]string{"card": "w342", "hero": "w780", "thumb": "w342", "display": "w780"}[size]
+				if size == "card" || size == "hero" {
+					resize = resizeEdge(size) // TMDB 没有正好的尺寸，取大一档在本机缩小
+				}
 			}
 		}
 		parsed.Path = tmdbSize.ReplaceAllString(parsed.Path, "/t/p/"+width+"/")
-		return parsed.String(), 0
+		return parsed.String(), resize
 	case hongguoImageHost.MatchString(host) && hongguoSize.MatchString(parsed.Path):
-		if size == "thumb" {
-			parsed.Path = hongguoSize.ReplaceAllString(parsed.Path, "tplv-shrink:320:0")
+		// 红果可以直接要任意宽度
+		if width := map[string]string{"card": "240", "hero": "720", "thumb": "320"}[size]; width != "" {
+			parsed.Path = hongguoSize.ReplaceAllString(parsed.Path, "tplv-shrink:"+width+":0")
 			return parsed.String(), 0
 		}
 		return target, 0
@@ -147,8 +162,13 @@ func (r imageRef) source(size string) (target string, resize int) {
 	return target, resizeEdge(size)
 }
 
+// resizeEdge 是本机缩图时最长边的上限。对 2:3 的海报，card 的 360 约是 240px 宽，hero 的 1080 约是 720px 宽。
 func resizeEdge(size string) int {
 	switch size {
+	case "card":
+		return 360
+	case "hero":
+		return 1080
 	case "thumb":
 		return 480
 	case "display":

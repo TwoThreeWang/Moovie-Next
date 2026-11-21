@@ -185,3 +185,42 @@ func TestHeadMeta(t *testing.T) {
 	}
 	mustContain(t, s.get("/"), "<title>Moovie 影牛 - 发现你的下一部电影</title>")
 }
+
+// 海报卡片：手机拿小的卡片图，桌面高清屏拿缩略图；srcset 里两个地址都要能直接用。
+func TestPosterCardsOfferSmallImageForPhones(t *testing.T) {
+	s := newSite(t)
+	if _, err := s.app.Pool.Exec(context.Background(), `INSERT INTO media (id, title, year, media_type, metadata_status, poster)
+VALUES (1, '有海报的电影', 2025, 'movie', 'complete', 'https://img9.doubanio.com/view/photo/l_ratio_poster/public/p1.jpg')`); err != nil {
+		t.Fatal(err)
+	}
+	s.client = s.browser()
+	page := s.get("/discover/movie")
+	srcset := regexp.MustCompile(`srcset="([^"]+)" sizes="([^"]+)"`).FindStringSubmatch(page.body)
+	if srcset == nil {
+		t.Fatalf("海报卡片应该有 srcset 和 sizes：\n%.800s", page.body)
+	}
+	if srcset[2] != "(min-width: 1086px) 204px, (min-width: 720px) calc(14vw + 52px), calc(7vw + 26px)" {
+		t.Errorf("sizes 不对: %q", srcset[2])
+	}
+	candidates := strings.Split(srcset[1], ", ")
+	if len(candidates) != 2 || !strings.HasSuffix(candidates[0], " 240w") || !strings.HasSuffix(candidates[1], " 540w") ||
+		!strings.Contains(candidates[0], "size=card") || !strings.Contains(candidates[1], "size=thumb") {
+		t.Fatalf("srcset 应该是卡片图 240w、缩略图 540w: %q", srcset[1])
+	}
+	// 详情页顶部的大海报：手机用 hero，桌面不变
+	detail := s.get("/m/1")
+	mustContain(t, detail, `<source media="(max-width:719px)" srcset="/img/`)
+	if !regexp.MustCompile(`<source media="\(max-width:719px\)" srcset="/img/[^"]*size=hero`).MatchString(detail.body) ||
+		!regexp.MustCompile(`<img class="fade" src="/img/[^"]*size=display`).MatchString(detail.body) {
+		t.Error("详情页的大海报：手机应该用 hero，其余仍是 display")
+	}
+	for _, candidate := range candidates {
+		link := strings.ReplaceAll(strings.Fields(candidate)[0], "&amp;", "&")
+		if !strings.HasPrefix(link, "/img/") || strings.Contains(link, " ") {
+			t.Errorf("srcset 里的地址不对: %q", link)
+		}
+	}
+	if !strings.Contains(page.body, `src="`+strings.Fields(candidates[0])[0]+`"`) {
+		t.Error("src 应该是卡片图，不支持 srcset 时也拿小图")
+	}
+}

@@ -36,7 +36,7 @@ func (a *App) editorEntry(card media.Card) editorEntry {
 	}
 	return editorEntry{
 		ID: strconv.FormatInt(card.ID, 10), Title: card.Title, Meta: meta,
-		Poster: a.images.URL(card.Poster, "thumb", card.Title, "poster"),
+		Poster: a.images.URL(card.Poster, "card", card.Title, "poster"),
 	}
 }
 

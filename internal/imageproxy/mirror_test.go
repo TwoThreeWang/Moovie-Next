@@ -213,3 +213,87 @@ func TestLocalFallbackDoesNotTakeUpstreamSizeKey(t *testing.T) {
 		t.Fatalf("兜底缩图必须按本机缩图的 key 备份: %+v", h.Mirror.pending)
 	}
 }
+
+// 卡片图：用豆瓣 m 图在 Telegram 的备份在本机缩小，不请求豆瓣；缩小后的结果按自己的键备份。
+func TestCardSizeResizesFromExistingBackup(t *testing.T) {
+	pool := testdb.Pool(t)
+	var medium bytes.Buffer
+	jpeg.Encode(&medium, image.NewRGBA(image.Rect(0, 0, 540, 800)), nil)
+	raw := "https://img1.doubanio.com/view/photo/l_ratio_poster/public/p1.jpg"
+	mURL := "https://img1.doubanio.com/view/photo/m_ratio_poster/public/p1.jpg"
+	if _, err := pool.Exec(context.Background(), `INSERT INTO image_mirrors (url_hash,original_url,tg_file_id,content_type,bytes) VALUES ($1,$2,'M','image/jpeg',$3)`,
+		hashURL(mURL), mURL, medium.Len()); err != nil {
+		t.Fatal(err)
+	}
+	tg := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/getFile") {
+			io.WriteString(w, `{"ok":true,"result":{"file_path":"documents/m.jpg"}}`)
+			return
+		}
+		w.Write(medium.Bytes())
+	}))
+	defer tg.Close()
+	var originHits atomic.Int32
+	h := New(&http.Client{Transport: transportFunc(func(*http.Request) (*http.Response, error) {
+		originHits.Add(1)
+		return nil, io.ErrUnexpectedEOF
+	})}, "secret")
+	h.Mirror = newMirror(pool, telegram.New("TOKEN", "123", tg.URL, nil), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	w := fetchImage(imageRouter(h), h.URL(raw, "card", "某电影", "poster"), nil)
+	config, _, err := image.DecodeConfig(bytes.NewReader(w.Body.Bytes()))
+	if w.Code != 200 || err != nil || config.Width != 243 || config.Height != 360 || originHits.Load() != 0 {
+		t.Fatalf("卡片图应该由 m 图备份缩到 243×360、不请求豆瓣: %d %+v %v 回源 %d 次", w.Code, config, err, originHits.Load())
+	}
+	if len(h.Mirror.pending) != 1 || !strings.HasPrefix(h.Mirror.pending[0].name, "某电影_海报_卡片图_") || h.Mirror.pending[0].raw == mURL {
+		t.Fatalf("卡片图要按自己的键备份，不能占用 m 图的键: %+v", h.Mirror.pending)
+	}
+}
+
+// Telegram 备份读得太慢时改从来源取；来源也太慢时按时返回失败，不会一直占着执行位。
+func TestSlowBackupAndSourceGiveUpInTime(t *testing.T) {
+	pool := testdb.Pool(t)
+	defer func(previous func(string) waits) { waitsFor = previous }(waitsFor)
+	waitsFor = func(string) waits { return waits{backup: 200 * time.Millisecond, source: 400 * time.Millisecond} }
+
+	var picture bytes.Buffer
+	jpeg.Encode(&picture, image.NewRGBA(image.Rect(0, 0, 300, 450)), nil)
+	raw := "https://img1.doubanio.com/view/photo/m_ratio_poster/public/slow.jpg"
+	pool.Exec(context.Background(), `INSERT INTO image_mirrors (url_hash,original_url,tg_file_id,content_type,bytes) VALUES ($1,$2,'SLOW','image/jpeg',$3)`,
+		hashURL(raw), raw, picture.Len())
+	tg := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/getFile") {
+			io.WriteString(w, `{"ok":true,"result":{"file_path":"documents/slow.jpg"}}`)
+			return
+		}
+		select { // 下载卡住
+		case <-r.Context().Done():
+		case <-time.After(5 * time.Second):
+		}
+	}))
+	defer tg.Close()
+	var originSlow atomic.Bool
+	client := &http.Client{Transport: transportFunc(func(r *http.Request) (*http.Response, error) {
+		if originSlow.Load() {
+			<-r.Context().Done()
+			return nil, r.Context().Err()
+		}
+		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"image/jpeg"}}, Body: io.NopCloser(bytes.NewReader(picture.Bytes()))}, nil
+	})}
+	h := New(client, "secret")
+	h.Mirror = newMirror(pool, telegram.New("TOKEN", "123", tg.URL, nil), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	r := imageRouter(h)
+
+	started := time.Now()
+	w := fetchImage(r, h.URL(raw, "thumb", "慢图", "poster"), nil)
+	if w.Code != 200 || time.Since(started) > 2*time.Second {
+		t.Fatalf("备份卡住时应该很快改从来源取: %d，用了 %v", w.Code, time.Since(started))
+	}
+
+	originSlow.Store(true)
+	other := "https://img1.doubanio.com/view/photo/m_ratio_poster/public/other.jpg"
+	started = time.Now()
+	w = fetchImage(r, h.URL(other, "thumb", "慢图", "poster"), nil)
+	if w.Code != http.StatusBadGateway || time.Since(started) > 2*time.Second || w.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("来源卡住时应该按时失败、且不被缓存: %d %q，用了 %v", w.Code, w.Header().Get("Cache-Control"), time.Since(started))
+	}
+}

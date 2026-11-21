@@ -1,5 +1,8 @@
+{{/* 海报卡片的图片：手机拿 card（约 240 宽），平板和桌面高清屏拿 thumb（540 宽）。
+  sizes 的最后一项故意写成卡片实际宽度（--card-w = 14vw + 52px）的一半：浏览器按"宽度 × 屏幕倍数"挑图，
+  这样手机不管 2 倍、3 倍还是 4 倍屏都会挑 240 的小图（效果相当于按 2 倍屏给图），字节少一半多，肉眼看不出区别。 */}}
 {{define "card"}}<a class="card" href="{{.Href}}" data-id="{{.ID}}" data-title="{{.Title}}" data-meta="{{.Sub}}" data-img="{{img .Poster "thumb" .Title "poster"}}">
-<div class="card-art">{{if .Poster}}<img src="{{img .Poster "thumb" .Title "poster"}}" width="204" height="306" loading="lazy" decoding="async" alt="">{{end}}{{if .Badge}}<span class="badge badge-new">{{.Badge}}</span>{{end}}{{if rating .Rating}}<span class="score-chip">{{rating .Rating}}</span>{{end}}</div>
+<div class="card-art">{{if .Poster}}<img src="{{img .Poster "card" .Title "poster"}}" srcset="{{img .Poster "card" .Title "poster"}} 240w, {{img .Poster "thumb" .Title "poster"}} 540w" sizes="(min-width: 1086px) 204px, (min-width: 720px) calc(14vw + 52px), calc(7vw + 26px)" width="204" height="306" loading="lazy" decoding="async" alt="">{{end}}{{if .Badge}}<span class="badge badge-new">{{.Badge}}</span>{{end}}{{if rating .Rating}}<span class="score-chip">{{rating .Rating}}</span>{{end}}</div>
 <span class="card-title">{{.Title}}</span><span class="card-meta">{{.Sub}}</span></a>{{end}}
 
 {{define "card_wide"}}<a class="card card-wide" href="{{.Href}}" data-no-prerender data-id="{{.ID}}" data-title="{{.Title}}" data-meta="{{.Sub}}" data-img="{{img .Poster "thumb" .Title "poster"}}" data-history="1" data-at="{{.At}}">
@@ -18,7 +21,7 @@
 <div class="rail rail-banner">{{range .Collections}}{{template "collection_card" .}}{{end}}</div></section>{{end}}
 
 {{define "collection_card"}}<a class="card card-banner" href="/list/{{.Slug}}">
-<div class="card-art"><div class="covers">{{range .Covers}}<img src="{{img .URL "thumb" .Title "poster"}}" loading="lazy" decoding="async" alt="">{{end}}</div>
+<div class="card-art"><div class="covers">{{range .Covers}}<img src="{{img .URL "card" .Title "poster"}}" loading="lazy" decoding="async" alt="">{{end}}</div>
 <div class="card-over"><span class="card-title">{{.Title}}</span><span class="card-meta">{{.Count}} 部 · {{.AuthorName}}{{if .Description}} · {{truncate .Description 28}}{{end}}</span></div></div></a>{{end}}
 
 {{define "grid_cards"}}{{range .Cards}}{{template "card" .}}{{end}}{{if .More}}<nav class="pager grid-more" aria-label="作品分页" data-lazy hx-get="{{.More}}" hx-trigger="near once" hx-swap="outerHTML"><a class="btn btn-glass" href="{{.Next}}" rel="next" data-no-prerender>下一页</a></nav>{{end}}{{end}}

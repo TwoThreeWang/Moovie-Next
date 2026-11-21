@@ -20,7 +20,7 @@
 {{define "like_button"}}<button class="like" aria-pressed="{{.C.Liked}}" hx-post="/api/comments/{{.C.ID}}/like" hx-swap="outerHTML" aria-label="点赞"><svg class="i"><use href="#i-heart"/></svg><span>{{.C.Likes}}</span></button>{{end}}
 
 {{define "comment"}}<article class="comment" id="c-{{.C.ID}}">
-{{if .Media}}<a class="comment-media" href="/m/{{.C.MediaID}}">{{if .C.MediaPoster}}<img src="{{img .C.MediaPoster "thumb" .C.MediaTitle "poster"}}" width="48" height="72" loading="lazy" alt="">{{end}}</a>{{end}}
+{{if .Media}}<a class="comment-media" href="/m/{{.C.MediaID}}">{{if .C.MediaPoster}}<img src="{{img .C.MediaPoster "card" .C.MediaTitle "poster"}}" width="48" height="72" loading="lazy" alt="">{{end}}</a>{{end}}
 <div class="comment-body">
 <header><span class="avatar avatar-emoji sm">{{.C.Avatar}}</span>
 <div><b>{{if .C.UserPublic}}<a href="/user/{{.C.UserID}}">{{.C.Username}}</a>{{else}}{{.C.Username}}{{end}}</b>{{if .Media}} 看过 <a href="/m/{{.C.MediaID}}">《{{.C.MediaTitle}}》</a>{{end}}

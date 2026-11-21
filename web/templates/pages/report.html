@@ -12,8 +12,8 @@
 {{if .Report.Percentile}}<div><b>{{.Report.Percentile}}%</b><span>超过的用户</span></div>{{end}}
 </div>
 {{if .Report.Genres}}<section class="card-panel"><h2>最常看的类型</h2><ul class="bars">{{$top := (index .Report.Genres 0).Count}}{{range .Report.Genres}}<li><span>{{.Name}}</span><i style="--p:{{pct (floatOf .Count) (floatOf $top)}}%"></i><b>{{.Count}}</b></li>{{end}}</ul></section>{{end}}
-{{with .Report.Top}}<section class="card-panel top-pick"><h2>本月最爱</h2><a href="/m/{{.MediaID}}">{{if .Poster}}<img src="{{img .Poster "thumb" .Title "poster"}}" width="96" height="144" loading="lazy" alt="">{{end}}<div><b>{{.Title}}</b><span class="stars">{{stars .Rating}}</span></div></a></section>{{end}}
-{{if .Report.Posters}}<section class="card-panel"><h2>海报墙</h2><div class="poster-wall">{{range .Report.Posters}}<img src="{{img .URL "thumb" .Title "poster"}}" loading="lazy" decoding="async" alt="">{{end}}</div></section>{{end}}
+{{with .Report.Top}}<section class="card-panel top-pick"><h2>本月最爱</h2><a href="/m/{{.MediaID}}">{{if .Poster}}<img src="{{img .Poster "card" .Title "poster"}}" width="96" height="144" loading="lazy" alt="">{{end}}<div><b>{{.Title}}</b><span class="stars">{{stars .Rating}}</span></div></a></section>{{end}}
+{{if .Report.Posters}}<section class="card-panel"><h2>海报墙</h2><div class="poster-wall">{{range .Report.Posters}}<img src="{{img .URL "card" .Title "poster"}}" loading="lazy" decoding="async" alt="">{{end}}</div></section>{{end}}
 {{if not .Report.WatchedCount}}<p class="empty">这个月还没有标记看过的作品。</p>{{end}}
 {{template "footer" .}}
 </main>{{end}}

@@ -2,7 +2,7 @@
 {{if .Hero}}<section class="hero" aria-roledescription="carousel" aria-label="精选">
 <div class="hero-track" id="hero-track">
 {{range $i, $m := .Hero}}<div class="slide" aria-roledescription="slide" aria-label="{{add $i 1}} / {{len $.Hero}}">
-<div class="slide-media"><picture><source media="(min-width:720px)" srcset="{{img $m.Backdrop "display" $m.Title "still"}}"><img class="fade" src="{{img $m.Poster "display" $m.Title "poster"}}" width="720" height="900" {{if eq $i 0}}fetchpriority="high"{{else}}loading="lazy"{{end}} decoding="async" alt=""></picture></div>
+<div class="slide-media"><picture>{{if $m.Poster}}<source media="(max-width:719px)" srcset="{{img $m.Poster "hero" $m.Title "poster"}}">{{end}}<source media="(min-width:720px)" srcset="{{img $m.Backdrop "display" $m.Title "still"}}"><img class="fade" src="{{img $m.Poster "display" $m.Title "poster"}}" width="720" height="900" {{if eq $i 0}}fetchpriority="high"{{else}}loading="lazy"{{end}} decoding="async" alt=""></picture></div>
 <div class="slide-body"><p class="kicker">热门{{$m.TypeLabel}}</p>
 <h2 class="slide-title"><a href="/m/{{$m.ID}}">{{$m.Title}}</a></h2>
 <div class="meta">{{if rating $m.Rating}}<span class="score">豆瓣 {{rating $m.Rating}}</span><i class="sep"></i>{{end}}{{if $m.Year}}<span>{{$m.Year}}</span>{{end}}{{if $m.Genres}}<i class="sep"></i><span>{{join (first $m.Genres 3) " / "}}</span>{{end}}</div>
