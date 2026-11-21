@@ -4,6 +4,7 @@ package httpx
 import (
 	"crypto/rand"
 	"crypto/subtle"
+	"encoding/base64"
 	"encoding/hex"
 	"math"
 	"net/http"
@@ -101,14 +102,18 @@ func CSRF() gin.HandlerFunc {
 // 服务器事先不知道是哪些域名。正因为这样，资源站返回的内容在前端一律当作不可信数据处理。
 //
 // scriptHashes 是允许执行的内联脚本的哈希（形如 'sha256-…'），用于 import map。
+//
+// 每个响应还带一个随机 nonce：站点自己不用它，是给 Cloudflare 的 JavaScript Detections 用的。
+// Cloudflare 会在页面末尾插一段内联脚本，内容每次不同、没法算哈希；它会从这个响应头里读出 nonce，
+// 加到自己插入的脚本上。没有 nonce 时那段脚本被 CSP 拦下，控制台报错。
 func SecurityHeaders(dev bool, scriptHashes ...string) gin.HandlerFunc {
 	local := ""
 	if dev {
 		local = " http://localhost:* http://127.0.0.1:*"
 	}
-	csp := strings.Join([]string{
+	before, after, _ := strings.Cut(strings.Join([]string{
 		"default-src 'self'",
-		strings.TrimSpace("script-src 'self' 'inline-speculation-rules' " + strings.Join(scriptHashes, " ")),
+		strings.TrimSpace("script-src 'self' 'nonce-\x00' 'inline-speculation-rules' " + strings.Join(scriptHashes, " ")),
 		"style-src 'self' 'unsafe-inline'",
 		"img-src 'self' data: blob: https:" + local,
 		"media-src 'self' blob: https:" + local,
@@ -118,10 +123,12 @@ func SecurityHeaders(dev bool, scriptHashes ...string) gin.HandlerFunc {
 		"base-uri 'self'",
 		"form-action 'self'",
 		"object-src 'none'",
-	}, "; ")
+	}, "; "), "\x00")
 	return func(c *gin.Context) {
 		header := c.Writer.Header()
-		header.Set("Content-Security-Policy", csp)
+		nonce := make([]byte, 16)
+		_, _ = rand.Read(nonce)
+		header.Set("Content-Security-Policy", before+base64.StdEncoding.EncodeToString(nonce)+after)
 		header.Set("X-Content-Type-Options", "nosniff")
 		header.Set("Referrer-Policy", "same-origin")
 		header.Set("X-Frame-Options", "DENY")

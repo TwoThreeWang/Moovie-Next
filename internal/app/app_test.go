@@ -258,6 +258,12 @@ func TestSecurityHeadersAndCSRF(t *testing.T) {
 	if strings.Contains(csp, "unsafe-eval") || strings.Contains(csp, "http://localhost") {
 		t.Errorf("生产环境的 CSP 不应该放开 eval 和本机地址: %q", csp)
 	}
+	// 每个响应一个新的 nonce，给 Cloudflare 插入的脚本用。
+	nonce := regexp.MustCompile(`script-src [^;]*'nonce-([A-Za-z0-9+/]{22}==)'`)
+	first, second := nonce.FindStringSubmatch(csp), nonce.FindStringSubmatch(s.get("/").header.Get("Content-Security-Policy"))
+	if first == nil || second == nil || first[1] == second[1] {
+		t.Errorf("script-src 里应该有每次不同的 nonce: %q", csp)
+	}
 	// 没有 CSRF 令牌的 POST 被拒绝。
 	blocked := s.do(s.client, http.MethodPost, "/auth/login", strings.NewReader("email=a&password=b"), map[string]string{"Content-Type": "application/x-www-form-urlencoded"})
 	if blocked.status != http.StatusForbidden {
