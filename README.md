@@ -93,6 +93,8 @@ go run ./cmd/testclean
 
 ## 配置
 
+外部元数据接口（豆瓣、TMDB、Wikidata、红果）的单次请求超时为 60 秒，AI 语义描述为 10 分钟，向量接口为 3 分钟。后台任务租约为 15 分钟，防止慢 AI 请求在执行中被回收后重复调用。
+
 根目录 `.env` 是运行和部署的唯一配置入口，完整列表和说明在 [.env.example](.env.example)。Compose 直接使用其中的 `APP_ENV`、`PORT`、`JOBS_IN_WEB`；正式部署时设置 `APP_ENV=production`，只让独立 worker 执行任务时设置 `JOBS_IN_WEB=false`。常用的几组：
 
 | 用途 | 变量 |

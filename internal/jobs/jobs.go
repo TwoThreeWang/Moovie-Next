@@ -48,6 +48,9 @@ var MaxAttempts = len(retryDelays) + 1
 // 免得某个对象一直让对方拒绝（比如豆瓣对某个条目总是返回 403），任务永远在队列里转。
 const postponeLimit = 3 * 24 * time.Hour
 
+// defaultLease 要长于 AI 请求的 10 分钟超时，避免请求仍在执行时被回收并重复调用。
+const defaultLease = 15 * time.Minute
+
 // Queue 读写 jobs 表。
 type Queue struct{ pool *db.Pool }
 
@@ -163,7 +166,7 @@ func (q *Queue) SetProgress(ctx context.Context, jobID int64, progress any) erro
 	if err != nil {
 		return err
 	}
-	_, err = q.pool.Exec(ctx, `UPDATE jobs SET progress = $2, locked_until = now() + interval '10 minutes' WHERE id = $1`, jobID, encoded)
+	_, err = q.pool.Exec(ctx, `UPDATE jobs SET progress = $2, locked_until = now() + make_interval(secs => $3) WHERE id = $1`, jobID, encoded, defaultLease.Seconds())
 	return err
 }
 
@@ -295,7 +298,7 @@ func NewWorker(queue *Queue, concurrency int, log *slog.Logger) *Worker {
 	if concurrency < 1 {
 		concurrency = 1
 	}
-	return &Worker{queue: queue, handlers: map[string]Handler{}, concurrency: concurrency, poll: 2 * time.Second, lease: 10 * time.Minute, log: log}
+	return &Worker{queue: queue, handlers: map[string]Handler{}, concurrency: concurrency, poll: 2 * time.Second, lease: defaultLease, log: log}
 }
 
 // Handle 注册一种任务的处理函数。
