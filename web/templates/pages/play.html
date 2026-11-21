@@ -80,6 +80,7 @@
 <section id="ep-sec"{{if and (not .Local) (not .Episodes)}} hidden{{end}}><h3 class="pl-h">选集<small id="ep-status">{{if not $noMedia}}{{.Status}}{{end}}</small></h3>
 <div class="ep-grid" id="ep-grid">{{if not $noMedia}}{{range .Episodes}}{{if not .Upcoming}}<a href="{{.Href}}" data-ep="{{.Number}}"{{if .Completed}} data-seen{{end}}{{if .Current}} aria-current="true"{{end}} title="{{.Title}}">{{.Number}}</a>{{end}}{{end}}{{end}}</div></section>
 <section id="dm-section"><h3 class="pl-h">弹幕<small id="dm-count"></small></h3><form class="dm-form" id="dm-form"><input name="t" maxlength="50" placeholder="发一条友善的弹幕" autocomplete="off" enterkeyhint="send"><button class="btn btn-primary">发送</button></form></section>
+{{template "side_ads" .SideAds}}
 <section><h3 class="pl-h">来源<small id="src-status">播放失败会自动切换到下一个</small></h3><div class="src" role="radiogroup" id="src"></div>
 <p class="hint src-links"><a href="/settings#sources">管理播放源</a>
 <a id="dl-link" href="#" target="_blank" rel="noopener noreferrer nofollow" referrerpolicy="no-referrer" hidden><svg class="i"><use href="#i-download"/></svg>下载当前视频（第三方）</a></p></section>

@@ -8,6 +8,7 @@
 <a class="chip-l" href="/admin/feedback"{{if eq .Section "feedback"}} aria-current="true"{{end}}>反馈</a>
 <a class="chip-l" href="/admin/fingerprints"{{if eq .Section "fingerprints"}} aria-current="true"{{end}}>广告指纹</a>
 <a class="chip-l" href="/admin/filters"{{if eq .Section "filters"}} aria-current="true"{{end}}>屏蔽词</a>
+<a class="chip-l" href="/admin/ads"{{if eq .Section "ads"}} aria-current="true"{{end}}>广告</a>
 <a class="chip-l" href="/admin/jobs"{{if eq .Section "jobs"}} aria-current="true"{{end}}>任务</a>
 </div>
 {{if .Notice}}<p class="flash ok" role="status">{{.Notice}}</p>{{end}}{{end}}

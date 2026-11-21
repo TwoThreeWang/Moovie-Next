@@ -20,6 +20,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"moovie/internal/ads"
 	"moovie/internal/adskip"
 	"moovie/internal/auth"
 	"moovie/internal/collections"
@@ -66,6 +67,7 @@ type App struct {
 	Positions   *playback.Store
 	Vault       *vault.Store
 	AdSkip      *adskip.Store
+	Ads         *ads.Store
 	Danmaku     *danmaku.Service
 	Recommend   *recommend.Service
 	Reports     *report.Service
@@ -125,7 +127,7 @@ func New(cfg config.Config, pool *db.Pool, log *slog.Logger, options Options) (*
 		Users: auth.NewStore(pool), Media: media.NewStore(pool), Library: library.NewStore(pool),
 		Social: social.NewStore(pool), Collections: collections.NewStore(pool), Feedback: feedback.NewStore(pool),
 		Positions: playback.NewStore(pool), Vault: vault.NewStore(pool), AdSkip: adskip.NewStore(pool),
-		Reports: report.NewService(pool), Queue: jobs.NewQueue(pool), Trends: trends.NewStore(pool),
+		Reports: report.NewService(pool), Queue: jobs.NewQueue(pool), Trends: trends.NewStore(pool), Ads: ads.NewStore(pool),
 		assetV:   strconv.FormatInt(time.Now().Unix(), 36),
 		resolve:  httpx.NewLimiter(120, time.Minute),
 		discover: httpx.NewLimiter(20, time.Minute),

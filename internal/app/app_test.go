@@ -22,6 +22,7 @@ import (
 	"testing"
 	"time"
 
+	"moovie/internal/ads"
 	"moovie/internal/app"
 	"moovie/internal/config"
 	"moovie/internal/db/testdb"
@@ -373,6 +374,7 @@ func TestAllPagesRender(t *testing.T) {
 		"/admin/media?q=回声":                   {"回声"},
 		"/admin/jobs":                         {"任务"},
 		"/admin/filters":                      {"添加屏蔽词"},
+		"/admin/ads":                          {"侧栏广告", "添加广告"},
 		"/admin/feedback":                     {"搜索打不开"},
 		"/admin/collections?status=published": {"2026 最佳"},
 		"/admin/collections/1":                {"下架片单", "年度第一"},
@@ -1581,4 +1583,89 @@ func TestShortDramaPages(t *testing.T) {
 	}
 	found := s.get("/api/htmx/search?q=" + url.QueryEscape("帐中香"))
 	mustContain(t, found, "帐中香第二季", "短剧 · 恋爱")
+}
+
+// 侧栏广告：管理员在后台添加、修改、删除；详情页信息下方、播放页弹幕下方按排序号竖着显示，关着的不显示。
+func TestSideAds(t *testing.T) {
+	s := newSite(t)
+	s.register("evan")
+	film := s.seedMedia("36000003", "有广告的电影", media.TypeMovie, nil)
+	detail, play := "/m/"+itoa(film), "/play/"+itoa(film)
+	if strings.Contains(s.get(detail).body, `class="side-ads"`) {
+		t.Fatal("还没设置广告时不应该有广告位")
+	}
+
+	add := func(values url.Values) reply {
+		t.Helper()
+		return s.form("/admin/ads", values)
+	}
+	if r := add(url.Values{"enabled": {"on"}, "kind": {"image"}, "image_url": {"https://ads.example.com/banner.jpg"}, "text": {"图片说明"},
+		"link": {"https://shop.example.com/?a=1&b=2"}, "position": {"2"}}); r.status != http.StatusSeeOther {
+		t.Fatalf("添加图片广告失败: %d %.300s", r.status, r.body)
+	}
+	add(url.Values{"enabled": {"on"}, "kind": {"text"}, "text": {"文字广告在上面"}, "position": {"1"}})
+	add(url.Values{"kind": {"text"}, "text": {"关着的广告"}, "position": {"0"}})
+
+	for _, path := range []string{detail, play} {
+		body := s.get(path).body
+		block := regexp.MustCompile(`(?s)<aside class="side-ads".*?</aside>`).FindString(body)
+		if block == "" {
+			t.Fatalf("%s 应该有广告位", path)
+		}
+		textAt, imageAt := strings.Index(block, "文字广告在上面"), strings.Index(block, "banner.jpg")
+		if textAt < 0 || imageAt < 0 || textAt > imageAt || strings.Contains(block, "关着的广告") {
+			t.Errorf("%s 应该按排序号显示两条开着的广告:\n%s", path, block)
+		}
+		for _, want := range []string{`href="https://shop.example.com/?a=1&amp;b=2"`, `rel="sponsored noopener nofollow"`, `data-no-prerender`,
+			`alt="图片说明"`, `referrerpolicy="no-referrer"`, `data-fallback="off"`, `>广告</span>`} {
+			if !strings.Contains(block, want) {
+				t.Errorf("%s 的广告缺少 %s:\n%s", path, want, block)
+			}
+		}
+	}
+	playBody := s.get(play).body
+	if dm, ad, src := strings.Index(playBody, `id="dm-section"`), strings.Index(playBody, `class="side-ads"`), strings.Index(playBody, `id="src-status"`); !(dm < ad && ad < src) {
+		t.Error("播放页的广告应该在弹幕下方、来源上方")
+	}
+	detailBody := s.get(detail).body
+	if info, ad := strings.Index(detailBody, `<section class="info">`), strings.Index(detailBody, `class="side-ads"`); !(info >= 0 && info < ad) {
+		t.Error("详情页的广告应该在信息下方")
+	}
+
+	// 填错了：留在表单上显示原因，保留刚填的内容
+	r := add(url.Values{"enabled": {"on"}, "kind": {"image"}, "image_url": {"http://ads.example.com/insecure.jpg"}, "position": {"3"}})
+	if r.status != http.StatusOK || !strings.Contains(r.body, "图片链接要以 https:// 开头") || !strings.Contains(r.body, "http://ads.example.com/insecure.jpg") {
+		t.Errorf("http 图片应该被拒绝并保留填写的内容: %d", r.status)
+	}
+	if r := add(url.Values{"enabled": {"on"}, "kind": {"text"}, "text": {"x"}, "link": {"javascript:alert(1)"}}); !strings.Contains(r.body, "点击链接要以") {
+		t.Error("javascript: 链接应该被拒绝")
+	}
+
+	list, _ := s.app.Ads.List(context.Background(), ads.Sidebar)
+	if len(list) != 3 {
+		t.Fatalf("应该有 3 条广告: %+v", list)
+	}
+	textAd := list[1] // 排序：关着的(0)、文字(1)、图片(2)
+	if r := s.form("/admin/ads/"+itoa(textAd.ID), url.Values{"kind": {"text"}, "text": {"文字广告在上面"}, "position": {"1"}}); r.status != http.StatusSeeOther {
+		t.Fatalf("修改失败: %d", r.status)
+	}
+	if strings.Contains(s.get(detail).body, "文字广告在上面") {
+		t.Error("关掉之后应该马上不显示")
+	}
+	if r := s.form("/admin/ads/"+itoa(list[2].ID)+"/delete", url.Values{}); r.status != http.StatusSeeOther {
+		t.Fatalf("删除失败: %d", r.status)
+	}
+	if strings.Contains(s.get(detail).body, `class="side-ads"`) {
+		t.Error("没有开着的广告时不应该有广告位")
+	}
+	if admin := s.get("/admin/ads").body; !strings.Contains(admin, "已关闭") || !strings.Contains(admin, "关着的广告") {
+		t.Error("后台应该列出所有广告，包括关着的")
+	}
+
+	// 普通用户进不了广告设置
+	s.client = s.browser()
+	s.register("viewer")
+	if r := s.get("/admin/ads"); r.status == http.StatusOK {
+		t.Error("普通用户不应该能打开广告设置")
+	}
 }

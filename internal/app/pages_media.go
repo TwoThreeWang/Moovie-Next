@@ -10,6 +10,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"moovie/internal/ads"
 	"moovie/internal/auth"
 	"moovie/internal/httpx"
 	"moovie/internal/ingest"
@@ -213,6 +214,7 @@ func (a *App) detailPage(c *gin.Context) {
 		}
 		data["Inline"], data["Comments"], data["CommentsMore"], data["Similar"] = true, comments, more, cardViews(similar)
 	}
+	data["SideAds"] = a.Ads.Current(c.Request.Context(), ads.Sidebar)
 	a.render.Page(c, http.StatusOK, "detail.html", data)
 }
 
@@ -251,7 +253,7 @@ func (a *App) playPage(c *gin.Context) {
 		"Title": m.Title + " - 播放", "Nav": "home", "CSS": []string{"player"}, "BodyClass": "player-page",
 		"Scripts": []string{"pages/play.js"},
 		"M":       m, "Client": client, "Episode": episode, "Episodes": episodes, "Status": episodeStatus(m, aired),
-		"Positions": positions, "Entry": entry, "HasEntry": hasEntry,
+		"Positions": positions, "Entry": entry, "HasEntry": hasEntry, "SideAds": a.Ads.Current(c.Request.Context(), ads.Sidebar),
 	})
 }
 
@@ -260,7 +262,7 @@ func (a *App) playPage(c *gin.Context) {
 func (a *App) playLocal(c *gin.Context) {
 	a.render.Page(c, http.StatusOK, "play.html", gin.H{
 		"Title": "播放", "Nav": "home", "CSS": []string{"player"}, "BodyClass": "player-page",
-		"Scripts": []string{"pages/play.js"}, "Local": true,
+		"Scripts": []string{"pages/play.js"}, "Local": true, "SideAds": a.Ads.Current(c.Request.Context(), ads.Sidebar),
 	})
 }
 

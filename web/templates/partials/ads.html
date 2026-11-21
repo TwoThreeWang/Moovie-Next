@@ -1,0 +1,8 @@
+{{/* 自托管广告（见 internal/ads）：播放页弹幕下方、详情页信息下方。每条高 60px，竖着往下排，都标着"广告"。
+  链接在新标签页打开，不参与预加载（data-no-prerender）；图片不带来源页地址。
+  图片加载失败时整条隐藏（app.js），不换成海报的默认图（data-fallback 让 imageGuard 跳过）。 */}}
+{{define "side_ads"}}{{if .}}<aside class="side-ads" aria-label="广告">{{range .}}<div class="ad">
+{{- if .Link}}<a href="{{.Link}}" target="_blank" rel="sponsored noopener nofollow" data-no-prerender>{{template "ad_body" .}}</a>{{else}}{{template "ad_body" .}}{{end -}}
+<span class="ad-tag" aria-hidden="true">广告</span></div>{{end}}</aside>{{end}}{{end}}
+
+{{define "ad_body"}}{{if eq .Kind "image"}}<img src="{{.ImageURL}}" alt="{{.Text}}" height="60" loading="lazy" decoding="async" referrerpolicy="no-referrer" data-fallback="off">{{else}}<span class="ad-text"><span>{{.Text}}</span></span>{{end}}{{end}}

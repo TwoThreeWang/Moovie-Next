@@ -435,6 +435,11 @@ initHero();
 scan(d);
 window.htmx?.onLoad((el) => el !== d.body && scan(el));
 
+// 广告图片加载不出来时整条隐藏，不留一个空框（见 partials/ads.html）。脚本加载前就失败了的也要查一遍。
+const hideBrokenAd = (img) => { const ad = img.closest('.ad'); if (ad) ad.hidden = true; };
+d.addEventListener('error', (ev) => { if (ev.target.tagName === 'IMG') hideBrokenAd(ev.target); }, true);
+for (const img of $$('.ad img')) if (img.complete && !img.naturalWidth) hideBrokenAd(img);
+
 // ---------- 登录后的后台事务 ----------
 if (userId()) {
   sources.refreshSubscription().catch(() => {});

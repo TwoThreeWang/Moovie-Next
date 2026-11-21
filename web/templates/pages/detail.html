@@ -50,6 +50,7 @@
 {{if .M.HongguoID}}<div><dt>来源</dt><dd><a href="https://hongguoduanju.com/detail?series_id={{.M.HongguoID}}" rel="noopener noreferrer" target="_blank">红果短剧</a></dd></div>{{end}}
 {{if .IMDb}}<div><dt>IMDb</dt><dd><a href="https://www.imdb.com/title/{{.IMDb}}/" rel="noopener noreferrer" target="_blank">{{.IMDb}}</a></dd></div>{{end}}
 </dl></section>
+{{template "side_ads" .SideAds}}
 </aside>
 </div>
 <div class="rows">{{if .Inline}}{{if .Similar}}{{template "row" dict "Row" (dict "Title" "相似推荐" "Cards" .Similar "More" (printf "/m/%d/similar" .M.ID))}}{{end}}

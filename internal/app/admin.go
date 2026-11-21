@@ -50,6 +50,10 @@ func (a *App) adminRoutes(r gin.IRouter) {
 	r.GET("/collections", a.adminCollections)
 	r.GET("/collections/:id", a.adminCollectionReview)
 	r.POST("/collections/:id", a.adminCollectionDecision)
+	r.GET("/ads", a.adminAds)
+	r.POST("/ads", a.adminAdCreate)
+	r.POST("/ads/:id", a.adminAdUpdate)
+	r.POST("/ads/:id/delete", a.adminAdDelete)
 }
 
 // adminBack 回到来源页面，并带上一条提示。

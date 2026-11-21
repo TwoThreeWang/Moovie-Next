@@ -42,3 +42,10 @@
 /* 批量操作栏里的输入框，和表单里的输入框一个样子 */
 .bulk-bar input { min-height: 42px; padding: 0 14px; border-radius: 12px; border: 1px solid var(--line); background: var(--surface); color: var(--text); font: inherit; font-size: 14px; }
 .admin nav.pager { margin-top: 16px; }
+
+/* 广告设置：类型单选横排；预览按侧栏的宽度显示，看得出图片会被怎么裁 */
+.ad-kind { display: flex; flex-wrap: wrap; gap: 8px 20px; margin: 0; padding: 0; border: 0; }
+.ad-kind legend { width: 100%; margin-bottom: 6px; font-size: var(--fs-small); color: var(--text-2); }
+.ad-kind label { display: inline-flex !important; align-items: center; gap: 6px; color: var(--text) !important; }
+.ad-preview { max-width: 360px; }
+.ad-edit .inline-form { justify-self: start; }
