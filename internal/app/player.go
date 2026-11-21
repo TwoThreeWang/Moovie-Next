@@ -21,7 +21,8 @@ var playerFAQ = []struct{ Q, A string }{
 // 链接只在浏览器里用（放在 # 后面），服务器只输出页面。
 func (a *App) m3u8Page(c *gin.Context) {
 	seo := a.pageSEO("/m3u8", "免费在线 M3U8 播放器：粘贴 m3u8、HLS 或 MP4 链接直接在浏览器里播放，不用下载软件、不用注册。支持倍速、画中画、记住进度、自动跳过广告，手机电脑都能用。")
-	seo.Title = "在线 M3U8 播放器 - 免费播放 m3u8 / HLS / MP4 链接" // 布局会在后面加上网站名
+	seo.Title = "在线 M3U8 播放器 - 免费播放 m3u8 / HLS / MP4 链接" // prepareHead 会在后面加上站点名
+	seo.Keywords = []string{"M3U8 播放器", "在线 M3U8 播放器", "m3u8 在线播放", "HLS 播放器", "MP4 在线播放", "网页播放器"}
 	questions := make([]map[string]any, 0, len(playerFAQ))
 	for _, item := range playerFAQ {
 		questions = append(questions, map[string]any{"@type": "Question", "name": item.Q, "acceptedAnswer": map[string]any{"@type": "Answer", "text": item.A}})

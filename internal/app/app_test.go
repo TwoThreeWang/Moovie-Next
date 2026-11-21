@@ -51,7 +51,7 @@ func newSite(t *testing.T) *site { return newSiteWith(t, nil) }
 func newSiteWith(t *testing.T, issuer *pow.Issuer, tweaks ...func(*config.Config)) *site {
 	pool := testdb.Pool(t)
 	fake := providerstest.New(t)
-	cfg := config.Config{Env: "production", SiteName: "Moovie", SiteURL: "http://moovie.test", AppSecret: "test-secret", SessionTTL: time.Hour, ContactEmail: "hello@moovie.test"}
+	cfg := config.Config{Env: "production", SiteName: "Moovie 影牛", SiteURL: "http://moovie.test", AppSecret: "test-secret", SessionTTL: time.Hour, ContactEmail: "hello@moovie.test"}
 	for _, tweak := range tweaks {
 		tweak(&cfg)
 	}
@@ -722,7 +722,7 @@ func TestInstallSupport(t *testing.T) {
 		StartURL string `json:"start_url"`
 		Icons    []struct{ Src, Sizes, Purpose string }
 	}
-	if err := json.Unmarshal([]byte(manifest.body), &data); err != nil || len(data.Icons) != 3 || data.StartURL != "/?from=app" || data.Display != "standalone" || data.Name != "Moovie" {
+	if err := json.Unmarshal([]byte(manifest.body), &data); err != nil || len(data.Icons) != 3 || data.StartURL != "/?from=app" || data.Display != "standalone" || data.Name != "Moovie 影牛" {
 		t.Fatalf("应用清单内容不对: %s err=%v", manifest.body, err)
 	}
 	for _, icon := range data.Icons {

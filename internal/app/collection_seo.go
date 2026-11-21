@@ -10,8 +10,9 @@ import (
 
 func (a *App) collectionIndexSEO(order string, page int, list []collections.Collection) SEO {
 	const name = "片单广场"
-	seo := a.pageSEO(collectionIndexURL(order, page), "发现影迷整理的电影与剧集主题片单，浏览选片和推荐语，收藏感兴趣的片单。")
+	seo := a.pageSEO(collectionIndexURL(order, page), "在 "+a.Config.SiteName+"发现影迷整理的电影与剧集主题片单：按题材、导演、心情挑片，看每部作品的推荐语，收藏感兴趣的片单。")
 	seo.Title = name + " - 电影与剧集主题片单"
+	seo.Keywords = []string{"片单", "电影片单", "剧集片单", "片单推荐", "影单", "主题片单"}
 	if order == "hot" {
 		seo.Title = "近 7 天热门片单"
 		seo.NoIndex = true
@@ -37,23 +38,32 @@ func (a *App) collectionIndexSEO(order string, page int, list []collections.Coll
 }
 
 func (a *App) collectionDetailSEO(collection collections.Collection, cards []CardView) SEO {
-	description := clip(collection.Description, 150)
-	if description == "" {
-		description = "《" + collection.Title + "》由 " + collection.AuthorName + " 整理，收录 " + strconv.Itoa(len(cards)) + " 部影视作品"
-		titles := make([]string, 0, 3)
-		for _, card := range firstN(cards, 3) {
-			titles = append(titles, "《"+card.Card.Title+"》")
-		}
-		if len(titles) > 0 {
-			description += "，包括" + strings.Join(titles, "、")
-		}
-		description = clip(description+"。", 150)
+	// 描述：作者写的简介；没写或太短（不到 30 字）时补上作者、作品数和前几部作品。
+	summary := "《" + collection.Title + "》由 " + collection.AuthorName + " 整理，收录 " + strconv.Itoa(len(cards)) + " 部影视作品"
+	titles := make([]string, 0, 3)
+	for _, card := range firstN(cards, 3) {
+		titles = append(titles, "《"+card.Card.Title+"》")
 	}
+	if len(titles) > 0 {
+		summary += "，包括" + strings.Join(titles, "、")
+	}
+	description := clip(collection.Description, descriptionLimit)
+	if count := len([]rune(description)); count == 0 {
+		description = summary + "。"
+	} else if count < 30 {
+		description = strings.TrimRight(description, "。.！!") + "。" + summary + "。"
+	}
+	description = clip(description, descriptionLimit)
 	seo := a.pageSEO("/list/"+collection.Slug, description)
 	seo.Title = collection.Title
 	if !strings.Contains(seo.Title, "片单") {
 		seo.Title += " - 片单"
 	}
+	seo.Keywords = []string{collection.Title, collection.Title + " 片单"}
+	for _, card := range firstN(cards, 4) {
+		seo.Keywords = append(seo.Keywords, card.Card.Title)
+	}
+	seo.Keywords = append(seo.Keywords, "片单推荐")
 	seo.NoIndex = collection.Status != collections.Published || len(cards) == 0
 	if len(collection.Covers) > 0 {
 		cover := collection.Covers[0]

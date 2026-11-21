@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 
@@ -38,10 +39,14 @@ func (a *App) cinemaPage(c *gin.Context) {
 		a.render.NotFound(c)
 		return
 	}
-	seo := a.pageSEO(cinemaURL(following, page), "大家最近看了什么、怎么评价。")
+	seo := a.pageSEO(cinemaURL(following, page), "看看大家最近在 "+a.Config.SiteName+"看了什么：影迷对电影、剧集、综艺和动漫的最新短评与评分，从真实口碑里发现好片。")
+	seo.Title, seo.Keywords = "影院 - 影迷最新短评与评分", []string{"影评", "短评", "电影评分", "剧集评分", "口碑", "好片推荐"}
 	seo.NoIndex = following
+	if following {
+		seo.Title = "影院 · 关注"
+	}
 	if page > 1 {
-		seo.Title = "影院 · 第 " + strconv.Itoa(page) + " 页"
+		seo.Title += " · 第 " + strconv.Itoa(page) + " 页"
 	}
 	data := gin.H{"Title": "影院", "Nav": "discover", "Comments": firstN(comments, pageSize), "Following": following, "SEO": seo}
 	setPager(data, page, len(comments) > pageSize, func(page int) string { return cinemaURL(following, page) })
@@ -203,14 +208,15 @@ type docSection struct {
 }
 
 type doc struct {
-	Title    string
-	Sections []docSection
-	Contact  bool // 页面末尾显示联系方式（反馈页、邮箱）
+	Title       string
+	Description string // 页面描述，{site} 换成站点名
+	Sections    []docSection
+	Contact     bool // 页面末尾显示联系方式（反馈页、邮箱）
 }
 
 // docs 是几个静态说明页的内容。
 var docs = map[string]doc{
-	"about": {Title: "关于", Sections: []docSection{
+	"about": {Title: "关于", Description: "关于 {site}：一个观影管理工具，记录想看和看过、打分写短评、整理片单、追剧集更新、看月度观影报告；作品资料来自豆瓣、TMDB、IMDb 和 Wikidata。", Sections: []docSection{
 		{"这是什么", []string{
 			"这是一个观影管理工具：记录想看和看过、给作品打分写短评、整理片单、追更新、看月度观影报告。",
 			"作品资料来自豆瓣、TMDB、IMDb 和 Wikidata 等公开的影视资料库。",
@@ -220,7 +226,7 @@ var docs = map[string]doc{
 			"站内的播放器是一个通用播放器。如果你有自己的播放源，可以在设置里填写订阅地址，由你的浏览器直接连接这些源。本站的服务器不会访问它们，也不知道你填了什么。",
 		}},
 	}},
-	"terms": {Title: "服务协议", Sections: []docSection{
+	"terms": {Title: "服务协议", Description: "{site}服务协议：账号使用、自行配置的播放源、短评与回复等用户发布内容的责任说明。", Sections: []docSection{
 		{"账号", []string{"你需要对自己账号下的行为负责，并妥善保管密码。", "我们可以在账号被用于违法或滥用行为时暂停或终止服务。"}},
 		{"你自己配置的内容", []string{
 			"播放源完全由你自己配置。你需要确认自己有权访问和使用这些内容，并遵守所在地的法律。",
@@ -228,7 +234,7 @@ var docs = map[string]doc{
 		}},
 		{"你发布的内容", []string{"短评、回复、弹幕等内容由发布者负责。违法、侵权或骚扰他人的内容会被删除。"}},
 	}},
-	"privacy": {Title: "隐私政策", Sections: []docSection{
+	"privacy": {Title: "隐私政策", Description: "{site}隐私政策：我们保存哪些数据、哪些数据只在你的设备上加密保存、公开范围，以及如何导出数据和注销账号。", Sections: []docSection{
 		{"我们保存什么", []string{
 			"账号信息：邮箱、用户名、加密后的密码。",
 			"你的标记：想看、看过、评分、短评、片单。",
@@ -245,7 +251,7 @@ var docs = map[string]doc{
 			"注销：在「设置 → 注销账号」可以注销。账号和它的所有数据会立即删除，无法恢复；你提交过的反馈会保留，但不再和你关联。注销时会给你的邮箱发一封确认邮件。",
 		}},
 	}},
-	"dmca": {Title: "版权投诉", Sections: []docSection{
+	"dmca": {Title: "版权投诉", Description: "{site}版权投诉说明：本站只展示作品资料，不存储、不传输视频文件；认为内容侵权时如何联系我们处理。", Sections: []docSection{
 		{"本站的内容", []string{
 			"本站只展示作品的资料信息（片名、简介、海报等），不存储、不传输任何视频文件，也不提供播放源。",
 		}},
@@ -259,6 +265,6 @@ var docs = map[string]doc{
 func (a *App) docPage(slug string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		a.render.Page(c, http.StatusOK, "doc.html", gin.H{"Title": docs[slug].Title, "Doc": docs[slug], "Bare": auth.Current(c) == nil, "Nav": "me",
-			"ContactEmail": a.Config.ContactEmail, "SEO": a.pageSEO("/"+slug, a.Config.SiteName+"的"+docs[slug].Title+"。")})
+			"ContactEmail": a.Config.ContactEmail, "SEO": a.pageSEO("/"+slug, strings.ReplaceAll(docs[slug].Description, "{site}", a.Config.SiteName))})
 	}
 }

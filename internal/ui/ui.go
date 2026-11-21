@@ -25,6 +25,9 @@ type Renderer struct {
 	common func(c *gin.Context) gin.H
 	image  func(string, string, string, string) string
 
+	// Prepare 在整页渲染前、合并完公共数据后调用，用来补齐只和整页有关的数据（比如 <head> 里的标题和描述）。
+	Prepare func(c *gin.Context, data gin.H)
+
 	mu       sync.RWMutex
 	pages    map[string]*template.Template
 	partials *template.Template
@@ -94,7 +97,7 @@ func (r *Renderer) data(c *gin.Context, data gin.H) gin.H {
 // 每次都新建的话，缓冲从小到大翻倍扩容，实际要分配好几倍的量。
 var buffers = sync.Pool{New: func() any { return new(bytes.Buffer) }}
 
-func (r *Renderer) execute(c *gin.Context, status int, tmpl *template.Template, name string, data gin.H) {
+func (r *Renderer) execute(c *gin.Context, status int, tmpl *template.Template, name string, merged gin.H) {
 	buffer := buffers.Get().(*bytes.Buffer)
 	buffer.Reset()
 	defer func() {
@@ -102,7 +105,7 @@ func (r *Renderer) execute(c *gin.Context, status int, tmpl *template.Template, 
 			buffers.Put(buffer)
 		}
 	}()
-	if err := tmpl.ExecuteTemplate(buffer, name, r.data(c, data)); err != nil {
+	if err := tmpl.ExecuteTemplate(buffer, name, merged); err != nil {
 		c.Error(err)
 		c.String(http.StatusInternalServerError, "页面渲染失败")
 		return
@@ -125,7 +128,11 @@ func (r *Renderer) Page(c *gin.Context, status int, name string, data gin.H) {
 		c.String(http.StatusInternalServerError, "模板不存在: "+name)
 		return
 	}
-	r.execute(c, status, page, "layout", data)
+	merged := r.data(c, data)
+	if r.Prepare != nil {
+		r.Prepare(c, merged)
+	}
+	r.execute(c, status, page, "layout", merged)
 }
 
 // Partial 渲染一个片段（给 HTMX 用）。
@@ -139,7 +146,7 @@ func (r *Renderer) Partial(c *gin.Context, name string, data gin.H) {
 	r.mu.RLock()
 	partials := r.partials
 	r.mu.RUnlock()
-	r.execute(c, http.StatusOK, partials, name, data)
+	r.execute(c, http.StatusOK, partials, name, r.data(c, data))
 }
 
 // NotFound 渲染 404 页面。

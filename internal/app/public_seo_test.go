@@ -139,3 +139,49 @@ func TestMediaSeasonStructuredData(t *testing.T) {
 		t.Errorf("电影应保留自身的 IMDb 对应条目: %+v", work)
 	}
 }
+
+// 每个页面的 <head>：标题统一带站点名，公开页面有描述、关键词、canonical、Open Graph 和 Twitter Card，私有页面 noindex。
+func TestHeadMeta(t *testing.T) {
+	s := newSite(t)
+	show := s.seedMedia("36000201", "雾港", media.TypeTV, media.Patch{"actors": []string{"陈默"}})
+
+	home := s.get("/")
+	mustContain(t, home, "<title>Moovie 影牛 - 发现你的下一部电影</title>", `<meta name="description" content="Moovie 影牛：发现你的下一部电影。`,
+		`<meta name="keywords" content="电影推荐,`, `,Moovie 影牛">`, `<link rel="canonical" href="http://moovie.test/">`,
+		`<meta property="og:title" content="Moovie 影牛 - 发现你的下一部电影">`, `<meta property="og:site_name" content="Moovie 影牛">`,
+		`<meta name="twitter:card" content="summary">`, `<meta property="og:image" content="http://moovie.test/static/img/icon-512.png">`)
+
+	detail := s.get("/m/" + itoa(show))
+	mustContain(t, detail, "<title>雾港（2026） - 剧集简介、演员表、短评 - Moovie 影牛</title>",
+		`<meta name="keywords" content="雾港,雾港 2026,雾港剧集,剧集,悬疑,陈默,Moovie 影牛">`,
+		`<meta property="og:title" content="雾港（2026） - 剧集简介、演员表、短评">`, `<meta property="og:type" content="video.tv_show">`,
+		`<meta name="twitter:card" content="summary_large_image">`, "台风季的港城")
+
+	for path, title := range map[string]string{
+		"/discover/movie":     "热门电影推荐 - 按类型、年代和评分筛选 - Moovie 影牛",
+		"/discover":           "发现好片 - 热门电影、剧集、综艺和动漫推荐 - Moovie 影牛",
+		"/search":             "搜索电影、剧集、综艺和动漫 - Moovie 影牛",
+		"/search?q=%E9%9B%BE": "“雾”的搜索结果 - Moovie 影牛",
+		"/list":               "片单广场 - 电影与剧集主题片单 - Moovie 影牛",
+		"/cinema":             "影院 - 影迷最新短评与评分 - Moovie 影牛",
+		"/trends":             "影视热搜榜 - 大家都在搜的电影和剧集 - Moovie 影牛",
+		"/about":              "关于 - Moovie 影牛",
+	} {
+		r := s.get(path)
+		mustContain(t, r, "<title>"+title+"</title>", `<meta name="description" content="`, `<meta name="keywords" content="`,
+			`<link rel="canonical"`, `<meta property="og:description"`, `<meta name="twitter:title"`)
+	}
+
+	login := s.get("/auth/login")
+	mustContain(t, login, "<title>登录 - Moovie 影牛</title>", `<meta name="robots" content="noindex">`, `<meta name="description" content="Moovie 影牛：`)
+	for _, unwanted := range []string{"og:title", `rel="canonical"`} {
+		if strings.Contains(login.body, unwanted) {
+			t.Errorf("登录页不应该有 %q", unwanted)
+		}
+	}
+	s.register("viewer")
+	for _, path := range []string{"/me", "/settings", "/notifications", "/feedback"} {
+		mustContain(t, s.get(path), `<meta name="robots" content="noindex">`)
+	}
+	mustContain(t, s.get("/"), "<title>Moovie 影牛 - 发现你的下一部电影</title>")
+}

@@ -20,9 +20,11 @@ import (
 // 公开页面（不登录也能看）的搜索引擎优化、相似推荐、热搜榜。
 
 // SEO 是页面给搜索引擎和分享卡片用的信息。没有设置 SEO 的页面（登录后才有的页面）一律 noindex。
+// 站点名后缀、默认描述和长度限制在 prepareHead（head.go）里统一处理，这里只放页面自己的内容。
 type SEO struct {
-	Title       string // 搜索结果里显示的标题；为空时用页面标题
+	Title       string // 搜索结果里显示的标题，不带站点名；为空时用页面标题
 	Description string
+	Keywords    []string // 页面自己的关键词；站点名和通用关键词会自动补上
 	Canonical   string
 	Image       string
 	ImageAlt    string
@@ -154,12 +156,28 @@ func (a *App) mediaSEO(m media.Media) SEO {
 	}
 	crumbs := breadcrumbs([][2]string{{"首页", a.absolute("/")}, {section, a.absolute(sectionPath)}, {m.Title, url}})
 	return SEO{
-		Title: title, Description: clip(description, 150), Canonical: url, Image: image, ImageAlt: "《" + m.Title + "》海报", Type: ogType,
+		Title: title, Description: clip(description, descriptionLimit), Keywords: mediaKeywords(m),
+		Canonical: url, Image: image, ImageAlt: "《" + m.Title + "》海报", Type: ogType,
 		// 资料还没补全的作品内容太少，先不让收录
 		// 短剧先不让搜索引擎收录：简介是从红果原样来的，收录了也排不过官网，反而容易招来投诉。
 		NoIndex: m.MetadataStatus != "complete" || m.Title == "" || m.IsShort(),
 		JSONLD:  map[string]any{"@context": "https://schema.org", "@graph": []any{work, crumbs}},
 	}
+}
+
+// mediaKeywords 是作品详情页的关键词：片名、原名、"片名 年份"、类型、题材、导演和主演。
+func mediaKeywords(m media.Media) []string {
+	words := []string{m.Title}
+	if m.OriginalTitle != "" && m.OriginalTitle != m.Title {
+		words = append(words, m.OriginalTitle)
+	}
+	if m.Year > 0 {
+		words = append(words, m.Title+" "+strconv.Itoa(m.Year))
+	}
+	words = append(words, m.Title+m.TypeLabel(), m.TypeLabel())
+	words = append(words, firstN(m.Genres, 2)...)
+	words = append(words, firstN(m.Directors, 1)...)
+	return append(words, firstN(m.Actors, 2)...)
 }
 
 func mediaSeriesSchema(m media.Media) map[string]any {
@@ -189,10 +207,12 @@ func breadcrumbs(items [][2]string) map[string]any {
 	return map[string]any{"@type": "BreadcrumbList", "itemListElement": list}
 }
 
-// siteSEO 是首页的 SEO：告诉搜索引擎站点叫什么。
-func (a *App) siteSEO(description string) SEO {
-	seo := a.pageSEO("/", description)
-	seo.JSONLD = map[string]any{"@context": "https://schema.org", "@type": "WebSite", "name": a.Config.SiteName, "url": a.absolute("/"), "inLanguage": "zh-CN"}
+// siteSEO 是首页的 SEO：标题和描述用站点的（见 head.go），结构化数据告诉搜索引擎站点叫什么。
+func (a *App) siteSEO() SEO {
+	seo := a.pageSEO("/", a.siteDescription())
+	seo.Keywords = []string{"电影推荐", "剧集推荐", "影视资料", "影评", "片单", "追剧", "观影记录"}
+	seo.JSONLD = map[string]any{"@context": "https://schema.org", "@type": "WebSite", "name": a.Config.SiteName, "url": a.absolute("/"),
+		"description": a.siteDescription(), "inLanguage": "zh-CN"}
 	return seo
 }
 
@@ -212,7 +232,7 @@ func (a *App) similarPage(c *gin.Context) {
 		a.fail(c, err)
 		return
 	}
-	seo := a.pageSEO(mediaHref(m.ID)+"/similar", fmt.Sprintf("喜欢《%s》的人可能也喜欢的%d部作品。", m.Title, len(cards)))
+	seo := a.pageSEO(mediaHref(m.ID)+"/similar", fmt.Sprintf("喜欢《%s》的人可能也喜欢的作品：根据类型、导演、演员和剧情推荐的相似电影和剧集。", m.Title))
 	seo.Image = a.absolute(a.images.URL(m.Poster, "display", m.Title, "poster"))
 	seo.NoIndex = true // 内容是详情页的延伸，不单独收录；里面的链接照常跟踪
 	a.render.Page(c, http.StatusOK, "grid.html", gin.H{
@@ -283,9 +303,14 @@ func (a *App) trendsPage(c *gin.Context) {
 		a.fail(c, err)
 		return
 	}
+	seo := a.pageSEO("/trends", a.Config.SiteName+"影视热搜榜：大家"+label+"都在搜哪些电影、剧集、综艺和动漫，按搜索人数实时排行，也可以切换查看"+map[bool]string{true: "今天", false: "本周"}[days > 1]+"的热搜。")
+	seo.Title, seo.Keywords = "影视热搜榜 - 大家都在搜的电影和剧集", []string{"影视热搜榜", "电影热搜", "电视剧热搜", "热门电影", "热门剧集"}
+	if days > 1 {
+		seo.Canonical = a.absolute("/trends?range=week")
+		seo.Title = "本周影视热搜榜 - 大家都在搜的电影和剧集"
+	}
 	a.render.Page(c, http.StatusOK, "trends.html", gin.H{
-		"Title": "热搜榜", "Nav": "trends", "Keywords": keywords, "Week": days > 1, "Label": label,
-		"SEO": a.pageSEO("/trends", "大家最近都在搜什么：电影、剧集、综艺、动漫的实时热搜榜。"),
+		"Title": "热搜榜", "Nav": "trends", "Keywords": keywords, "Week": days > 1, "Label": label, "SEO": seo,
 	})
 }
 

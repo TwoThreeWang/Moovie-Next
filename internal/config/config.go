@@ -82,7 +82,7 @@ func Load() (Config, error) {
 	cfg := Config{
 		Env:               get("APP_ENV", "development"),
 		Port:              get("PORT", "5200"),
-		SiteName:          get("SITE_NAME", "Moovie"),
+		SiteName:          get("SITE_NAME", "Moovie 影牛"),
 		SiteURL:           strings.TrimRight(get("SITE_URL", "http://localhost:5200"), "/"),
 		AppSecret:         get("APP_SECRET", ""),
 		SessionTTL:        time.Duration(getInt("SESSION_HOURS", 720)) * time.Hour,

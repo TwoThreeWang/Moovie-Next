@@ -1,6 +1,7 @@
 package app
 
 import (
+	"cmp"
 	"context"
 	"net/http"
 	"net/url"
@@ -20,8 +21,10 @@ import (
 func (a *App) publicRoutes(r gin.IRouter) {
 	r.GET("/", a.index)
 	r.GET("/install", func(c *gin.Context) {
+		seo := a.pageSEO("/install", "把 "+a.Config.SiteName+"添加到 iPhone、安卓手机或电脑的桌面：不用下载安装包，点图标就能像 App 一样全屏打开。按设备分步骤说明，安卓和电脑支持一键安装。")
+		seo.Title, seo.Keywords = "添加到桌面 - iPhone、安卓和电脑安装教程", []string{"添加到桌面", "添加到主屏幕", "PWA 安装", "网页 App"}
 		a.render.Page(c, http.StatusOK, "install.html", gin.H{"Title": "添加到桌面", "Nav": "me", "Bare": auth.Current(c) == nil, "Scripts": []string{"pages/install.js"},
-			"SEO": a.pageSEO("/install", "把"+a.Config.SiteName+"添加到 iPhone、安卓手机或电脑的桌面，像 App 一样全屏打开。")})
+			"SEO": seo})
 	})
 	r.GET("/changelog", a.changelogPage)
 	for slug := range docs {
@@ -113,8 +116,7 @@ func (a *App) memberRoutes(r gin.IRouter) {
 func (a *App) index(c *gin.Context) {
 	user := auth.Current(c)
 	if user == nil {
-		a.render.Page(c, http.StatusOK, "landing.html", gin.H{"Title": a.Config.SiteName + " · 你的观影管家", "Bare": true,
-			"SEO": a.siteSEO("记录想看和看过，追剧集更新，看热门榜单和相似推荐，每个月一份观影报告。")})
+		a.render.Page(c, http.StatusOK, "landing.html", gin.H{"Title": a.Config.SiteName, "Bare": true, "SEO": a.siteSEO()})
 		return
 	}
 	ctx := c.Request.Context()
@@ -138,7 +140,7 @@ func (a *App) index(c *gin.Context) {
 		return
 	}
 	a.render.Page(c, http.StatusOK, "home.html", gin.H{
-		"Title": a.Config.SiteName, "Nav": "home", "Hero": hero,
+		"Title": a.Config.SiteName, "Nav": "home", "Hero": hero, "SEO": a.siteSEO(),
 		"Recent": wideViews(recent), "Today": today, "Scripts": []string{"pages/home.js"},
 	})
 }
@@ -308,6 +310,45 @@ func discoverCardsData(cards []media.Card, filter media.Filter, page int) gin.H 
 	return data
 }
 
+// discoverSEO 是发现页的 SEO。标题按人们的搜索方式写（"热门电影推荐"、"高分悬疑电影推荐"）。
+// 只有默认排序、没有题材和年代筛选的分类页允许收录；短剧不收录。
+func (a *App) discoverSEO(filter media.Filter, page int) SEO {
+	label := media.TypeLabel(filter.Type)
+	subject := label
+	if subject == "" {
+		subject = "影视"
+	}
+	if filter.Genre != "" {
+		subject = filter.Genre + label
+	}
+	if filter.Form != "" {
+		subject = filter.Form
+	}
+	if filter.Decade > 0 {
+		subject = strconv.Itoa(filter.Decade) + " 年代" + subject
+	}
+	order := map[string]string{"rating": "高分", "new": "最新"}[filter.Sort]
+	if order == "" {
+		order = "热门"
+	}
+	seo := a.pageSEO(discoverPageURL(filter, page, false), "浏览 "+a.Config.SiteName+"收录的"+order+subject+
+		"：按类型、题材、年代和评分筛选，查看每部作品的简介、演员表、评分和短评，找到下一部想看的"+cmp.Or(label, "好片")+"。")
+	seo.Title = order + subject + "推荐 - 按类型、年代和评分筛选"
+	seo.Keywords = []string{order + subject, subject + "推荐", "高分" + subject, subject + "排行榜", label, filter.Genre}
+	if filter.Type == "" && filter.Genre == "" && filter.Decade == 0 {
+		seo.Title = "发现好片 - " + order + "电影、剧集、综艺和动漫推荐"
+		seo.Description = "在 " + a.Config.SiteName + "发现" + order + "的电影、剧集、综艺和动漫：按类型、题材、年代和评分筛选，查看简介、演员表、评分和短评，找到下一部想看的好片。"
+		seo.Keywords = []string{"发现好片", "电影推荐", "剧集推荐", "综艺推荐", "动漫推荐", order + "影视"}
+	}
+	seo.NoIndex = filter.Type == media.TypeShort || filter.Genre != "" || filter.Decade > 0 || filter.Sort != "hot"
+	if page > 1 {
+		label := "第 " + strconv.Itoa(page) + " 页"
+		seo.Title += " · " + label
+		seo.Description = label + "：" + seo.Description
+	}
+	return seo
+}
+
 func (a *App) discoverPage(c *gin.Context) {
 	mediaType := c.Param("type")
 	page, offset, valid := httpx.ParsePage(c.Query("page"), discoverPageSize)
@@ -335,12 +376,7 @@ func (a *App) discoverPage(c *gin.Context) {
 	if filter.Form != "" {
 		title = filter.Form + " · " + title
 	}
-	seo := a.pageSEO(discoverPageURL(filter, page, false),
-		"按类型、题材、年代浏览热门和高分的"+strings.TrimPrefix(title, "发现")+"作品。")
-	seo.NoIndex = mediaType == media.TypeShort || filter.Genre != "" || filter.Decade > 0 || filter.Sort != "hot"
-	if page > 1 {
-		seo.Title = title + " · 第 " + strconv.Itoa(page) + " 页"
-	}
+	seo := a.discoverSEO(filter, page)
 	data := discoverCardsData(cards, filter, page)
 	data["Title"], data["Nav"], data["SEO"] = title, "discover", seo
 	data["Types"], data["Genres"], data["Filter"] = media.Types, Genres, filter
@@ -404,10 +440,16 @@ func (a *App) searchPage(c *gin.Context) {
 		}
 		trending = nil
 	}
-	seo := a.pageSEO("/search", "搜索电影、剧集、综艺和动漫。")
-	seo.NoIndex = strings.TrimSpace(c.Query("q")) != "" // 搜索结果页不收录
+	query := strings.TrimSpace(c.Query("q"))
+	seo := a.pageSEO("/search", "在 "+a.Config.SiteName+"搜索电影、剧集、综艺、动漫和短剧：按片名、演员或导演查找作品，查看简介、演员表和短评，还能看到大家正在搜的热门关键词。")
+	seo.Title, seo.Keywords = "搜索电影、剧集、综艺和动漫", []string{"影视搜索", "电影搜索", "电视剧搜索", "找电影", "演员搜索"}
+	if query != "" { // 搜索结果页不收录
+		seo.Title, seo.NoIndex = "“"+clip(query, 30)+"”的搜索结果", true
+		seo.Description = "在 " + a.Config.SiteName + "搜索“" + clip(query, 30) + "”相关的电影、剧集、综艺和动漫，查看简介、演员表和短评。"
+		seo.Keywords = []string{query}
+	}
 	a.render.Page(c, http.StatusOK, "search.html", gin.H{
-		"Title": "搜索", "Nav": "search", "Query": strings.TrimSpace(c.Query("q")), "Hot": hot, "Trending": trending,
+		"Title": "搜索", "Nav": "search", "Query": query, "Hot": hot, "Trending": trending,
 		"Scripts": []string{"pages/search.js"}, "SEO": seo,
 	})
 }

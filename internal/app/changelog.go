@@ -116,5 +116,5 @@ var releases = []release{
 
 func (a *App) changelogPage(c *gin.Context) {
 	a.render.Page(c, http.StatusOK, "changelog.html", gin.H{"Title": "更新记录", "Nav": "me", "Releases": releases, "Kinds": changeKinds,
-		"Bare": false, "SEO": a.pageSEO("/changelog", "影牛的所有重要更新、修改和修复。")})
+		"Bare": false, "SEO": a.pageSEO("/changelog", a.Config.SiteName+"的版本更新记录：每个版本的新功能、改进和问题修复。")})
 }

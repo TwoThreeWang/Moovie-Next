@@ -212,6 +212,7 @@ func New(cfg config.Config, pool *db.Pool, log *slog.Logger, options Options) (*
 	if err != nil {
 		return nil, fmt.Errorf("加载模板: %w", err)
 	}
+	renderer.Prepare = app.prepareHead
 	app.render = renderer
 	return app, nil
 }
