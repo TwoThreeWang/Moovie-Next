@@ -2,10 +2,10 @@
 {{if .Bare}}<a class="nav-brand" href="/"><img class="brand-icon" src="/static/img/apple-touch-icon.png" width="40" height="40" alt=""><span class="brand-t">{{.Site}}</span></a>{{end}}
 <h1 class="page-title">{{.Doc.Title}}</h1>
 {{range .Doc.Sections}}<section><h2>{{.Heading}}</h2>{{range .Body}}<p>{{.}}</p>{{end}}</section>{{end}}
-{{if .Doc.Contact}}<section class="contact-ways"><h2>联系方式</h2>
+{{with .Doc.Contact}}<section class="contact-ways"><h2>联系方式</h2>
 <div class="contact-grid">
-<a class="card-panel contact-way" href="/feedback?kind=dmca"><svg class="i"><use href="#i-chat"/></svg><b>在线提交</b><span class="hint">在反馈页选择“版权投诉”。需要登录，处理进度会在通知里告诉你。</span></a>
-{{if .ContactEmail}}<a class="card-panel contact-way" href="mailto:{{.ContactEmail}}?subject={{"版权投诉" | urlquery}}"><svg class="i"><use href="#i-link"/></svg><b>发送邮件</b><span class="hint">{{.ContactEmail}}<br>不需要注册账号，适合权利人或代理机构。</span></a>{{end}}
+<a class="card-panel contact-way" href="/feedback{{with .FeedbackKind}}?kind={{.}}{{end}}"><svg class="i"><use href="#i-chat"/></svg><b>在线提交</b><span class="hint">{{.FeedbackHint}}</span></a>
+{{if $.ContactEmail}}<a class="card-panel contact-way" href="mailto:{{$.ContactEmail}}?subject={{.MailSubject | urlquery}}"><svg class="i"><use href="#i-link"/></svg><b>发送邮件</b><span class="hint">{{$.ContactEmail}}<br>{{.MailHint}}</span></a>{{end}}
 </div></section>{{end}}
 {{template "footer" .}}
 </main>{{end}}
