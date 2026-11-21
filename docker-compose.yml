@@ -1,5 +1,15 @@
 # docker compose up -d --build；数据库、Ollama、WARP 使用 postgres_default 网络里的已有服务。
-# 环境变量从宿主机的 .env 和 deploy/*.env 读取，配置说明见 deploy/README.md。
+# 根目录 .env 是唯一配置入口；这里只做各容器的变量映射，说明见 deploy/README.md。
+x-proxy-env: &proxy-env
+  HTTP_PROXY: "${HTTP_PROXY-${OUTBOUND_PROXY-}}"
+  HTTPS_PROXY: "${HTTPS_PROXY-${OUTBOUND_PROXY-}}"
+  NO_PROXY: "${NO_PROXY-}"
+
+x-app-env: &app-env
+  <<: *proxy-env
+  APP_ENV: "${APP_ENV:-production}"
+  JOBS_IN_WEB: "${JOBS_IN_WEB:-false}"
+
 x-runtime: &runtime
   restart: unless-stopped
   networks: [postgres_default]
@@ -10,6 +20,7 @@ x-runtime: &runtime
 x-app: &app
   <<: *runtime
   image: moovie:local
+  env_file: .env
   stop_grace_period: 20s
   read_only: true
   tmpfs: ["/tmp:size=64m,mode=1777"]
@@ -21,26 +32,33 @@ services:
     <<: *app
     build: .
     container_name: moovie-web
-    env_file: [.env, ./deploy/web.env]
+    environment:
+      <<: *app-env
+      PORT: "${PORT:-5007}"
+      DB_MAX_CONNS: "${WEB_DB_MAX_CONNS:-${DB_MAX_CONNS:-12}}"
+      GOMEMLIMIT: "${WEB_GO_MEMORY_LIMIT:-${GOMEMLIMIT:-400MiB}}"
     ports:
-      - "${WEB_BIND:-127.0.0.1}:5008:5008"
-    mem_limit: "${WEB_MEMORY_LIMIT:-512m}"
+      - "${WEB_BIND:-127.0.0.1}:${PORT:-5007}:${PORT:-5007}"
+    mem_limit: "${WEB_MEMORY_LIMIT:-2048m}"
     cpus: "${WEB_CPU_LIMIT:-2.0}"
     pids_limit: 256
     healthcheck:
-      test: ["CMD", "wget", "--quiet", "--spider", "http://127.0.0.1:5008/healthz"]
-      interval: 30s
+      test: ["CMD", "wget", "--quiet", "--spider", "http://127.0.0.1:${PORT:-5007}/healthz"]
+      interval: 60s
       timeout: 5s
       retries: 3
-      start_period: 20s
+      start_period: 30s
 
   worker:
     <<: *app
     container_name: moovie-worker
     entrypoint: ["./worker"]
-    env_file: [.env, ./deploy/worker.env]
-    mem_limit: "${WORKER_MEMORY_LIMIT:-256m}"
-    cpus: "${WORKER_CPU_LIMIT:-1.0}"
+    environment:
+      <<: *app-env
+      DB_MAX_CONNS: "${WORKER_DB_MAX_CONNS:-${DB_MAX_CONNS:-6}}"
+      GOMEMLIMIT: "${WORKER_GO_MEMORY_LIMIT:-${GOMEMLIMIT:-200MiB}}"
+    mem_limit: "${WORKER_MEMORY_LIMIT:-1024m}"
+    cpus: "${WORKER_CPU_LIMIT:-1.5}"
     pids_limit: 128
 
   # 只供网站内网调用，不对外开端口，也不加载含数据库、邮件等密钥的 .env。
@@ -48,10 +66,20 @@ services:
     <<: *runtime
     image: logvar/danmu-api:latest
     container_name: moovie-danmu
-    env_file: ./deploy/danmu.env
+    environment:
+      <<: *proxy-env
+      TOKEN: "${TOKEN-${DANMU_API_TOKEN:-changeme}}"
+      # 所有请求来自网站的内网 IP，访客限流由网站负责。
+      RATE_LIMIT_MAX_REQUESTS: "${RATE_LIMIT_MAX_REQUESTS:-0}"
+      COMMENT_CACHE_MINUTES: "${COMMENT_CACHE_MINUTES:-60}"
+      SEARCH_CACHE_MINUTES: "${SEARCH_CACHE_MINUTES:-30}"
+      DANMU_LIMIT: "${DANMU_LIMIT:-5}"
+      LIKE_SWITCH: "${LIKE_SWITCH:-false}"
+      LOG_LEVEL: "${LOG_LEVEL:-warn}"
+      TZ: "${TZ:-Asia/Shanghai}"
     volumes:
       - ./data/danmu-cache:/app/.cache
-    mem_limit: 512m
+    mem_limit: "${DANMU_MEMORY_LIMIT:-512m}"
 
 networks:
   postgres_default:

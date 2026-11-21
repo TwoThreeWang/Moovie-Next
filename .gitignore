@@ -5,3 +5,4 @@
 /deploy/mihomo/config.yaml
 /deploy/mihomo/providers/
 /data/
+.DS_Store
