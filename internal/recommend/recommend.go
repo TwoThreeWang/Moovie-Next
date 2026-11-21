@@ -6,8 +6,11 @@ package recommend
 
 import (
 	"context"
+	"strconv"
 	"sync"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 
 	"moovie/internal/db"
 	"moovie/internal/media"
@@ -71,21 +74,29 @@ func (s *Service) Invalidate(_ context.Context, userID int64) error {
 const seen = `(SELECT media_id FROM user_movies WHERE user_id = $1
 UNION SELECT media_id FROM playback_positions WHERE user_id = $1)`
 
+// candidates 是向量检索先取的最近邻个数，过滤掉看过的、同系列的、没海报的以后再取前面的。
+// HNSW 每次最多返回 hnsw.ef_search 个结果（默认 40），所以查询前把它调到同样大。
+const candidates = 400
+
 // Compute 计算推荐的作品 ID，不读写缓存。三种办法依次补充，直到凑够数量：
 // 向量相似 → 用户常看的类型里的高分作品 → 热门榜。
 func (s *Service) Compute(ctx context.Context, userID int64, limit int) ([]int64, error) {
+	result := []int64{}
+	added := map[int64]bool{}
+	add := func(ids []int64) {
+		for _, id := range ids {
+			if !added[id] && len(result) < limit {
+				added[id] = true
+				result = append(result, id)
+			}
+		}
+	}
+	similar, err := s.similar(ctx, userID, limit)
+	if err != nil {
+		return nil, err
+	}
+	add(similar)
 	queries := []string{
-		// 1. 向量：喜欢的作品 = 想看的 + 评分 ≥ 4 或没评分的看过。
-		`WITH liked AS (
-  SELECT m.embedding FROM user_movies um JOIN media m ON m.id = um.media_id
-  WHERE um.user_id = $1 AND m.embedding IS NOT NULL AND (um.status = 'wish' OR um.rating >= 4 OR um.rating = 0)
-  ORDER BY um.updated_at DESC LIMIT 40
-), taste AS (SELECT avg(embedding) AS v FROM liked)
-SELECT m.id FROM media m, taste
-WHERE taste.v IS NOT NULL AND m.embedding IS NOT NULL AND NOT m.hidden AND m.poster <> ''
-AND m.id NOT IN ` + seen + `
-AND m.series_key NOT IN (SELECT m2.series_key FROM media m2 WHERE m2.id IN ` + seen + `)
-ORDER BY m.embedding <=> taste.v LIMIT $2`,
 		// 2. 类型：用户标记最多的三个类型里的高分作品。
 		`WITH favorite AS (
   SELECT genre FROM user_movies um JOIN media m ON m.id = um.media_id, unnest(m.genres) AS genre
@@ -99,28 +110,55 @@ ORDER BY m.rating_douban DESC, m.id DESC LIMIT $2`,
 		`SELECT c.media_id FROM chart_items c JOIN media m ON m.id = c.media_id
 WHERE NOT m.hidden AND m.media_type <> 'short' AND c.media_id NOT IN ` + seen + ` GROUP BY c.media_id ORDER BY min(c.rank), c.media_id LIMIT $2`,
 	}
-	result := []int64{}
-	added := map[int64]bool{}
 	for _, query := range queries {
-		ids, err := s.ids(ctx, query, userID, limit)
-		if err != nil {
-			return nil, err
-		}
-		for _, id := range ids {
-			if !added[id] && len(result) < limit {
-				added[id] = true
-				result = append(result, id)
-			}
-		}
 		if len(result) >= limit {
 			break
 		}
+		ids, err := s.ids(ctx, s.pool, query, userID, limit)
+		if err != nil {
+			return nil, err
+		}
+		add(ids)
 	}
 	return result, nil
 }
 
-func (s *Service) ids(ctx context.Context, sql string, args ...any) ([]int64, error) {
-	rows, err := s.pool.Query(ctx, sql, args...)
+// similar 是第 1 种办法：把用户喜欢的作品（想看的 + 评分 ≥ 4 或没评分的看过）的向量取平均，找最接近的作品。
+//
+// 平均向量先单独算出来，再作为参数传给最近邻查询：排序依据必须是常量，HNSW 索引才用得上；
+// 写成同一条查询里的子查询结果，就会对全库每一部有向量的作品算一遍距离再排序，作品多了要好几秒。
+func (s *Service) similar(ctx context.Context, userID int64, limit int) ([]int64, error) {
+	var taste *string
+	if err := s.pool.QueryRow(ctx, `SELECT avg(embedding)::text FROM (
+  SELECT m.embedding FROM user_movies um JOIN media m ON m.id = um.media_id
+  WHERE um.user_id = $1 AND m.embedding IS NOT NULL AND (um.status = 'wish' OR um.rating >= 4 OR um.rating = 0)
+  ORDER BY um.updated_at DESC LIMIT 40) liked`, userID).Scan(&taste); err != nil || taste == nil {
+		return nil, err
+	}
+	var ids []int64
+	err := db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `SET LOCAL hnsw.ef_search = `+strconv.Itoa(candidates)); err != nil {
+			return err
+		}
+		var err error
+		ids, err = s.ids(ctx, tx, `SELECT c.id FROM (
+  SELECT id, series_key, hidden, poster, embedding <=> $2::vector AS distance FROM media
+  WHERE embedding IS NOT NULL ORDER BY embedding <=> $2::vector LIMIT `+strconv.Itoa(candidates)+`
+) c
+WHERE NOT c.hidden AND c.poster <> '' AND c.id NOT IN `+seen+`
+AND c.series_key NOT IN (SELECT m2.series_key FROM media m2 WHERE m2.id IN `+seen+`)
+ORDER BY c.distance LIMIT $3`, userID, *taste, limit)
+		return err
+	})
+	return ids, err
+}
+
+type querier interface {
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+}
+
+func (s *Service) ids(ctx context.Context, q querier, sql string, args ...any) ([]int64, error) {
+	rows, err := q.Query(ctx, sql, args...)
 	if err != nil {
 		return nil, err
 	}
