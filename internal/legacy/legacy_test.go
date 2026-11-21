@@ -98,6 +98,40 @@ func TestDryRunWritesNothing(t *testing.T) {
 	}
 }
 
+// 写入是成批发送的：豆瓣 ID 冲突要提前跳过，不能让整批失败；超过一批的数据要分几次发完；进度要输出。
+func TestMigrateInBatches(t *testing.T) {
+	source, target := setup(t)
+	ctx := context.Background()
+	if _, err := source.Exec(ctx, `
+INSERT INTO media (id, media_type, title, douban_id, metadata_status) VALUES (16, 'movie', '同豆瓣 ID 的另一部', '30000010', 'ready');
+INSERT INTO media_units (id, media_id, unit_type, season_number, episode_number, title)
+  SELECT 1000 + n, 10, 'episode', 1, n, '第' || n || '集' FROM generate_series(3, 2502) AS n;`); err != nil {
+		t.Fatal(err)
+	}
+	var progress bytes.Buffer
+	report, err := legacy.Run(ctx, source, target, legacy.Options{Progress: &progress})
+	if err != nil {
+		t.Fatalf("豆瓣 ID 冲突应该跳过，不应该让迁移失败: %v", err)
+	}
+	if n := report.Stats("media").Skipped["豆瓣 ID 和已有作品重复"]; n != 1 {
+		t.Errorf("应该跳过 1 部豆瓣 ID 重复的作品，实际 %d", n)
+	}
+	if n := count(t, target, `SELECT count(*) FROM media`); n != 5 {
+		t.Errorf("应该迁移 5 部作品，实际 %d", n)
+	}
+	if n := count(t, target, `SELECT count(*) FROM media_units`); n != 2503 {
+		t.Errorf("分几批写入后应该有 2503 个分集，实际 %d", n)
+	}
+	if stats := report.Stats("media_units"); stats.Written != 2503 {
+		t.Errorf("分集的写入统计不对: %+v", stats)
+	}
+	for _, table := range []string{"media", "media_external_ids", "media_aliases", "media_units", "ad_fingerprints"} {
+		if !strings.Contains(progress.String(), "开始迁移 "+table) {
+			t.Errorf("进度里没有 %s:\n%s", table, progress.String())
+		}
+	}
+}
+
 func TestMigrate(t *testing.T) {
 	source, target := setup(t)
 	ctx := context.Background()

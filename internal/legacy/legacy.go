@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"moovie/internal/db"
 	"moovie/internal/media"
@@ -78,16 +79,26 @@ func (r *Report) Print(w io.Writer) {
 type Options struct {
 	// DryRun 为 true 时，全部写完后回滚，只输出报告。
 	DryRun bool
+	// Progress 不为空时，迁移过程中定期往这里写进度。
+	Progress io.Writer
 }
+
+// batchSize 是一批写入的条数：攒够这么多条才发给新库一次，省掉逐条往返的等待。
+const batchSize = 1000
+
+// progressEvery 是进度输出的间隔。
+const progressEvery = 5 * time.Second
 
 // migrator 持有一次迁移的状态。
 type migrator struct {
-	ctx    context.Context
-	src    *db.Pool
-	tx     pgx.Tx
-	report *Report
-	media  map[int64]bool // 迁移过来的作品
-	movies map[int64]bool // 迁移过来的作品里哪些是电影
+	ctx      context.Context
+	src      *db.Pool
+	tx       pgx.Tx
+	batch    *pgx.Batch
+	progress io.Writer
+	report   *Report
+	media    map[int64]bool // 迁移过来的作品
+	movies   map[int64]bool // 迁移过来的作品里哪些是电影
 }
 
 // Run 执行迁移。src 是旧库（只读），dst 是新库（表结构已经建好）。
@@ -101,50 +112,104 @@ func Run(ctx context.Context, src, dst *db.Pool, options Options) (*Report, erro
 	}
 	defer tx.Rollback(context.WithoutCancel(ctx))
 	m := &migrator{
-		ctx: ctx, src: src, tx: tx, report: newReport(),
+		ctx: ctx, src: src, tx: tx, batch: &pgx.Batch{}, progress: options.Progress, report: newReport(),
 		media: map[int64]bool{}, movies: map[int64]bool{},
 	}
 	steps := []func() error{m.migrateMedia, m.migrateExternalIDs, m.migrateAliases, m.migrateUnits, m.migrateFingerprints, m.finish}
 	for _, step := range steps {
-		if err := step(); err != nil {
+		err := step()
+		if err == nil {
+			err = m.flush()
+		}
+		if err != nil {
 			return m.report, err
 		}
 	}
 	if options.DryRun {
 		return m.report, nil
 	}
+	m.logf("提交事务…")
 	return m.report, tx.Commit(ctx)
 }
 
-// each 逐行读取源库的查询结果。
-func (m *migrator) each(query string, scan func(pgx.Rows) error) error {
+func (m *migrator) logf(format string, args ...any) {
+	if m.progress != nil {
+		fmt.Fprintf(m.progress, format+"\n", args...)
+	}
+}
+
+// each 逐行读取源库的查询结果。table 不为空时，定期输出这张表读到了第几行。
+func (m *migrator) each(table, query string, scan func(pgx.Rows) error) error {
+	var total int64
+	if table != "" && m.progress != nil {
+		// 只是估算（来自统计信息），不用 count(*)，免得大表先扫一遍。
+		m.src.QueryRow(m.ctx, `SELECT GREATEST(reltuples, 0)::bigint FROM pg_class WHERE oid = to_regclass($1)`, table).Scan(&total)
+		m.logf("开始迁移 %s（约 %d 行）", table, total)
+	}
 	rows, err := m.src.Query(m.ctx, query)
 	if err != nil {
 		return fmt.Errorf("读取旧库: %w\n%s", err, query)
 	}
 	defer rows.Close()
+	started, last := time.Now(), time.Now()
+	var read int64
 	for rows.Next() {
 		if err := scan(rows); err != nil {
 			return err
 		}
+		read++
+		if table != "" && time.Since(last) >= progressEvery {
+			last = time.Now()
+			if total > 0 {
+				m.logf("  %s 已读取 %d / 约 %d 行（%d%%）", table, read, total, min(read*100/total, 99))
+			} else {
+				m.logf("  %s 已读取 %d 行", table, read)
+			}
+		}
 	}
-	return rows.Err()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if table != "" {
+		m.logf("  %s 读取完成：%d 行，用时 %s", table, read, time.Since(started).Round(time.Second))
+	}
+	return nil
 }
 
 func (m *migrator) exec(stats *TableStats, query string, args ...any) error {
-	return m.execWith(stats, "目标库里已经有了", query, args...)
+	return m.write(stats, "目标库里已经有了", query, args...)
 }
 
-// execWith 执行一条写入；没有写入任何行时按 reason 记为跳过。
-func (m *migrator) execWith(stats *TableStats, reason, query string, args ...any) error {
-	tag, err := m.tx.Exec(m.ctx, query, args...)
-	if err != nil {
-		return err
+// write 把一条写入排进当前批次，攒够 batchSize 条就发给新库。
+// stats 不为空时，等这一批执行完，按这条有没有写入行记为写入或者按 reason 跳过。
+// 批次里任何一条出错，整个事务都会失败，所以会出错的情况（比如唯一约束冲突）要在排进来之前判断掉。
+func (m *migrator) write(stats *TableStats, reason, query string, args ...any) error {
+	queued := m.batch.Queue(query, args...)
+	if stats != nil {
+		queued.Exec(func(tag pgconn.CommandTag) error {
+			if tag.RowsAffected() > 0 {
+				stats.Written++
+			} else {
+				stats.Skipped[reason]++
+			}
+			return nil
+		})
 	}
-	if tag.RowsAffected() > 0 {
-		stats.Written++
-	} else {
-		stats.Skipped[reason]++
+	if m.batch.Len() >= batchSize {
+		return m.flush()
+	}
+	return nil
+}
+
+// flush 把攒着的写入一次发给新库。
+func (m *migrator) flush() error {
+	if m.batch.Len() == 0 {
+		return nil
+	}
+	batch := m.batch
+	m.batch = &pgx.Batch{}
+	if err := m.tx.SendBatch(m.ctx, batch).Close(); err != nil {
+		return fmt.Errorf("写入新库: %w", err)
 	}
 	return nil
 }
@@ -226,11 +291,34 @@ func seriesStatus(old string) string {
 	return ""
 }
 
+// tmdbImageSize 匹配 TMDB 图片地址里的尺寸段，比如 /t/p/w1280/。
+var tmdbImageSize = regexp.MustCompile(`/t/p/[a-z0-9]+/`)
+
 func (m *migrator) migrateMedia() error {
 	stats := m.report.table("media")
+	// 豆瓣 ID 在新库里唯一。写入是成批发送的，一条冲突会让整个事务失败，
+	// 所以先记下新库里已有的豆瓣 ID 归谁，冲突的作品在排进批次之前就跳过。
+	doubanOwner, mediaDouban := map[string]int64{}, map[int64]string{}
+	rows, err := m.tx.Query(m.ctx, `SELECT id, douban_id FROM media WHERE douban_id <> ''`)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var id int64
+		var doubanID string
+		if err := rows.Scan(&id, &doubanID); err != nil {
+			rows.Close()
+			return err
+		}
+		doubanOwner[doubanID], mediaDouban[id] = id, doubanID
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
 	// 先算出每部作品的集数（旧库没有单独的集数字段）。
 	episodes := map[int64]int{}
-	if err := m.each(`SELECT media_id, max(episode_number) FROM media_units WHERE unit_type = 'episode' GROUP BY media_id`, func(rows pgx.Rows) error {
+	if err := m.each("", `SELECT media_id, max(episode_number) FROM media_units WHERE unit_type = 'episode' GROUP BY media_id`, func(rows pgx.Rows) error {
 		var id int64
 		var count *int
 		if err := rows.Scan(&id, &count); err != nil {
@@ -243,7 +331,7 @@ func (m *migrator) migrateMedia() error {
 	}); err != nil {
 		return err
 	}
-	return m.each(`SELECT m.id, m.media_type, m.title, COALESCE(m.original_title, ''), COALESCE(m.year, ''), COALESCE(m.poster, ''),
+	return m.each("media", `SELECT m.id, m.media_type, m.title, COALESCE(m.original_title, ''), COALESCE(m.year, ''), COALESCE(m.poster, ''),
 COALESCE(m.backdrops, ''), COALESCE(m.summary, ''), COALESCE(m.genres, ''), COALESCE(m.countries, ''), COALESCE(m.directors, ''),
 COALESCE(m.actors, ''), COALESCE(m.duration, ''), COALESCE(m.rating_douban, 0), COALESCE(m.rating_tmdb, 0), COALESCE(m.vote_count_tmdb, 0),
 COALESCE(m.series_status, ''), COALESCE(m.metadata_status, ''), m.last_metadata_sync_at, m.created_at, m.updated_at,
@@ -276,6 +364,18 @@ FROM media m ORDER BY m.id`, func(rows pgx.Rows) error {
 		if !media.ValidDoubanID(doubanID) {
 			doubanID = ""
 		}
+		if owner, taken := doubanOwner[doubanID]; doubanID != "" && taken && owner != id {
+			stats.Skipped["豆瓣 ID 和已有作品重复"]++
+			return nil
+		}
+		// 写入会把这部作品原来的豆瓣 ID 换掉，旧的那个就空出来了。
+		if previous := mediaDouban[id]; previous != "" && previous != doubanID {
+			delete(doubanOwner, previous)
+		}
+		mediaDouban[id] = doubanID
+		if doubanID != "" {
+			doubanOwner[doubanID] = id
+		}
 		kind = mediaType(kind)
 		_, season := media.SplitSeason(title)
 		metadataStatus := "partial"
@@ -285,7 +385,7 @@ FROM media m ORDER BY m.id`, func(rows pgx.Rows) error {
 		backdropList := splitURLs(backdrops)
 		for index, url := range backdropList {
 			// 旧库存的是 w1280 尺寸，新版按需要换尺寸，统一存原图地址。
-			backdropList[index] = regexp.MustCompile(`/t/p/[a-z0-9]+/`).ReplaceAllString(url, "/t/p/original/")
+			backdropList[index] = tmdbImageSize.ReplaceAllString(url, "/t/p/original/")
 		}
 		episodeCount := 0
 		if kind != media.TypeMovie {
@@ -314,7 +414,7 @@ FROM media m ORDER BY m.id`, func(rows pgx.Rows) error {
 		if metadataStatus == "complete" {
 			enriched = synced
 		}
-		_, err := m.tx.Exec(m.ctx, `INSERT INTO media (id, media_type, douban_id, title, original_title, series_key, year, season, episode_count,
+		if err := m.write(nil, "", `INSERT INTO media (id, media_type, douban_id, title, original_title, series_key, year, season, episode_count,
 poster, backdrops, summary, genres, countries, directors, actors, duration_minutes, rating_douban, rating_tmdb, votes_tmdb,
 series_status, metadata_status, metadata_synced_at, embedding, created_at, updated_at, enriched_at, semantic_text, semantic_hash)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24::vector, $25, $26, $27, $28, $29)
@@ -329,13 +429,8 @@ enriched_at = EXCLUDED.enriched_at, semantic_text = EXCLUDED.semantic_text, sema
 			id, kind, doubanID, row.Title, row.OriginalTitle, media.SeriesKey(title), row.Year, season, episodeCount,
 			poster, backdropList, summary, row.Genres, row.Countries, row.Directors, actorList, firstInt(duration),
 			ratingDouban, ratingTMDB, votes, seriesStatus(series), metadataStatus, synced, embedding, created, updated,
-			enriched, semanticText, semanticHash)
-		if db.IsUniqueViolation(err) {
-			stats.Skipped["豆瓣 ID 和已有作品重复"]++
-			return nil
-		}
-		if err != nil {
-			return fmt.Errorf("写入作品 %d: %w", id, err)
+			enriched, semanticText, semanticHash); err != nil {
+			return err
 		}
 		stats.Written++
 		m.media[id] = true
@@ -345,7 +440,7 @@ enriched_at = EXCLUDED.enriched_at, semantic_text = EXCLUDED.semantic_text, sema
 		// 片名和原名作为别名，供匹配和搜索使用。
 		for _, alias := range []string{title, original} {
 			if normalized := media.Normalize(alias); normalized != "" {
-				if _, err := m.tx.Exec(m.ctx, `INSERT INTO media_aliases (media_id, alias, normalized) VALUES ($1, $2, $3)
+				if err := m.write(nil, "", `INSERT INTO media_aliases (media_id, alias, normalized) VALUES ($1, $2, $3)
 ON CONFLICT DO NOTHING`, id, strings.TrimSpace(alias), normalized); err != nil {
 					return err
 				}
@@ -357,7 +452,7 @@ ON CONFLICT DO NOTHING`, id, strings.TrimSpace(alias), normalized); err != nil {
 
 func (m *migrator) migrateExternalIDs() error {
 	stats := m.report.table("media_external_ids")
-	return m.each(`SELECT media_id, provider, external_id, COALESCE(external_type, '') FROM media_external_ids
+	return m.each("media_external_ids", `SELECT media_id, provider, external_id, COALESCE(external_type, '') FROM media_external_ids
 WHERE provider IN ('tmdb', 'imdb', 'wikidata') ORDER BY media_id, is_primary DESC, id`, func(rows pgx.Rows) error {
 		var mediaID int64
 		var provider, externalID, externalType string
@@ -379,14 +474,14 @@ WHERE provider IN ('tmdb', 'imdb', 'wikidata') ORDER BY media_id, is_primary DES
 		}
 		// 新库里各来源的 ID 是 media 表上的列（豆瓣 ID 已经在迁移作品时写入）。
 		column := map[string]string{"tmdb": "tmdb_id", "imdb": "imdb_id", "wikidata": "wikidata_id"}[provider]
-		return m.execWith(stats, "同一作品在同一来源有多个 ID（保留第一个）",
+		return m.write(stats, "同一作品在同一来源有多个 ID（保留第一个）",
 			`UPDATE media SET `+column+` = $2 WHERE id = $1 AND `+column+` = ''`, mediaID, externalID)
 	})
 }
 
 func (m *migrator) migrateAliases() error {
 	stats := m.report.table("media_aliases")
-	return m.each(`SELECT media_id, alias FROM media_aliases ORDER BY id`, func(rows pgx.Rows) error {
+	return m.each("media_aliases", `SELECT media_id, alias FROM media_aliases ORDER BY id`, func(rows pgx.Rows) error {
 		var mediaID int64
 		var alias string
 		if err := rows.Scan(&mediaID, &alias); err != nil {
@@ -398,14 +493,14 @@ func (m *migrator) migrateAliases() error {
 			stats.Skipped["作品没有迁移或别名为空"]++
 			return nil
 		}
-		return m.execWith(stats, "和片名或其他别名重复", `INSERT INTO media_aliases (media_id, alias, normalized) VALUES ($1, $2, $3)
+		return m.write(stats, "和片名或其他别名重复", `INSERT INTO media_aliases (media_id, alias, normalized) VALUES ($1, $2, $3)
 ON CONFLICT DO NOTHING`, mediaID, strings.TrimSpace(alias), normalized)
 	})
 }
 
 func (m *migrator) migrateUnits() error {
 	stats := m.report.table("media_units")
-	return m.each(`SELECT id, media_id, unit_type, COALESCE(season_number, 1), COALESCE(episode_number, 0), COALESCE(title, ''),
+	return m.each("media_units", `SELECT id, media_id, unit_type, COALESCE(season_number, 1), COALESCE(episode_number, 0), COALESCE(title, ''),
 air_date, COALESCE(runtime_minutes, 0) FROM media_units ORDER BY id`, func(rows pgx.Rows) error {
 		var id, mediaID int64
 		var unitType, title string
@@ -443,7 +538,7 @@ ON CONFLICT (media_id, season, episode) DO UPDATE SET title = EXCLUDED.title, ai
 // 旧版确认过的指纹在新版里直接生效。长度不是 32 字节的不要。
 func (m *migrator) migrateFingerprints() error {
 	stats := m.report.table("ad_fingerprints")
-	return m.each(`SELECT fingerprint, COALESCE(confirm_count, 0), COALESCE(reject_count, 0) FROM ad_fingerprints`, func(rows pgx.Rows) error {
+	return m.each("ad_fingerprints", `SELECT fingerprint, COALESCE(confirm_count, 0), COALESCE(reject_count, 0) FROM ad_fingerprints`, func(rows pgx.Rows) error {
 		var fingerprint []byte
 		var confirm, reject int
 		if err := rows.Scan(&fingerprint, &confirm, &reject); err != nil {

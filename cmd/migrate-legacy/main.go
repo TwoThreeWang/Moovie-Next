@@ -63,7 +63,7 @@ func main() {
 	if err := db.Migrate(ctx, dst); err != nil {
 		fail("建表: " + err.Error())
 	}
-	report, err := legacy.Run(ctx, src, dst, legacy.Options{DryRun: *dryRun})
+	report, err := legacy.Run(ctx, src, dst, legacy.Options{DryRun: *dryRun, Progress: os.Stderr})
 	if report != nil {
 		report.Print(os.Stdout)
 	}
