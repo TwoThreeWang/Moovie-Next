@@ -1,5 +1,5 @@
 # docker compose up -d --build；数据库、Ollama、WARP 使用 postgres_default 网络里的已有服务。
-# 根目录 .env 是唯一配置入口；这里只做各容器的变量映射，说明见 deploy/README.md。
+# 根目录 .env 是唯一配置入口；这里只做各容器的变量映射，说明见 docs/deploy.md。
 x-proxy-env: &proxy-env
   HTTP_PROXY: "${HTTP_PROXY-${OUTBOUND_PROXY-}}"
   HTTPS_PROXY: "${HTTPS_PROXY-${OUTBOUND_PROXY-}}"

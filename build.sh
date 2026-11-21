@@ -4,7 +4,7 @@ set -eu
 cd "$(dirname "$0")"
 
 if [ ! -f .env ]; then
-    echo "没有 .env：先照 .env.example 和 deploy/README.md 写好正式环境的配置。" >&2
+    echo "没有 .env：先照 .env.example 和 docs/deploy.md 写好正式环境的配置。" >&2
     exit 1
 fi
 mkdir -p data/danmu-cache

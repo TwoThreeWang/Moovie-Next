@@ -51,7 +51,7 @@ docker compose run --rm --no-deps -e LEGACY_DB_NAME=moovie_v2 -v "$PWD/data:/app
 
 旧站的弹幕容器也叫 `danmu-api`、网站也用 5008 端口，两套不能同时运行：
 
-1. 先按 [部署](../deploy/README.md) 的 1–3 步准备好数据库、`.env` 和导入，这时旧站还在服务。
+1. 先按 [部署](deploy.md) 的 1–3 步准备好数据库、`.env` 和导入，这时旧站还在服务。
 2. 停旧站：在旧站目录下 `docker compose down`。
-3. 启动影牛：`./update.sh`。反向代理指向的还是 `127.0.0.1:5008`，不用改。
+3. 在 `.env` 里把 `PORT` 设成旧站用的 `5008`，启动影牛：`./build.sh`。反向代理指向的还是 `127.0.0.1:5008`，不用改。
 4. 有问题要回退：`docker compose down`，再到旧站目录 `docker compose up -d`。

@@ -93,7 +93,7 @@ go run ./cmd/testclean
 
 ## 配置
 
-根目录 `.env` 是运行和部署的唯一配置入口，完整列表和说明在 [.env.example](.env.example)。Compose 直接使用其中的 `APP_ENV`、`PORT`、`JOBS_IN_WEB`，不再用 `deploy/*.env` 覆盖；正式部署时设置 `APP_ENV=production`，只让独立 worker 执行任务时设置 `JOBS_IN_WEB=false`。常用的几组：
+根目录 `.env` 是运行和部署的唯一配置入口，完整列表和说明在 [.env.example](.env.example)。Compose 直接使用其中的 `APP_ENV`、`PORT`、`JOBS_IN_WEB`；正式部署时设置 `APP_ENV=production`，只让独立 worker 执行任务时设置 `JOBS_IN_WEB=false`。常用的几组：
 
 | 用途 | 变量 |
 | --- | --- |
@@ -107,10 +107,10 @@ go run ./cmd/testclean
 
 ## 部署
 
-正式环境用 Docker Compose，步骤、反向代理、CDN 规则和资源上限见 [deploy/README.md](deploy/README.md)。日常更新在服务器上运行：
+正式环境用 Docker Compose，步骤、反向代理、CDN 规则和资源上限见 [部署](docs/deploy.md)。日常更新在服务器上运行：
 
 ```bash
-./update.sh
+./build.sh
 ```
 
 上线前建议做一次[发信检查](docs/accounts.md#上线前的发信检查)。需要从已有数据库导入影视资料时，见 [从已有数据初始化](docs/bootstrap.md)。
@@ -135,7 +135,6 @@ go run ./cmd/testclean
 | `web/static/js/lib` | 可单独测试的前端逻辑：解析资源站和 TVBox 配置、匹配作品、广告指纹、加密、二维码 |
 | `web/static/js/core`、`pages` | 查源引擎、同步、本地存储；各页面的脚本 |
 | `web/jstest` | 前端测试 |
-| `deploy` | 部署说明；各容器的变量映射统一在根目录 Compose 中定义 |
 | `docs` | 设计决策和各模块的详细设计 |
 | `前端设计demo` | 早期的静态界面原型，只作参考，不参与构建 |
 
@@ -153,7 +152,7 @@ go run ./cmd/testclean
 | [公开页面、SEO 与安装](docs/web.md) | 不登录能看什么、搜索引擎优化、添加到桌面、分享卡片 |
 | [数据库](docs/database.md) | 迁移、每张表的用途、schema |
 | [从已有数据初始化](docs/bootstrap.md) | 导入已有的影视资料、临时示例订阅 |
-| [部署](deploy/README.md) | Docker Compose、反向代理、CDN、资源和构建缓存 |
+| [部署](docs/deploy.md) | Docker Compose、反向代理、CDN、资源和构建缓存 |
 
 ## 版本与更新记录
 

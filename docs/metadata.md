@@ -62,11 +62,11 @@
 
 豆瓣请求之间默认间隔 1 秒。返回 403 / 418 / 429（被限流）时间隔翻倍，最多 1 分钟；连续 3 次被限流就整体暂停 10 分钟，暂停期间的请求直接失败，任务稍后自动重试，页面不会卡住；之后每成功一次，间隔缩回一点。后台概览显示当前的节奏。需要时可以用 `DOUBAN_PROXY`（http / https / socks5）让豆瓣的接口请求走指定的出站代理。
 
-想用买的 Clash 订阅：网站本身不认识 Shadowsocks、VMess、Trojan 这些协议，所以另外跑一个 mihomo（Clash.Meta 内核）容器，把订阅变成一个 HTTP / SOCKS5 代理，再把 `DOUBAN_PROXY` 指过去。`deploy/mihomo/` 里有配置模板和 docker compose 文件：
+想用买的 Clash 订阅：网站本身不认识 Shadowsocks、VMess、Trojan 这些协议，所以另外跑一个 mihomo（Clash.Meta 内核）容器，把订阅变成一个 HTTP / SOCKS5 代理，再把 `DOUBAN_PROXY` 指过去。仓库里不带 mihomo 的配置，需要自己部署，建议：
 
-- 单独的容器、单独的 Docker 网络 `moovie-egress`：不用 host 网络、不建 TUN 网卡、不要额外权限，不向宿主机开放端口，宿主机的网络不受影响。
-- 别的容器加入 `moovie-egress` 网络就能用 `http://mihomo:7890`；mihomo 只接受 Docker 内网的连接，也可以再加用户名密码。
-- 节点放在一个轮询的负载均衡组里，连续的请求从不同的节点出去；健康检查用通用地址，不额外打扰豆瓣。填了订阅链接的 `config.yaml` 已经加进 `.gitignore`。
+- 单独的容器、单独的 Docker 网络：不用 host 网络、不建 TUN 网卡、不要额外权限，不向宿主机开放端口，宿主机的网络不受影响。
+- 网站和 worker 的容器加入 mihomo 所在的网络后，在 `.env` 里填 `DOUBAN_PROXY=http://mihomo:7890`；mihomo 只接受 Docker 内网的连接，也可以再加用户名密码。
+- 节点放在一个轮询的负载均衡组里，连续的请求从不同的节点出去；健康检查用通用地址，不额外打扰豆瓣。填了订阅链接的配置文件不要提交到仓库。
 
 ## 热门榜
 
