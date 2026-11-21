@@ -27,9 +27,21 @@ function timeAgo(at) {
   return `${Math.floor(minutes / 1440)} 天前`;
 }
 
+// 源很多时只显示前 10 个，其余点"展开全部"再看（和详情页的播放源列表一样），设置页不会被拉得很长。
+// 展开后重新读取订阅也保持展开。
+const LIMIT = 10;
+let expanded = false;
+const toggle = $('src-more');
+toggle?.addEventListener('click', () => {
+  expanded = true;
+  for (const row of table.children) row.hidden = false;
+  toggle.hidden = true;
+});
+
 async function render() {
   const subscription = await sources.getSubscription();
   table.replaceChildren();
+  if (toggle) toggle.hidden = true;
   if (!subscription) {
     status.textContent = '还没有设置。没有播放源时，想看、看过、片单等功能照常可用，只是不能播放。';
     return;
@@ -37,14 +49,21 @@ async function render() {
   input.value = subscription.url;
   status.textContent = `共 ${subscription.sources.length} 个源，${timeAgo(subscription.fetchedAt)}读取。`;
   const health = (await idb.get('kv', userKey('health'))) ?? {};
-  for (const source of subscription.sources) {
+  subscription.sources.forEach((source, index) => {
     const stats = health[source.key];
     let state = '还没用过';
     if (stats && stats.ok + stats.fail > 0) state = stats.ok ? `成功 ${stats.ok} 次，失败 ${stats.fail} 次，平均 ${stats.ms}ms` : `最近 ${stats.fail} 次都失败了`;
-    table.append(h('li', {}, h('b', { text: source.name }), h('span', { class: 'dim', text: new URL(source.api).hostname }),
-      h('span', { class: 'state', dataset: { key: source.key }, text: state })));
-  }
+    const row = h('li', {}, h('b', { text: source.name }), h('span', { class: 'dim', text: new URL(source.api).hostname }),
+      h('span', { class: 'state', dataset: { key: source.key }, text: state }));
+    row.hidden = !expanded && index >= LIMIT;
+    table.append(row);
+  });
+  // 跳过的源总是显示：订阅文件哪里写错了，要让人看得到
   for (const error of subscription.errors ?? []) table.append(h('li', { class: 'error' }, h('span', { text: '已跳过 · ' + error })));
+  if (toggle && !expanded && subscription.sources.length > LIMIT) {
+    toggle.textContent = `展开全部 ${subscription.sources.length} 个源`;
+    toggle.hidden = false;
+  }
 }
 
 // 保存后顺便测一下每个源能不能连上。

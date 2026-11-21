@@ -222,6 +222,7 @@ body.bare .doc { margin: 0 auto; }
 .src-table .state { margin-left: auto; color: var(--text-3); font-size: 12.5px; }
 .src-table .state.ok { color: var(--ok); }
 .src-table .state.error, .src-table li.error { color: var(--new); }
+.src-table + .src-toggle { margin: 0; justify-self: start; }
 .copy-row { display: flex; gap: 8px; width: 100%; }
 .copy-row input { font-size: 13px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 .avatars { display: flex; flex-wrap: wrap; gap: 8px; border: 0; padding: 0; margin: 0; }
