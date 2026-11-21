@@ -123,7 +123,7 @@ go run ./cmd/testclean
 | `cmd/devseed`、`cmd/mocksource` | 演示数据和假资源站（只用于开发） |
 | `cmd/hongguo-seed` | 在本地抓取全量短剧并导入（见 [短剧](docs/short-drama.md)） |
 | `cmd/mailcheck`、`cmd/tgcheck`、`cmd/dbinfo`、`cmd/testclean` | 检查发信、Telegram、数据库情况，清理测试 schema |
-| `cmd/migrate-legacy` | 从已有数据库导入影视资料（可选） |
+| `cmd/migrate-legacy` | 从旧版数据库导入影视资料和老用户的账号数据（可选） |
 | `internal/app` | 路由和页面处理；`internal/ui` 模板渲染；`internal/httpx` 通用的请求工具 |
 | `internal/db` | 连接和迁移（`migrations/`） |
 | `internal/media`、`ingest`、`providers`、`jobs` | 作品库、采集流程、外部来源客户端、任务队列 |

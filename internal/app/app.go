@@ -345,6 +345,7 @@ func (a *App) Router() *gin.Engine {
 	vaultHandler := vault.NewHandler(a.Vault)
 	vaultHandler.Register(site)
 	vaultHandler.RegisterKeyring(site)
+	site.GET("/api/example-subscription", auth.Require(), a.pendingExampleSubscription) // 临时，见 example_subscription.go
 	adskip.NewHandler(a.AdSkip).Register(site)
 	relay.New().Register(site)
 	danmaku.NewHandler(a.Danmaku).Register(site)

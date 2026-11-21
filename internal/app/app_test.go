@@ -1479,6 +1479,32 @@ func TestExampleSubscription(t *testing.T) {
 	}
 	mustContain(t, s.get("/settings"), `id="sub-example"`, `data-url="/sub/example.json"`)
 
+	// 从旧版迁移过来的账号：还没有钥匙圈（第一次登录）时，告诉浏览器填入示例订阅；钥匙圈建好后就不再提示。
+	if r := s.get("/api/example-subscription"); r.status != http.StatusNotFound {
+		t.Errorf("不是迁移过来的账号不应该填入示例订阅，实际 %d", r.status)
+	}
+	lin, err := s.app.Users.ByEmail(context.Background(), "lin@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.app.Pool.Exec(context.Background(), `INSERT INTO example_subscription_users (user_id) VALUES ($1)`, lin.ID); err != nil {
+		t.Fatal(err)
+	}
+	if r := s.get("/api/example-subscription"); r.status != http.StatusOK || !strings.Contains(r.body, `"url":"/sub/example.json"`) {
+		t.Fatalf("迁移过来的账号第一次登录应该填入示例订阅: %d %s", r.status, r.body)
+	}
+	if r := plain.get("/api/example-subscription"); r.status != http.StatusNotFound {
+		t.Errorf("没配置示例订阅时不应该提示，实际 %d", r.status)
+	}
+	salt := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{7}, 16))
+	blob := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{8}, 64))
+	if r := s.json(http.MethodPut, "/api/keyring", map[string]any{"salt": salt, "blob": blob, "iterations": 310000, "base": 0}); r.status != http.StatusOK {
+		t.Fatal(r.status, r.body)
+	}
+	if r := s.get("/api/example-subscription"); r.status != http.StatusNotFound {
+		t.Errorf("钥匙圈建好以后不应该再填入示例订阅，实际 %d", r.status)
+	}
+
 	broken := filepath.Join(t.TempDir(), "broken.json")
 	os.WriteFile(broken, []byte(`{"sources":[]}`), 0o644)
 	if r := newSiteWith(t, nil, func(cfg *config.Config) { cfg.ExampleSubscription = broken }).get("/sub/example.json"); r.status != http.StatusNotFound {

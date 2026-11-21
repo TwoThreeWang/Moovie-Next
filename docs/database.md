@@ -8,16 +8,17 @@ PostgreSQL，需要 `vector` 和 `pg_trgm` 两个扩展。启动时自动执行 
 | `0002_short_drama.sql` | 短剧的列和索引（见 [短剧](short-drama.md)） |
 | `0003_collection_submissions.sql` | 片单的投稿状态、收藏、去重浏览，以及片单通知 |
 | `0004_collection_revisions.sql` | 已发布片单的修改稿 |
+| `0005_example_subscription_users.sql` | 临时：从旧版迁移过来、第一次登录时要填入示例订阅的账号（见 [从已有数据初始化](bootstrap.md#临时示例订阅)） |
 
 新增表结构时加一个新的迁移文件，不修改已经上线的文件。
 
 ## 有哪些表
 
-一共 26 张业务表（另有一张迁移记录表 `schema_migrations`）。留下来的标准是：**别处推不出来、又确实有人读**。能算出来的现算，只写不读的不存。
+一共 27 张业务表（另有一张迁移记录表 `schema_migrations`）。留下来的标准是：**别处推不出来、又确实有人读**。能算出来的现算，只写不读的不存。
 
 | 用途 | 表 | 为什么需要 |
 | --- | --- | --- |
-| 账号 | `users`、`user_follows`、`keyrings` | 账号本身；关注关系；登录即同步用的密文 |
+| 账号 | `users`、`user_follows`、`keyrings`、`example_subscription_users` | 账号本身；关注关系；登录即同步用的密文；临时：哪些老账号第一次登录时填入示例订阅 |
 | 作品资料 | `media`、`media_aliases`、`media_units`、`chart_items` | 作品；别名用来匹配资源站片名和搜索；分集用来显示集名和"今日更新"；热门榜单 |
 | 标记和社区 | `user_movies`、`comment_likes`、`comment_replies`、`danmakus`、`feedbacks`、`notifications` | 都是用户产生的内容，没法从别处得到 |
 | 片单 | `collections`、`collection_items`、`collection_favorites`、`collection_views` | 片单和其中的作品；收藏（取消后保留一行，再收藏时重新计时）；按天去重的浏览，只留最近 7 天，用于热门排序 |

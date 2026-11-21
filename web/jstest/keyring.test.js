@@ -7,7 +7,7 @@ import { deriveWrapKey, unwrapKeyring, wrapKeyring, fromBase64, toBase64 } from 
 
 const password = 'old-password-123';
 const first = 'https://moovie.test/first.json', second = 'https://moovie.test/second.json';
-let remote, putMode, getFailure, putCount, releasePut, putStarted;
+let remote, putMode, getFailure, putCount, releasePut, putStarted, example;
 globalThis.document = { body: { dataset: { user: '1' } }, querySelector: () => ({ content: 'test-csrf' }) };
 globalThis.location = new URL('https://moovie.test/settings');
 
@@ -20,7 +20,7 @@ async function resetLocal() { await idb.clearPrefix('u1:'); }
 test.beforeEach(async () => {
   await resetLocal();
   delete globalThis.isSecureContext;
-  remote = null; putMode = null; getFailure = false; putCount = 0; releasePut = null; putStarted = false;
+  remote = null; putMode = null; getFailure = false; putCount = 0; releasePut = null; putStarted = false; example = null;
   globalThis.fetch = async (path, options = {}) => {
     const target = new URL(path, location.href);
     if (target.pathname === '/api/keyring') {
@@ -43,6 +43,9 @@ test.beforeEach(async () => {
       }
       if (getFailure) return Response.json({ error: 'failure' }, { status: 500 });
       return remote ? Response.json(remote) : Response.json({ error: 'none' }, { status: 404 });
+    }
+    if (target.pathname === '/api/example-subscription') {
+      return example ? Response.json({ url: example }) : Response.json({ error: 'none' }, { status: 404 });
     }
     if (target.pathname === '/first.json' || target.pathname === '/second.json') return Response.json({ sources: [{ key: target.pathname, name: '测试源', api: 'https://source.example/api.php/provide/vod/' }] });
     throw new Error('Unexpected request: ' + target.pathname);
@@ -183,4 +186,22 @@ test('原设备保留旧包装密钥时能恢复密码重置后的配置，不�
   assert.equal(result, 'rewrapped');
   const nextKey = await deriveWrapKey('reset-password-789', fromBase64(remote.salt), remote.iterations);
   assert.equal((await unwrapKeyring(nextKey, fromBase64(remote.blob))).sub, first);
+});
+
+test('旧版迁移过来的账号第一次登录时填入示例订阅并保存到账号，之后不再填', async () => {
+  example = '/first.json';
+  assert.equal(await keyring.afterLogin(password), 'created');
+  assert.equal((await sources.getSubscription()).url, 'https://moovie.test/first.json');
+  assert.equal((await body()).sub, 'https://moovie.test/first.json', '示例订阅要加密保存到账号，其他设备登录也有');
+  await keyring.clearSubscriptionFromAccount();
+  await resetLocal();
+  assert.equal(await keyring.afterLogin(password), 'synced');
+  assert.equal((await sources.getSubscription())?.url, undefined, '账号已有钥匙圈时，清除过的订阅不会再被填回来');
+});
+
+test('本机已有订阅时不用示例订阅覆盖', async () => {
+  example = '/first.json';
+  await sources.setSubscription(second);
+  await keyring.afterLogin(password);
+  assert.equal((await body()).sub, second);
 });

@@ -68,6 +68,17 @@ async function localPayload() {
   return { v: 1, key: await ensureMasterKey(), sub: (await sources.getSubscription())?.url ?? '' };
 }
 
+// 临时：从旧版迁移过来的账号第一次登录时，自动填入示例订阅（见 internal/app/example_subscription.go）。
+// 查询失败就当没有，不影响登录。
+async function pendingExampleSubscription() {
+  try {
+    const response = await api('/api/example-subscription', { cache: 'no-store' });
+    if (!response.ok) return '';
+    const { url } = await response.json();
+    return typeof url === 'string' && url.startsWith('/') ? location.origin + url : '';
+  } catch { return ''; }
+}
+
 async function newWrapping(password) {
   requireCrypto();
   const salt = crypto.getRandomValues(new Uint8Array(16));
@@ -127,6 +138,7 @@ export const afterLogin = (password) => serial(async () => {
   let remote = await fetchRemote();
   if (!remote) {
     const local = await newWrapping(password), payload = await localPayload();
+    if (!payload.sub) payload.sub = await pendingExampleSubscription();
     const result = await upload(local, payload, 0);
     if (!result.conflict) {
       await applySaved(payload, { ...local, version: result.version });

@@ -2,7 +2,9 @@ package legacy
 
 // 临时功能：把旧版保存的播放源导出成一个订阅文件，网站在 /sub/example.json 提供（见 internal/app/example_subscription.go）。
 // 只是为了让老用户切过来时有源可用，之后会整块删掉。删的时候一起删：这个文件、cmd/migrate-legacy 的 -sources 参数、
-// internal/app/example_subscription.go、设置页的"使用示例订阅"按钮，以及配置 EXAMPLE_SUBSCRIPTION_FILE。
+// internal/app/example_subscription.go（和 app.go 里的两个路由）、设置页的"使用示例订阅"按钮、
+// keyring.js 里的 pendingExampleSubscription、users.go 里的 markExampleSubscription、配置 EXAMPLE_SUBSCRIPTION_FILE，
+// 再加一个迁移删掉 example_subscription_users 表。完整清单见 docs/bootstrap.md。
 
 import (
 	"context"

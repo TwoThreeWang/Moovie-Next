@@ -1,15 +1,20 @@
-// Package legacy 把旧版 Moovie 积累的公共数据导入新库。这是新系统和旧版唯一的联系：
-// 账号、标记、短评、片单、进度、弹幕等属于用户的数据一概不迁移。
+// Package legacy 把旧版 Moovie 的数据导入新库。这是新系统和旧版唯一的联系。
 //
 // 导入的是：
 //   - 采集过的影视元数据：作品资料、外部 ID（豆瓣、TMDB、IMDb、Wikidata）、别名、分集，
 //     以及 AI 写的语义描述和向量（重新生成要花钱，而且新旧的生成方式完全一样，见 ingest 包的提示词）；
-//   - 众包确认过的广告指纹：只有片段特征的哈希和确认、否认的票数，不关联任何人和任何片子。
+//   - 众包确认过的广告指纹：只有片段特征的哈希和确认、否认的票数，不关联任何人和任何片子；
+//   - 账号和用户写下的东西（见 users.go）：账号（密码哈希两边都是 bcrypt，老密码照常登录）、关注、
+//     想看和看过（含评分、短评）、短评的点赞和回复、作品库里有的作品的播放进度，以及由进度推出的观影日期。
+//
+// 不导入：片单（旧版没有开放）、弹幕、反馈、通知、屏蔽词；作品库里没有的片子的进度
+// （新版由浏览器加密保存，服务器替用户生成不了）；以及任何和资源站有关的数据。
 //
 // 规则：
 //   - 源数据只读；所有写入在目标库的一个事务里完成，出错或试运行时整体回滚。
-//   - 可以反复运行：按作品 ID"有则更新、无则插入"，ID 保持不变。
-//   - 只导入至少有一个豆瓣、TMDB 或 IMDb 外部 ID 的作品；和资源站有关的数据一律不要。
+//   - 可以反复运行，ID 保持不变。作品资料按 ID"有则更新、无则插入"；用户的数据只插入新库里没有的，
+//     已经有的保留新库的版本（上线后用户可能已经改过），进度只在旧的更新时才覆盖。
+//   - 只导入至少有一个豆瓣、TMDB 或 IMDb 外部 ID 的作品。
 package legacy
 
 import (
@@ -36,10 +41,11 @@ type Report struct {
 	stats  map[string]*TableStats
 }
 
-// TableStats 是一张表的迁移统计。
+// TableStats 是一张表的迁移统计。Adjusted 是写入了、但内容按新版的规则改过的条数和原因。
 type TableStats struct {
 	Read, Written int
 	Skipped       map[string]int
+	Adjusted      map[string]int
 }
 
 func newReport() *Report { return &Report{stats: map[string]*TableStats{}} }
@@ -49,7 +55,7 @@ func (r *Report) table(name string) *TableStats {
 		return stats
 	}
 	r.tables = append(r.tables, name)
-	r.stats[name] = &TableStats{Skipped: map[string]int{}}
+	r.stats[name] = &TableStats{Skipped: map[string]int{}, Adjusted: map[string]int{}}
 	return r.stats[name]
 }
 
@@ -58,7 +64,7 @@ func (r *Report) Stats(name string) TableStats {
 	if stats, ok := r.stats[name]; ok {
 		return *stats
 	}
-	return TableStats{Skipped: map[string]int{}}
+	return TableStats{Skipped: map[string]int{}, Adjusted: map[string]int{}}
 }
 
 // Print 把报告写成人能读的表格。
@@ -71,7 +77,19 @@ func (r *Report) Print(w io.Writer) {
 			reasons = append(reasons, fmt.Sprintf("%s %d", reason, count))
 		}
 		sort.Strings(reasons)
-		fmt.Fprintf(w, "%-24s %8d %8d  %s\n", name, stats.Read, stats.Written, strings.Join(reasons, "，"))
+		line := strings.Join(reasons, "，")
+		if len(stats.Adjusted) > 0 {
+			adjusted := make([]string, 0, len(stats.Adjusted))
+			for reason, count := range stats.Adjusted {
+				adjusted = append(adjusted, fmt.Sprintf("%s %d", reason, count))
+			}
+			sort.Strings(adjusted)
+			if line != "" {
+				line += "；"
+			}
+			line += "改动：" + strings.Join(adjusted, "，")
+		}
+		fmt.Fprintf(w, "%-24s %8d %8d  %s\n", name, stats.Read, stats.Written, line)
 	}
 }
 
@@ -99,6 +117,9 @@ type migrator struct {
 	report   *Report
 	media    map[int64]bool // 迁移过来的作品
 	movies   map[int64]bool // 迁移过来的作品里哪些是电影
+	seasons  map[int64]int  // 迁移过来的作品在新库里是第几季（播放进度按它记）
+	users    map[int64]bool // 新库里有、并且就是旧库里同一个人的账号
+	marks    map[int64]bool // 新库里有、并且就是旧库里同一条的标记（user_movies）
 }
 
 // Run 执行迁移。src 是旧库（只读），dst 是新库（表结构已经建好）。
@@ -113,9 +134,10 @@ func Run(ctx context.Context, src, dst *db.Pool, options Options) (*Report, erro
 	defer tx.Rollback(context.WithoutCancel(ctx))
 	m := &migrator{
 		ctx: ctx, src: src, tx: tx, batch: &pgx.Batch{}, progress: options.Progress, report: newReport(),
-		media: map[int64]bool{}, movies: map[int64]bool{},
+		media: map[int64]bool{}, movies: map[int64]bool{}, seasons: map[int64]int{}, users: map[int64]bool{}, marks: map[int64]bool{},
 	}
-	steps := []func() error{m.migrateMedia, m.migrateExternalIDs, m.migrateAliases, m.migrateUnits, m.migrateFingerprints, m.finish}
+	steps := []func() error{m.migrateMedia, m.migrateExternalIDs, m.migrateAliases, m.migrateUnits, m.migrateFingerprints,
+		m.migrateUsers, m.migrateFollows, m.migrateMarks, m.migrateLikes, m.migrateReplies, m.migratePlayback, m.finish}
 	for _, step := range steps {
 		err := step()
 		if err == nil {
@@ -434,6 +456,7 @@ enriched_at = EXCLUDED.enriched_at, semantic_text = EXCLUDED.semantic_text, sema
 		}
 		stats.Written++
 		m.media[id] = true
+		m.seasons[id] = max(season, 1)
 		if kind == media.TypeMovie {
 			m.movies[id] = true
 		}
@@ -555,8 +578,12 @@ ON CONFLICT (fingerprint) DO UPDATE SET confirm_count = EXCLUDED.confirm_count, 
 	})
 }
 
-// finish 让作品 ID 的序列从迁移过来的最大 ID 之后开始。
+// finish 让沿用旧 ID 的表（作品、账号、标记）的序列从最大 ID 之后开始，新建的行不会和迁移过来的冲突。
 func (m *migrator) finish() error {
-	_, err := m.tx.Exec(m.ctx, `SELECT setval(pg_get_serial_sequence('media', 'id'), GREATEST((SELECT COALESCE(max(id), 0) FROM media), 1))`)
-	return err
+	for _, table := range []string{"media", "users", "user_movies"} {
+		if _, err := m.tx.Exec(m.ctx, `SELECT setval(pg_get_serial_sequence('`+table+`', 'id'), GREATEST((SELECT COALESCE(max(id), 0) FROM `+table+`), 1))`); err != nil {
+			return err
+		}
+	}
+	return nil
 }
