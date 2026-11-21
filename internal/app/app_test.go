@@ -1394,7 +1394,15 @@ func TestKeyringSync(t *testing.T) {
 func TestCopyrightContact(t *testing.T) {
 	s := newSite(t)
 	mustContain(t, s.get("/dmca"), "版权投诉", `href="/feedback?kind=dmca"`, `mailto:hello@moovie.test`, "不需要注册账号")
-	mustContain(t, s.get("/changelog"), "v5.1.1", "兼容 TVBox 配置", "v5.1.0", "2026-11-20", "v5.0.0", "2026-11-16", "💥 破坏性变更 (Breaking Changes)", "✨ 新增 (Added)", "登录即同步")
+	// 关于页：广告说明和联系方式（反馈不预选类型，邮件主题是合作与联系）
+	about := s.get("/about")
+	mustContain(t, about, "关于广告", "每一条都标有“广告”", "不加载第三方广告脚本", "核实后会立刻下架", "联系方式",
+		`href="/feedback"`, `mailto:hello@moovie.test?subject=%E5%90%88%E4%BD%9C%E4%B8%8E%E8%81%94%E7%B3%BB`, "广告合作和其他事务")
+	mustContain(t, s.get("/privacy"), "站内广告", "看不到你在看哪个页面")
+	if strings.Contains(s.get("/terms").body, "联系方式") {
+		t.Error("没有设置联系方式的页面不应该显示联系方式")
+	}
+	mustContain(t, s.get("/changelog"), "v5.2.0", "2026-11-22", "发现页的新排序", "v5.1.1", "兼容 TVBox 配置", "v5.1.0", "2026-11-20", "v5.0.0", "2026-11-16", "💥 破坏性变更 (Breaking Changes)", "✨ 新增 (Added)", "登录即同步")
 }
 
 // ---------- 后台：内容审核、禁言封禁、广告指纹、趋势 ----------
