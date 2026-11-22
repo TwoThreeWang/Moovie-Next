@@ -54,7 +54,9 @@
 </aside>
 </div>
 <div class="rows">{{if .Inline}}{{if .Similar}}{{template "row" dict "Row" (dict "Title" "相似推荐" "Cards" .Similar "More" (printf "/m/%d/similar" .M.ID))}}{{end}}
-{{else}}<div data-lazy hx-get="/api/htmx/m/{{.M.ID}}/similar" hx-trigger="near once" hx-swap="outerHTML"></div>{{end}}</div>
+{{else}}<div data-lazy hx-get="/api/htmx/m/{{.M.ID}}/similar" hx-trigger="near once" hx-swap="outerHTML"></div>{{end}}
+{{if .Lists}}<section class="row"><div class="row-head"><h2 class="row-title">收录这部作品的片单</h2></div>
+<div class="rail rail-banner">{{range .Lists}}{{template "collection_card" .}}{{end}}</div></section>{{end}}</div>
 <div class="d-bar" id="d-bar">
 <a class="btn btn-primary" href="{{if .User}}{{.PlayHref}}{{else}}{{.Login}}{{end}}" data-no-prerender data-play><svg class="i"><use href="#i-play"/></svg>{{.PlayLabel}}{{if .PlaySub}} · {{.PlaySub}}{{end}}</a>
 </div>

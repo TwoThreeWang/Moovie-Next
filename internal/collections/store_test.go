@@ -44,6 +44,16 @@ func TestSaveReplacesItemsAndRelations(t *testing.T) {
 	if related, err := store.RelatedTo(ctx, c.ID); err != nil || len(related) != 1 || related[0].ID != other.ID {
 		t.Fatalf("相关片单应该是有共同作品的那个: %+v err=%v", related, err)
 	}
+	// 收录某部作品的片单：只列已发布的；收藏数相同时新发布的在前。草稿不出现。
+	if _, err := store.Save(ctx, collections.Draft{OwnerID: 1, Slug: "draft", Title: "草稿", MediaIDs: []int64{10}}); err != nil {
+		t.Fatal(err)
+	}
+	if lists, err := store.ContainingMedia(ctx, 10, 4); err != nil || len(lists) != 2 || lists[0].ID != c.ID || lists[1].ID != other.ID {
+		t.Fatalf("收录作品 10 的应该是 2026 最佳和另一个片单: %+v err=%v", lists, err)
+	}
+	if lists, err := store.ContainingMedia(ctx, 10, 1); err != nil || len(lists) != 1 {
+		t.Fatalf("应该按 limit 截断: %d err=%v", len(lists), err)
+	}
 	_, items, err := store.VisibleDetail(ctx, c.Slug)
 	if err != nil || len(items) != 2 || items[0].Card.ID != 12 || items[0].Note != "年度第一" {
 		t.Fatalf("作品应该按提交顺序保存: %+v err=%v", items, err)

@@ -193,6 +193,12 @@ func (a *App) detailPage(c *gin.Context) {
 		"IMDb": m.IMDbID, "SEO": a.mediaSEO(m), "Card": a.mediaCard(m), "Fetching": m.MetadataSyncedAt == nil,
 		"Login": "/auth/login?redirect=" + url.QueryEscape(mediaHref(m.ID)),
 	}
+	// 收录这部作品的片单：所有人都直接写在页面里（一次走索引的小查询）。读不出来不影响页面，只是不显示这一行。
+	if lists, err := a.Collections.ContainingMedia(ctx, m.ID, 4); err != nil {
+		a.Log.Warn("读取收录作品的片单失败", "media", m.ID, "error", err)
+	} else {
+		data["Lists"] = lists
+	}
 	if viewer != 0 {
 		data["Scripts"] = []string{"pages/detail.js"}
 	} else {
@@ -327,7 +333,7 @@ func (a *App) mediaSimilar(c *gin.Context) {
 		a.fail(c, err)
 		return
 	}
-	a.row(c, RowView{Title: "相似推荐", Cards: cardViews(cards)})
+	a.row(c, RowView{Title: "相似推荐", Cards: cardViews(cards), More: mediaHref(m.ID) + "/similar"})
 }
 
 // ---------- 想看 / 看过 ----------

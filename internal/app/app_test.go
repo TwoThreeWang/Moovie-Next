@@ -351,7 +351,7 @@ func TestAllPagesRender(t *testing.T) {
 		"/search?q=雾港":                        {`value="雾港"`, "我的源"},
 		"/foryou":                             {"为你推荐"},
 		showPath:                              {"雾港 第二季", "播放源", "选集", "继续播放", "第 1 集", `data-media="`, "剧照"},
-		filmPath:                              {"回声", "播放源"},
+		filmPath:                              {"回声", "播放源", "收录这部作品的片单", "2026 最佳", `href="/list/best-2026"`},
 		"/play/" + itoa(show) + "?s=2&e=2":    {"雾港 第二季", `data-episode="2"`, "来源", "弹幕"},
 		"/play/local":                         {`data-local="1"`, "这部作品不在作品库里"},
 		"/changelog":                          {"更新记录", "热搜榜"},
@@ -409,7 +409,7 @@ func TestAllPagesRender(t *testing.T) {
 		"/api/htmx/search?q=雾港":                    {"雾港 第二季"},
 		"/api/htmx/discover?type=movie&page=1":     {"回声"},
 		"/api/htmx/m/" + itoa(film) + "/comments":  {"镜头相信观众", "短评"},
-		"/api/htmx/m/" + itoa(show) + "/similar":   {"相似推荐", "白夜"},
+		"/api/htmx/m/" + itoa(show) + "/similar":   {"相似推荐", "白夜", `href="/m/` + itoa(show) + `/similar"`},
 		"/api/htmx/m/" + itoa(film) + "/mark-form": {"看过《回声》", "取消标记"},
 		"/api/htmx/douban-status":                  {"douban-status"},
 	} {

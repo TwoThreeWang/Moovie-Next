@@ -144,6 +144,14 @@ WHERE c.status = 'published'
 ORDER BY COALESCE(f.n, 0) DESC, COALESCE(v.n, 0) DESC, c.published_at DESC, c.id DESC LIMIT $1 OFFSET $2`, limit, offset)
 }
 
+// ContainingMedia 列出收录了某部作品的公开片单，收藏多的在前，最多 limit 个。
+// 作品详情页用它把读者和搜索引擎引到片单：片单里有人写的推荐语，比按算法算出的相似推荐更值得收录。
+func (s *Store) ContainingMedia(ctx context.Context, mediaID int64, limit int) ([]Collection, error) {
+	return s.list(ctx, ` WHERE c.status = 'published' AND c.id IN (SELECT collection_id FROM collection_items WHERE media_id = $1)
+ORDER BY (SELECT count(*) FROM collection_favorites f WHERE f.collection_id = c.id AND f.active) DESC, c.published_at DESC, c.id DESC
+LIMIT $2`, mediaID, limit)
+}
+
 func (s *Store) ByAuthor(ctx context.Context, ownerID int64, limit, offset int) ([]Collection, error) {
 	return s.list(ctx, ` WHERE c.owner_user_id = $1 AND c.status = 'published'
 ORDER BY c.published_at DESC, c.id DESC LIMIT $2 OFFSET $3`, ownerID, limit, offset)
