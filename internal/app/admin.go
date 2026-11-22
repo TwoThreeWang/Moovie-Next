@@ -336,6 +336,7 @@ func (a *App) adminMediaHidden(c *gin.Context) {
 		return
 	}
 	hidden := c.PostForm("hidden") == "1"
+	defer a.forgetCharts()
 	if err := a.Media.SetHidden(c.Request.Context(), id, hidden); err != nil {
 		a.fail(c, err)
 		return

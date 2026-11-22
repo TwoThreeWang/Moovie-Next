@@ -345,7 +345,7 @@ func TestAllPagesRender(t *testing.T) {
 	month := time.Now().Format("2006-01")
 
 	pages := map[string][]string{
-		"/":                                   {"雾港 第二季", "继续观看", "今日更新", "/api/htmx/row/foryou"},
+		"/":                                   {"雾港 第二季", "继续观看", "今日更新", "为你推荐", "白夜", "热门电影", "回声", "热门剧集", "最新片单", "2026 最佳", "/api/htmx/row/friends"},
 		"/discover":                           {"雾港 第二季", "回声"},
 		"/discover/tv?genre=悬疑&sort=new":      {"雾港 第二季"},
 		"/search?q=雾港":                        {`value="雾港"`, "我的源"},
@@ -380,6 +380,11 @@ func TestAllPagesRender(t *testing.T) {
 		"/admin/collections/1":                {"下架片单", "年度第一"},
 		"/me/collections/new":                 {"新建片单"},
 		"/me/collections":                     {"我的片单", "2026 最佳"},
+	}
+	// 首屏的几行直接写在页面里，不等脚本加载完再请求；更靠下的仍然滚动到附近再加载。最上面一行的图片不延迟加载。
+	if home := s.get("/").body; strings.Contains(home, `hx-get="/api/htmx/row/chart/movie"`) || strings.Contains(home, `hx-get="/api/htmx/row/foryou"`) ||
+		!strings.Contains(home, `hx-get="/api/htmx/row/chart/anime"`) || !strings.Contains(home, `loading="eager"`) {
+		t.Error("首页首屏的行应该直接写在页面里，第一行图片不延迟加载")
 	}
 	// 片单在顶部菜单里，管理后台只从「我的」进入。
 	if nav := s.get("/discover").body; !strings.Contains(nav, `<a class="nav-link" href="/list"`) ||
@@ -780,6 +785,10 @@ func TestInstallSupport(t *testing.T) {
 	// 页面头部：图标、清单、import map；import map 的哈希必须在 CSP 里，否则浏览器不会执行它。
 	home := s.get("/")
 	mustContain(t, home, `rel="manifest"`, `rel="apple-touch-icon"`, `apple-mobile-web-app-status-bar-style`, `type="importmap"`, `rel="modulepreload"`, `/static/js/app.js?v=`)
+	// app.js 整棵依赖树都预加载，包括第二、三层才 import 到的模块（不用等上一层下载完才发现）。
+	for _, module := range []string{"core/install.js", "lib/platform.js", "core/episodes.js", "lib/tvbox.js"} {
+		mustContain(t, home, `<link rel="modulepreload" href="/static/js/`+module+`?v=`)
+	}
 	importMap := regexp.MustCompile(`<script type="importmap">(.*?)</script>`).FindStringSubmatch(home.body)
 	if importMap == nil {
 		t.Fatal("页面里没有 import map")
@@ -864,6 +873,11 @@ func TestPublicPages(t *testing.T) {
 		t.Error("未登录的搜索页不应该有「我的源」")
 	}
 	mustContain(t, s.get("/"), "先随便看看", "/api/htmx/row/chart/movie")
+	// 公开的榜单行对所有人一样，可以缓存；但不能把写 Cookie 的响应交给 CDN。
+	if r := s.get("/api/htmx/row/chart/tv"); !strings.Contains(r.header.Get("Cache-Control"), "max-age=300") ||
+		(r.header.Get("Set-Cookie") != "" && strings.Contains(r.header.Get("Cache-Control"), "public")) {
+		t.Errorf("榜单行的缓存头不对: %q set-cookie=%q", r.header.Get("Cache-Control"), r.header.Get("Set-Cookie"))
+	}
 
 	// 搜索引擎优化：标题带年份和类型；面包屑和 sameAs；短评和相似推荐直接写在页面里（爬虫不执行脚本）
 	mustContain(t, detail, `<title>雾港 第二季（2026）`, "简介、演员表、短评", `"@type":"BreadcrumbList"`, `"sameAs":["https://movie.douban.com/subject/36000001/"`,

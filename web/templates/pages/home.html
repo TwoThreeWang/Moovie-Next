@@ -15,13 +15,9 @@
 <div class="rows">
 <div id="continue" data-continue>{{if .Recent}}{{template "row" dict "Row" (dict "Title" "继续观看" "More" "/me/history" "Class" "rail-wide" "Wide" .Recent)}}{{end}}</div>
 {{if .Today}}{{template "row" dict "Row" (dict "Title" "今日更新" "Sub" "你在追的" "Cards" .Today)}}{{end}}
-{{template "row_lazy" dict "Src" "/api/htmx/row/foryou"}}
-{{template "row_lazy" dict "Src" "/api/htmx/row/chart/movie"}}
-{{template "row_lazy" dict "Src" "/api/htmx/row/collections" "Class" "rail-banner"}}
-{{template "row_lazy" dict "Src" "/api/htmx/row/chart/tv"}}
-{{template "row_lazy" dict "Src" "/api/htmx/row/friends"}}
-{{template "row_lazy" dict "Src" "/api/htmx/row/chart/anime"}}
-{{template "row_lazy" dict "Src" "/api/htmx/row/chart/show"}}
-</div>
+{{range .Rows}}{{if .Lazy}}{{template "row_lazy" dict "Src" .Lazy "Class" .Class}}
+{{else if .Collections}}{{template "row_collections" dict "Collections" .Collections}}
+{{else if .Row.Cards}}{{template "row" dict "Row" .Row}}
+{{end}}{{end}}</div>
 {{template "footer" .}}
 </main>{{end}}

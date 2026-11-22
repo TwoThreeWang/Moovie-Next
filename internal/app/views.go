@@ -19,15 +19,17 @@ type CardView struct {
 	Href  string
 	Sub   string
 	Badge string
+	Eager bool // 首屏的海报：不延迟加载，HTML 一到就开始下载
 }
 
 // WideView 是横版卡片（继续观看）的展示数据。
 type WideView struct {
 	media.Card
-	Href string
-	Sub  string
-	Pct  int
-	At   int64 // 最近一次播放的时间（毫秒时间戳），浏览器用它把本地的加密历史按时间插进来
+	Href  string
+	Sub   string
+	Pct   int
+	At    int64 // 最近一次播放的时间（毫秒时间戳），浏览器用它把本地的加密历史按时间插进来
+	Eager bool  // 同 CardView.Eager
 }
 
 // RowView 是首页一行内容的展示数据。

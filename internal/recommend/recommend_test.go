@@ -3,6 +3,7 @@ package recommend_test
 import (
 	"context"
 	"testing"
+	"time"
 
 	"moovie/internal/db/testdb"
 	"moovie/internal/media"
@@ -76,6 +77,10 @@ func TestRecommendFallsBackToGenresThenCharts(t *testing.T) {
 	cards, err := service.ForUser(ctx, 2, 2)
 	if err != nil || len(cards) != 2 {
 		t.Fatalf("ForUser 应该返回 2 张卡片: %d err=%v", len(cards), err)
+	}
+	// 首页用 ForUserWithin：缓存里有就直接给。
+	if cards, ok, err := service.ForUserWithin(ctx, 2, 2, time.Millisecond); err != nil || !ok || len(cards) != 2 {
+		t.Fatalf("缓存命中时 ForUserWithin 应该直接返回: ok=%v %d err=%v", ok, len(cards), err)
 	}
 	store.ReplaceChart(ctx, "movie", []int64{21})
 	if cards, _ := service.ForUser(ctx, 2, 10); len(cards) != 3 {

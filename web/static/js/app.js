@@ -99,11 +99,24 @@ addEventListener('scroll', onScroll, { passive: true });
 onScroll();
 
 // ---------- 懒加载：离视口 800px 时触发 htmx 的 near 事件 ----------
+// htmx 要到 DOMContentLoaded 才给 hx-trigger 绑上监听，在那之前发出的 near 没人接，占位行会一直停在骨架屏。
+// 本脚本比那更早运行，IntersectionObserver 的第一次回调也可能更早：后面的脚本还在下载时浏览器先渲染了一帧
+// （iPhone 隔段时间再打开时常见），首屏的几行就全卡住了，滚到下面的行反而正常。所以先记下来，等 htmx 初始化完再触发。
+// htmx 的 DOMContentLoaded 监听在它自己的脚本执行时就注册了，比这里早，所以这里的监听运行时它已经处理完页面。
+let htmxReady = d.readyState === 'complete';
+const pendingNear = [];
+const fireNear = (el) => (htmxReady ? window.htmx?.trigger(el, 'near') : pendingNear.push(el));
+const flushNear = () => {
+  htmxReady = true;
+  for (const el of pendingNear.splice(0)) window.htmx?.trigger(el, 'near');
+};
+d.addEventListener('DOMContentLoaded', flushNear, { once: true });
+addEventListener('load', flushNear, { once: true });
 const lazyIO = 'IntersectionObserver' in window && new IntersectionObserver((entries) => {
   for (const entry of entries) {
     if (!entry.isIntersecting) continue;
     lazyIO.unobserve(entry.target);
-    window.htmx?.trigger(entry.target, 'near');
+    fireNear(entry.target);
   }
 }, { rootMargin: '800px 0px' });
 
@@ -426,8 +439,8 @@ function shimmer(root) {
 function scan(root) {
   shimmer(root);
   for (const grid of $$('.d-sec .ep-grid', root)) collapseEpisodes(grid);
-  for (const el of $$('[data-lazy]', root)) lazyIO ? lazyIO.observe(el) : window.htmx?.trigger(el, 'near');
-  if (root.matches?.('[data-lazy]')) lazyIO ? lazyIO.observe(root) : window.htmx?.trigger(root, 'near');
+  for (const el of $$('[data-lazy]', root)) lazyIO ? lazyIO.observe(el) : fireNear(el);
+  if (root.matches?.('[data-lazy]')) lazyIO ? lazyIO.observe(root) : fireNear(root);
   $$('.rail', root).forEach(initRail);
   if (root.matches?.('.rail')) initRail(root);
 }

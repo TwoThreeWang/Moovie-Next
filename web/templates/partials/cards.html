@@ -2,11 +2,11 @@
   sizes 的最后一项故意写成卡片实际宽度（--card-w = 14vw + 52px）的一半：浏览器按"宽度 × 屏幕倍数"挑图，
   这样手机不管 2 倍、3 倍还是 4 倍屏都会挑 240 的小图（效果相当于按 2 倍屏给图），字节少一半多，肉眼看不出区别。 */}}
 {{define "card"}}<a class="card" href="{{.Href}}" data-id="{{.ID}}" data-title="{{.Title}}" data-meta="{{.Sub}}" data-img="{{img .Poster "thumb" .Title "poster"}}">
-<div class="card-art">{{if .Poster}}<img src="{{img .Poster "card" .Title "poster"}}" srcset="{{img .Poster "card" .Title "poster"}} 240w, {{img .Poster "thumb" .Title "poster"}} 540w" sizes="(min-width: 1086px) 204px, (min-width: 720px) calc(14vw + 52px), calc(7vw + 26px)" width="204" height="306" loading="lazy" decoding="async" alt="">{{end}}{{if .Badge}}<span class="badge badge-new">{{.Badge}}</span>{{end}}{{if rating .Rating}}<span class="score-chip">{{rating .Rating}}</span>{{end}}</div>
+<div class="card-art">{{if .Poster}}<img src="{{img .Poster "card" .Title "poster"}}" srcset="{{img .Poster "card" .Title "poster"}} 240w, {{img .Poster "thumb" .Title "poster"}} 540w" sizes="(min-width: 1086px) 204px, (min-width: 720px) calc(14vw + 52px), calc(7vw + 26px)" width="204" height="306" loading="{{if .Eager}}eager{{else}}lazy{{end}}" decoding="async" alt="">{{end}}{{if .Badge}}<span class="badge badge-new">{{.Badge}}</span>{{end}}{{if rating .Rating}}<span class="score-chip">{{rating .Rating}}</span>{{end}}</div>
 <span class="card-title">{{.Title}}</span><span class="card-meta">{{.Sub}}</span></a>{{end}}
 
 {{define "card_wide"}}<a class="card card-wide" href="{{.Href}}" data-no-prerender data-id="{{.ID}}" data-title="{{.Title}}" data-meta="{{.Sub}}" data-img="{{img .Poster "thumb" .Title "poster"}}" data-history="1" data-at="{{.At}}">
-<div class="card-art">{{if .Backdrop}}<img src="{{img .Backdrop "thumb" .Title "still"}}" width="480" height="270" loading="lazy" decoding="async" alt="">{{else if .Poster}}<img src="{{img .Poster "thumb" .Title "poster"}}" width="480" height="270" loading="lazy" decoding="async" alt="">{{end}}
+<div class="card-art">{{if .Backdrop}}<img src="{{img .Backdrop "thumb" .Title "still"}}" width="480" height="270" loading="{{if .Eager}}eager{{else}}lazy{{end}}" decoding="async" alt="">{{else if .Poster}}<img src="{{img .Poster "thumb" .Title "poster"}}" width="480" height="270" loading="{{if .Eager}}eager{{else}}lazy{{end}}" decoding="async" alt="">{{end}}
 <div class="card-over"><span class="card-title">{{.Title}}</span><span class="card-meta">{{.Sub}}</span></div>
 <div class="progress"><i style="--p:{{.Pct}}%"></i></div></div></a>{{end}}
 

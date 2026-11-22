@@ -12,10 +12,14 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"golang.org/x/sync/errgroup"
+
 	"moovie/internal/auth"
+	"moovie/internal/collections"
 	"moovie/internal/httpx"
 	"moovie/internal/ingest"
 	"moovie/internal/media"
+	"moovie/internal/playback"
 )
 
 func (a *App) publicRoutes(r gin.IRouter) {
@@ -113,6 +117,10 @@ func (a *App) memberRoutes(r gin.IRouter) {
 }
 
 // index 是首页：未登录显示产品介绍，登录后显示内容。
+//
+// 首屏的几行（为你推荐、热门电影、最新片单、热门剧集）直接写在页面里：如果用占位行，
+// 要等 HTML、htmx 和全部脚本下载完才开始请求，第一次打开要多等好几秒。更靠下的行仍然滚动到附近再加载。
+// 各项查询并行进行；榜单在内存里缓存，"为你推荐"最多等 forYouWait。
 func (a *App) index(c *gin.Context) {
 	user := auth.Current(c)
 	if user == nil {
@@ -120,13 +128,29 @@ func (a *App) index(c *gin.Context) {
 		return
 	}
 	ctx := c.Request.Context()
-	recent, err := a.Positions.Recent(ctx, user.ID, 12, 0)
-	if err != nil {
-		a.fail(c, err)
-		return
-	}
-	airing, err := a.Media.AiringOn(ctx, user.ID, time.Now(), 12)
-	if err != nil {
+	var (
+		recent        []playback.Recent
+		airing        []media.Airing
+		movies, shows []media.Card
+		forYou        []media.Card
+		forYouReady   bool
+		lists         []collections.Collection
+		listsErr      error
+	)
+	group, groupCtx := errgroup.WithContext(ctx)
+	group.Go(func() (err error) { recent, err = a.Positions.Recent(groupCtx, user.ID, 12, 0); return })
+	group.Go(func() (err error) { airing, err = a.Media.AiringOn(groupCtx, user.ID, time.Now(), 12); return })
+	group.Go(func() (err error) { movies, err = a.chart(groupCtx, media.TypeMovie, chartCacheSize); return })
+	group.Go(func() (err error) { shows, err = a.chart(groupCtx, media.TypeTV, chartCacheSize); return })
+	group.Go(func() error {
+		var err error
+		if forYou, forYouReady, err = a.Recommend.ForUserWithin(groupCtx, user.ID, 20, forYouWait); err != nil {
+			a.Log.Warn("首页的为你推荐没有算出来，改为滚动加载", "error", err)
+		}
+		return nil
+	})
+	group.Go(func() error { lists, listsErr = a.Collections.Browse(groupCtx, "new", 8, 0); return nil })
+	if err := group.Wait(); err != nil {
 		a.fail(c, err)
 		return
 	}
@@ -134,27 +158,46 @@ func (a *App) index(c *gin.Context) {
 	for _, item := range airing {
 		today = append(today, CardView{Card: item.Card, Href: mediaHref(item.Card.ID), Badge: "新", Sub: item.Label()})
 	}
-	hero, err := a.heroCards(ctx)
-	if err != nil {
-		a.fail(c, err)
-		return
+	rows := []homeRow{lazyRow("/api/htmx/row/foryou", "")}
+	if forYouReady {
+		rows[0] = homeRow{Row: forYouRow(forYou)}
+	}
+	rows = append(rows, homeRow{Row: chartRow(media.TypeMovie, movies)})
+	if listsErr != nil {
+		a.Log.Warn("首页的最新片单没有读出来，改为滚动加载", "error", listsErr)
+		rows = append(rows, lazyRow("/api/htmx/row/collections", "rail-banner"))
+	} else {
+		rows = append(rows, homeRow{Collections: lists})
+	}
+	rows = append(rows, homeRow{Row: chartRow(media.TypeTV, shows)},
+		lazyRow("/api/htmx/row/friends", ""), lazyRow("/api/htmx/row/chart/anime", ""), lazyRow("/api/htmx/row/chart/show", ""))
+
+	// 最上面一行海报不延迟加载。继续观看在最上面时，它的横版卡片已经比较大，只提前前几张。
+	wide := wideViews(recent)
+	switch {
+	case len(wide) > 0:
+		for i := range firstN(wide, eagerCount/2) {
+			wide[i].Eager = true
+		}
+	case len(today) > 0:
+		markEager(today)
+	default:
+		for _, row := range rows {
+			if row.Lazy == "" && len(row.Row.Cards) > 0 {
+				markEager(row.Row.Cards)
+				break
+			}
+		}
 	}
 	a.render.Page(c, http.StatusOK, "home.html", gin.H{
-		"Title": a.Config.SiteName, "Nav": "home", "Hero": hero, "SEO": a.siteSEO(),
-		"Recent": wideViews(recent), "Today": today, "Scripts": []string{"pages/home.js"},
+		"Title": a.Config.SiteName, "Nav": "home", "Hero": heroCards(movies, shows), "SEO": a.siteSEO(),
+		"Recent": wide, "Today": today, "Rows": rows, "Scripts": []string{"pages/home.js"},
 	})
 }
 
-// heroCards 从电影榜和剧集榜里挑几部有剧照的作品放在首页顶部。
-func (a *App) heroCards(ctx context.Context) ([]media.Card, error) {
-	movies, err := a.Media.Chart(ctx, media.TypeMovie, 12)
-	if err != nil {
-		return nil, err
-	}
-	shows, err := a.Media.Chart(ctx, media.TypeTV, 12)
-	if err != nil {
-		return nil, err
-	}
+// heroCards 从电影榜和剧集榜的前 12 部里挑几部有剧照的作品放在首页顶部。
+func heroCards(movies, shows []media.Card) []media.Card {
+	movies, shows = firstN(movies, 12), firstN(shows, 12)
 	hero := []media.Card{}
 	for index := 0; index < max(len(movies), len(shows)) && len(hero) < 5; index++ {
 		for _, list := range [][]media.Card{shows, movies} {
@@ -163,7 +206,7 @@ func (a *App) heroCards(ctx context.Context) ([]media.Card, error) {
 			}
 		}
 	}
-	return hero, nil
+	return hero
 }
 
 func (a *App) row(c *gin.Context, row RowView) {
@@ -174,27 +217,43 @@ func (a *App) row(c *gin.Context, row RowView) {
 	a.render.Partial(c, "row", gin.H{"Row": row})
 }
 
+func forYouRow(cards []media.Card) RowView {
+	return RowView{Title: "为你推荐", Sub: "根据你的想看和看过", More: "/foryou", Cards: cardViews(cards)}
+}
+
+func chartRow(kind string, cards []media.Card) RowView {
+	return RowView{Title: "热门" + media.TypeLabel(kind), More: "/discover/" + kind, Cards: cardViews(cards)}
+}
+
 func (a *App) rowForYou(c *gin.Context) {
 	cards, err := a.Recommend.ForUser(c.Request.Context(), auth.Current(c).ID, 20)
 	if err != nil {
 		a.fail(c, err)
 		return
 	}
-	a.row(c, RowView{Title: "为你推荐", Sub: "根据你的想看和看过", More: "/foryou", Cards: cardViews(cards)})
+	a.row(c, forYouRow(cards))
 }
 
+// rowChart 是公开的榜单行，内容对所有人一样：允许浏览器和 CDN 缓存 5 分钟。
+// 这次响应要写 Cookie（第一次来的访客拿 CSRF 令牌、登录状态续期）时不让 CDN 缓存，免得把 Cookie 发给别人。
 func (a *App) rowChart(c *gin.Context) {
 	kind := c.Param("kind")
 	if !media.ValidType(kind) {
 		c.Status(http.StatusNotFound)
 		return
 	}
-	cards, err := a.Media.Chart(c.Request.Context(), kind, 24)
+	cards, err := a.chart(c.Request.Context(), kind, chartCacheSize)
 	if err != nil {
 		a.fail(c, err)
 		return
 	}
-	a.row(c, RowView{Title: "热门" + media.TypeLabel(kind), More: "/discover/" + kind, Cards: cardViews(cards)})
+	httpx.CSRFToken(c) // 先决定要不要写 Cookie，下面才知道能不能公开缓存
+	if c.Writer.Header().Get("Set-Cookie") == "" {
+		c.Header("Cache-Control", "public, max-age=300")
+	} else {
+		c.Header("Cache-Control", "private, max-age=300")
+	}
+	a.row(c, chartRow(kind, cards))
 }
 
 func (a *App) rowCollections(c *gin.Context) {
@@ -391,7 +450,7 @@ func (a *App) discoverPage(c *gin.Context) {
 			for _, chart := range []struct{ kind, title, sub string }{
 				{ingest.ChartShortHot, "热播榜", "红果热度"}, {ingest.ChartShortNew, "新剧榜", "近三天上架"},
 			} {
-				list, err := a.Media.Chart(c.Request.Context(), chart.kind, 24)
+				list, err := a.chart(c.Request.Context(), chart.kind, 24)
 				if err != nil {
 					a.fail(c, err)
 					return
@@ -434,7 +493,7 @@ func (a *App) searchPage(c *gin.Context) {
 	}
 	var hot []media.Card
 	if len(trending) < 5 {
-		if hot, err = a.Media.Chart(c.Request.Context(), media.TypeTV, 10); err != nil {
+		if hot, err = a.chart(c.Request.Context(), media.TypeTV, 10); err != nil {
 			a.fail(c, err)
 			return
 		}

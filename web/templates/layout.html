@@ -35,7 +35,8 @@
 <link rel="stylesheet" href="/static/css/app.css?v={{.AssetV}}">
 <link rel="stylesheet" href="/static/css/site.css?v={{.AssetV}}">
 {{range .CSS}}<link rel="stylesheet" href="/static/css/{{.}}.css?v={{$.AssetV}}">
-{{end}}{{.Head}}<script src="/static/js/htmx.min.js?v={{.AssetV}}" defer></script>
+{{end}}{{.Head}}{{range .Preload}}<link rel="modulepreload" href="{{.}}">
+{{end}}<script src="/static/js/htmx.min.js?v={{.AssetV}}" defer></script>
 <script type="module" src="/static/js/app.js?v={{.AssetV}}"></script>
 {{range .Scripts}}<script type="module" src="/static/js/{{.}}?v={{$.AssetV}}"></script>
 {{end}}</head>

@@ -52,6 +52,9 @@ func (a *App) homeTitle() string { return a.Config.SiteName + " - " + siteTaglin
 // 标题：页面的 SEO.Title，没有时用页面的 Title，后面加" - 站点名"；页面标题为空或就是站点名时（首页）用"站点名 - 发现你的下一部电影"。
 // 没有设置 SEO 的页面是登录后才有的页面（或错误页），一律 noindex，只输出标题、默认描述和关键词。
 func (a *App) prepareHead(c *gin.Context, data gin.H) {
+	if scripts, ok := data["Scripts"].([]string); ok {
+		data["Preload"] = a.modules.preload(scripts)
+	}
 	site := a.Config.SiteName
 	pageTitle, _ := data["Title"].(string)
 	seo, public := data["SEO"].(SEO)

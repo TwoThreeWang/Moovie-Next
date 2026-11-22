@@ -87,6 +87,7 @@ type App struct {
 	images          *imageproxy.Handler
 	exampleSub      []byte // 临时：示例订阅，见 example_subscription.go
 	topics          shortTopics
+	charts          chartCache
 	pow             *pow.Issuer
 	accounts        *auth.Handler
 }

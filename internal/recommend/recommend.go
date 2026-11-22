@@ -6,17 +6,23 @@ package recommend
 
 import (
 	"context"
+	"errors"
 	"strconv"
 	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"golang.org/x/sync/singleflight"
 
 	"moovie/internal/db"
 	"moovie/internal/media"
 )
 
 const snapshotTTL = 6 * time.Hour
+
+// computeTimeout 是一次推荐计算最长花多久。计算不跟着请求取消：首页等不及先显示占位行，
+// 算完的结果照样放进缓存，占位行随后发来的请求会直接用上（或者等着同一次计算算完）。
+const computeTimeout = 15 * time.Second
 
 // Service 生成推荐结果，并在内存里缓存 6 小时（重启后重新算一次即可，不需要存数据库）。
 type Service struct {
@@ -25,6 +31,10 @@ type Service struct {
 
 	mu    sync.Mutex
 	cache map[int64]cached
+	// invalidations 每次 Invalidate 加一。计算开始后它变了，说明有人刚标记过作品，算出来的结果就不放进缓存。
+	invalidations uint64
+	// computing 让同一个用户同时只有一次计算：首页和占位行的请求一起来时共用结果。
+	computing singleflight.Group
 }
 
 type cached struct {
@@ -39,34 +49,82 @@ func NewService(pool *db.Pool, mediaStore *media.Store) *Service {
 
 // ForUser 返回给某个用户的推荐。
 func (s *Service) ForUser(ctx context.Context, userID int64, limit int) ([]media.Card, error) {
+	ids, err := s.snapshot(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	return s.media.Cards(ctx, firstN(ids, limit))
+}
+
+// ForUserWithin 和 ForUser 一样，但最多等 wait：缓存里有就立刻返回，没有就算，算不完返回 ok=false，
+// 计算在后台继续，结果照样进缓存。首页用它决定"为你推荐"是直接写进页面，还是先放一个占位行。
+func (s *Service) ForUserWithin(ctx context.Context, userID int64, limit int, wait time.Duration) (cards []media.Card, ok bool, err error) {
+	waitCtx, cancel := context.WithTimeout(ctx, wait)
+	defer cancel()
+	ids, err := s.snapshot(waitCtx, userID)
+	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
+			return nil, false, nil
+		}
+		return nil, false, err
+	}
+	cards, err = s.media.Cards(ctx, firstN(ids, limit))
+	return cards, err == nil, err
+}
+
+// snapshot 返回缓存里的推荐，过期或没有时重新计算（同一个用户的并发请求共用一次计算）。
+func (s *Service) snapshot(ctx context.Context, userID int64) ([]int64, error) {
 	s.mu.Lock()
 	entry, ok := s.cache[userID]
 	s.mu.Unlock()
-	ids := entry.ids
-	if !ok || time.Now().After(entry.expires) {
-		computed, err := s.Compute(ctx, userID, 60)
+	if ok && time.Now().Before(entry.expires) {
+		return entry.ids, nil
+	}
+	done := s.computing.DoChan(strconv.FormatInt(userID, 10), func() (any, error) {
+		s.mu.Lock()
+		started := s.invalidations
+		s.mu.Unlock()
+		computeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), computeTimeout)
+		defer cancel()
+		ids, err := s.Compute(computeCtx, userID, 60)
 		if err != nil {
 			return nil, err
 		}
-		ids = computed
 		s.mu.Lock()
-		if len(s.cache) > 20000 {
-			s.cache = map[int64]cached{}
+		if s.invalidations == started {
+			if len(s.cache) > 20000 {
+				s.cache = map[int64]cached{}
+			}
+			s.cache[userID] = cached{ids: ids, expires: time.Now().Add(snapshotTTL)}
 		}
-		s.cache[userID] = cached{ids: ids, expires: time.Now().Add(snapshotTTL)}
 		s.mu.Unlock()
+		return ids, nil
+	})
+	select {
+	case result := <-done:
+		if result.Err != nil {
+			return nil, result.Err
+		}
+		return result.Val.([]int64), nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
 	}
+}
+
+func firstN(ids []int64, limit int) []int64 {
 	if len(ids) > limit {
-		ids = ids[:limit]
+		return ids[:limit]
 	}
-	return s.media.Cards(ctx, ids)
+	return ids
 }
 
 // Invalidate 让用户的推荐缓存失效（标记了新的想看或看过之后调用）。
 func (s *Service) Invalidate(_ context.Context, userID int64) error {
 	s.mu.Lock()
 	delete(s.cache, userID)
+	s.invalidations++
 	s.mu.Unlock()
+	s.computing.Forget(strconv.FormatInt(userID, 10))
 	return nil
 }
 
