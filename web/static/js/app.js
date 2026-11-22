@@ -468,6 +468,17 @@ if ('serviceWorker' in navigator) {
   });
 }
 
+// iOS 从桌面打开时的启动图：iOS 不看 manifest 的背景色，不给启动图就是白屏。在这台设备上现画一张，
+// 用户添加到桌面时 iOS 会存下来。页面加载完、空闲时再画，不和首屏抢资源。
+{
+  const info = detectPlatform(navigator.userAgent, { maxTouchPoints: navigator.maxTouchPoints, platform: navigator.platform });
+  if (info.os === 'ios' && !info.inApp && !isStandalone()) {
+    addEventListener('load', () => {
+      (window.requestIdleCallback ?? setTimeout)(() => import('./core/splash.js').then((m) => m.addStartupImages()).catch(() => {}), { timeout: 3000 });
+    });
+  }
+}
+
 // 首页提示条：只在手机浏览器里、第二次来的时候出现；关掉后 30 天内不再出现。
 function maybeShowInstallTip() {
   if (location.pathname !== '/' || !userId() || isStandalone()) return;
