@@ -273,6 +273,7 @@ func (a *App) playLocal(c *gin.Context) {
 }
 
 // resolveAPI 把浏览器发来的片名信息对应到作品。请求里只有片名、年份、类型和豆瓣 ID。
+// 只做匹配，不收录：搜索页"我的源"的结果里有大量不相干的片子，收录要等用户真的播放了再做（见 discoverAPI）。
 func (a *App) resolveAPI(c *gin.Context) {
 	user := auth.Current(c)
 	if !a.resolve.Allow(strconv.FormatInt(user.ID, 10)) {
@@ -286,21 +287,33 @@ func (a *App) resolveAPI(c *gin.Context) {
 		httpx.Error(c, http.StatusBadRequest, "请求格式不正确")
 		return
 	}
-	ctx := c.Request.Context()
-	results, err := a.Media.Resolve(ctx, body.Items)
+	results, err := a.Media.Resolve(c.Request.Context(), body.Items)
 	if err != nil {
 		a.fail(c, err)
 		return
 	}
-	// 作品库里没有、但带了豆瓣 ID 的：让后台去豆瓣确认并收录，下次就能匹配上。
-	for index, result := range results {
-		if result.Status == "unknown" && media.ValidDoubanID(body.Items[index].DoubanID) && a.discover.Allow("r"+strconv.FormatInt(user.ID, 10)) {
-			if err := a.Ingest.DiscoverDoubanID(ctx, body.Items[index].DoubanID); err != nil {
-				c.Error(err)
-			}
-		}
-	}
 	c.JSON(http.StatusOK, gin.H{"results": results})
+}
+
+// discoverAPI 收录用户正在播放的一部作品：从搜索页"我的源"点进本地播放、作品库里还没有、播放源给了豆瓣 ID 的。
+// 先在作品库里占一行，后台去豆瓣确认并抓资料；已经有了就什么都不做。之后搜索和观看记录就能匹配上它。
+func (a *App) discoverAPI(c *gin.Context) {
+	var body struct {
+		DoubanID string `json:"douban_id"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil || !media.ValidDoubanID(body.DoubanID) {
+		httpx.Error(c, http.StatusBadRequest, "请求格式不正确")
+		return
+	}
+	if !a.discover.Allow("r" + strconv.FormatInt(auth.Current(c).ID, 10)) {
+		httpx.Error(c, http.StatusTooManyRequests, "操作太频繁")
+		return
+	}
+	if err := a.Ingest.DiscoverDoubanID(c.Request.Context(), body.DoubanID); err != nil {
+		a.fail(c, err)
+		return
+	}
+	c.Status(http.StatusNoContent)
 }
 
 // ---------- 短评、相似推荐 ----------

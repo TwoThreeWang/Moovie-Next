@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"html"
 	"io"
 	"log/slog"
@@ -549,9 +550,26 @@ func TestResolveAPI(t *testing.T) {
 		response.Results[1].Status != "matched" || response.Results[2].Status != "unknown" {
 		t.Fatalf("匹配结果不对: %s", r.body)
 	}
-	// 没匹配上但带了豆瓣 ID 的：作品库里先占一行，等后台去豆瓣确认。
-	if _, err := s.app.Media.ByDoubanID(context.Background(), "36000777"); err != nil {
-		t.Errorf("带豆瓣 ID 的未知作品应该被收录待确认: %v", err)
+	// 匹配只读：没匹配上的作品即使带了豆瓣 ID 也不收录，要等用户真的播放了（/api/media/discover）。
+	if _, err := s.app.Media.ByDoubanID(context.Background(), "36000777"); !errors.Is(err, media.ErrNotFound) {
+		t.Errorf("匹配接口不应该收录作品，实际 err=%v", err)
+	}
+	if r := s.json(http.MethodPost, "/api/media/discover", map[string]any{"douban_id": "36000777"}); r.status != http.StatusNoContent {
+		t.Fatalf("播放时收录失败: %d %s", r.status, r.body)
+	}
+	id, err := s.app.Media.ByDoubanID(context.Background(), "36000777")
+	if err != nil {
+		t.Fatalf("播放时应该收录作品，等后台去豆瓣确认: %v", err)
+	}
+	// 重复收录不会新建作品。
+	if r := s.json(http.MethodPost, "/api/media/discover", map[string]any{"douban_id": "36000777"}); r.status != http.StatusNoContent {
+		t.Errorf("重复收录应该直接成功，实际 %d", r.status)
+	}
+	if again, _ := s.app.Media.ByDoubanID(context.Background(), "36000777"); again.ID != id.ID {
+		t.Errorf("重复收录不应该新建作品: %d → %d", id.ID, again.ID)
+	}
+	if r := s.json(http.MethodPost, "/api/media/discover", map[string]any{"douban_id": "abc"}); r.status != http.StatusBadRequest {
+		t.Errorf("豆瓣 ID 不合法时应该拒绝，实际 %d", r.status)
 	}
 	if r := s.json(http.MethodPost, "/api/media/resolve", map[string]any{"items": []any{}}); r.status != http.StatusBadRequest {
 		t.Errorf("空请求应该被拒绝，实际 %d", r.status)

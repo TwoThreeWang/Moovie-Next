@@ -107,12 +107,13 @@ async function setup() {
     return false;
   }
   const record = await getPrivate(state.rid);
-  const info = record ?? (await idb.get('cache', userKey('local:' + state.rid)));
+  const cached = await idb.get('cache', userKey('local:' + state.rid));
+  const info = record ?? cached;
   if (!info) {
     showMessage(h('p', { text: '这台设备上没有这部作品的播放信息。请从搜索页重新进入。' }), h('a', { class: 'btn btn-glass', href: '/search', text: '去搜索' }));
     return false;
   }
-  state.media = { title: info.title, year: info.year, type: info.type, source: info.source, vodId: info.vodId, pic: info.pic };
+  state.media = { title: info.title, year: info.year, type: info.type, source: info.source, vodId: info.vodId, pic: info.pic, doubanId: cached?.doubanId };
   state.isMovie = info.type === 'movie';
   state.episode = state.isMovie ? 1 : Math.max(1, +hash.get('e') || record?.ep || 1);
   if (record && (record.ep || 1) === state.episode && !record.done) state.resume = record.pos || 0;
@@ -480,6 +481,7 @@ v.addEventListener('loadedmetadata', () => {
     showHint(state.switched ? '已切换来源，进度可能有几秒偏差' : `从 ${fmt(state.resume)} 继续播放`, 2400);
   }
   if (manual) { rememberLink(state.manual.url, { dur: Math.round(v.duration || 0) }); return; }
+  if (local) discoverLocal();
   const option = state.options[state.current];
   if (option) sources.setLast(local ? 'p:' + state.rid : 'm:' + state.media.id, { source: option.key, line: option.line });
   loadDanmaku();
@@ -870,6 +872,15 @@ function checkAds(t) {
     h('button', { type: 'button', text: '不是', onclick: () => { vote(candidate.hex, 'reject'); hideAdBox(); } }),
     h('button', { type: 'button', 'aria-label': '关闭', text: '×', onclick: hideAdBox }));
   adBox.hidden = false;
+}
+
+// 作品库里还没有、播放源给了豆瓣 ID 的：真正开始播放后让本站收录，后台去豆瓣抓资料。
+// 之后搜索能直接匹配到作品页，本地观看记录也会在每天的检查里转成普通进度。每个页面只报一次。
+let discovered = false;
+function discoverLocal() {
+  if (discovered || !/^\d{6,9}$/.test(state.media.doubanId ?? '')) return;
+  discovered = true;
+  api('/api/media/discover', { method: 'POST', json: { douban_id: state.media.doubanId } }).catch(() => {});
 }
 
 // ---------- 弹幕 ----------

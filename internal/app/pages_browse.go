@@ -81,6 +81,7 @@ func (a *App) memberRoutes(r gin.IRouter) {
 	r.GET("/play/local", a.playLocal)
 	r.GET("/play/:id", a.playPage)
 	r.POST("/api/media/resolve", a.resolveAPI)
+	r.POST("/api/media/discover", a.discoverAPI)
 
 	// 社区
 	r.POST("/api/comments/:id/like", a.toggleLike)

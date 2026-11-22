@@ -40,7 +40,8 @@ function sourceCard(item, sourceName, link, badge) {
 async function localLink(item, source) {
   const info = { title: item.name, year: item.year, type: item.type || (item.lines[0].episodes.length > 1 ? 'series' : 'movie') };
   const rid = await privateId(info);
-  await idb.set('cache', userKey('local:' + rid), { ...info, pic: item.pic, source: source.key, vodId: item.vodId, at: Date.now() });
+  // doubanId：作品库里没有这部时，播放页开始播放后用它让本站收录（搜索时不收录，结果里不相干的太多）。
+  await idb.set('cache', userKey('local:' + rid), { ...info, pic: item.pic, source: source.key, vodId: item.vodId, doubanId: item.doubanId || '', at: Date.now() });
   return { href: '/play/local#rid=' + rid };
 }
 
