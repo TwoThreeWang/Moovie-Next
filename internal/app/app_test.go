@@ -1434,7 +1434,7 @@ func TestCopyrightContact(t *testing.T) {
 	if strings.Contains(s.get("/terms").body, "联系方式") {
 		t.Error("没有设置联系方式的页面不应该显示联系方式")
 	}
-	mustContain(t, s.get("/changelog"), "v5.2.0", "2026-11-22", "发现页的新排序", "v5.1.1", "兼容 TVBox 配置", "v5.1.0", "2026-11-20", "v5.0.0", "2026-11-16", "💥 破坏性变更 (Breaking Changes)", "✨ 新增 (Added)", "登录即同步")
+	mustContain(t, s.get("/changelog"), "v5.2.1", "弹幕加载不出来", "v5.2.0", "2026-11-22", "发现页的新排序", "v5.1.1", "兼容 TVBox 配置", "v5.1.0", "2026-11-20", "v5.0.0", "2026-11-16", "💥 破坏性变更 (Breaking Changes)", "✨ 新增 (Added)", "登录即同步")
 }
 
 // ---------- 后台：内容审核、禁言封禁、广告指纹、趋势 ----------
