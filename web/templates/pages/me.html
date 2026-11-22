@@ -1,7 +1,7 @@
 {{define "content"}}<main>
 <header class="page-head me-head">
 <span class="avatar avatar-emoji lg">{{.User.Avatar}}</span>
-<div><h1 class="page-title">{{.User.Username}}</h1><p class="me-stats"><a href="/me/watched"><b>{{.WatchedCount}}</b> 看过</a> · <a href="/me/wish"><b>{{.WishCount}}</b> 想看</a></p></div>
+<div><h1 class="page-title">{{.User.Username}}</h1><p class="me-stats"><a href="/me/watched"><b>{{.WatchedCount}}</b>看过</a><a href="/me/wish"><b>{{.WishCount}}</b>想看</a></p></div>
 <a class="btn btn-glass btn-icon" href="/notifications" aria-label="通知{{if .Unread}}（{{.Unread}} 条未读）{{end}}"><svg class="i"><use href="#i-bell"/></svg>{{if .Unread}}<span class="dot-badge"></span>{{end}}</a>
 </header>
 <a class="report" href="/user/{{.User.ID}}/monthly/{{.Month}}">
