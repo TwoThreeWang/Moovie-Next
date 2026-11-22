@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"moovie/internal/danmaku"
 	"moovie/internal/db/testdb"
@@ -158,5 +159,55 @@ func TestTitleKeyedDanmakuAndValidation(t *testing.T) {
 	}
 	if _, err := service.List(ctx, danmaku.Key{MediaID: 99999, Episode: 1}); err == nil {
 		t.Error("作品不存在时应该报错")
+	}
+}
+
+// 慢的弹幕库：查询放到后台继续，页面请求先返回站内弹幕，查完进缓存，下次直接拿到。
+type slowUpstream struct {
+	release chan struct{}
+	calls   chan string
+}
+
+func (f *slowUpstream) Enabled() bool { return true }
+func (f *slowUpstream) Fetch(ctx context.Context, title string, season, episode int) ([]providers.DanmuComment, error) {
+	f.calls <- title
+	select {
+	case <-f.release:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	return []providers.DanmuComment{{Time: 3, Text: "慢慢来的弹幕", Color: "#FFFFFF"}}, nil
+}
+
+func TestSlowUpstreamFinishesInBackground(t *testing.T) {
+	pool := testdb.Pool(t)
+	upstream := &slowUpstream{release: make(chan struct{}), calls: make(chan string, 4)}
+	service := danmaku.NewService(danmaku.NewStore(pool), media.NewStore(pool), upstream)
+	danmaku.SetWait(service, 50*time.Millisecond)
+	key := danmaku.Key{Title: "慢片", Season: 1, Episode: 1}
+
+	// 页面请求只等一小会儿，弹幕库没返回就先给站内弹幕，后台接着查。
+	if items, err := service.List(context.Background(), key); err != nil || len(items) != 0 {
+		t.Fatalf("弹幕库还没返回时应该只有站内弹幕: %+v err=%v", items, err)
+	}
+	// 并发的第二个请求不重复查询。
+	if items, _ := service.List(context.Background(), key); len(items) != 0 {
+		t.Fatalf("还在查的时候不应该有第三方弹幕: %+v", items)
+	}
+	close(upstream.release)
+	deadline := time.After(2 * time.Second)
+	for {
+		items, _ := service.List(context.Background(), key)
+		if len(items) == 1 && items[0].Text == "慢慢来的弹幕" {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatal("后台查询完成后应该能从缓存拿到第三方弹幕")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	if n := len(upstream.calls); n != 1 {
+		t.Errorf("同一集应该只查一次弹幕库，实际 %d 次", n)
 	}
 }

@@ -184,7 +184,11 @@ func New(cfg config.Config, pool *db.Pool, log *slog.Logger, options Options) (*
 	}
 	danmu := options.Danmu
 	if danmu == nil {
-		danmu = &providers.Danmu{HTTP: client, Base: cfg.DanmuBase}
+		// 弹幕库是同一台机器上的 danmu-api 容器，始终直连：不管 HTTP_PROXY / NO_PROXY 怎么配，都不能绕到出站代理上去
+		// （代理那头解析不了 danmu-api 这个容器名）。它查一集可能要几十秒，超时交给 danmaku.Service 控制。
+		transport := http.DefaultTransport.(*http.Transport).Clone()
+		transport.Proxy = nil
+		danmu = &providers.Danmu{HTTP: &http.Client{Timeout: 2 * time.Minute, Transport: transport}, Base: cfg.DanmuBase}
 	}
 	hongguo := options.Hongguo
 	if hongguo == nil {
@@ -193,6 +197,7 @@ func New(cfg config.Config, pool *db.Pool, log *slog.Logger, options Options) (*
 	app.Ingest = &ingest.Service{Media: app.Media, Queue: app.Queue, Douban: douban, Wikidata: wikidata, TMDB: tmdb, AI: ai, Embedder: embedder,
 		Hongguo: hongguo, ShortSync: cfg.HongguoSync, Log: log}
 	app.Danmaku = danmaku.NewService(danmaku.NewStore(pool), app.Media, danmu)
+	app.Danmaku.Log = log
 	app.DoubanSync = &doubansync.Service{Pool: pool, Users: app.Users, Douban: douban, Catalog: app.Ingest, Queue: app.Queue}
 
 	templates := options.TemplateFS

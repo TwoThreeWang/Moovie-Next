@@ -883,16 +883,22 @@ function danmakuQuery() {
   return { title: state.media.title, season: 1, episode: state.episode };
 }
 
-async function loadDanmaku() {
-  const params = new URLSearchParams(danmakuQuery());
-  if (danmakuLoaded === params.toString()) return;
-  danmakuLoaded = params.toString();
+// 第三方弹幕库第一次查一集比较慢，服务器没等到时返回 pending，这里隔几秒再取（那时一般已经进了服务器缓存）。
+async function loadDanmaku(attempt = 0) {
+  const key = new URLSearchParams(danmakuQuery()).toString();
+  if (!attempt && danmakuLoaded === key) return;
+  danmakuLoaded = key;
   try {
-    const response = await api('/api/danmaku?' + params);
-    if (!response.ok) return;
-    danmaku = (await response.json()).items ?? [];
+    const response = await api('/api/danmaku?' + key);
+    if (!response.ok || danmakuLoaded !== key) return;
+    const body = await response.json();
+    if (danmakuLoaded !== key) return; // 等结果的时候已经换了集
+    danmaku = body.items ?? [];
     danmakuIndex = -1;
-    d.getElementById('dm-count').textContent = danmaku.length ? `${danmaku.length} 条` : '还没有弹幕';
+    const more = body.pending && attempt < 4;
+    d.getElementById('dm-count').textContent = more ? `${danmaku.length ? danmaku.length + ' 条，' : ''}弹幕库加载中…`
+      : danmaku.length ? `${danmaku.length} 条` : '还没有弹幕';
+    if (more) setTimeout(() => { if (danmakuLoaded === key) loadDanmaku(attempt + 1); }, 5000);
   } catch { /* 弹幕不影响播放 */ }
 }
 

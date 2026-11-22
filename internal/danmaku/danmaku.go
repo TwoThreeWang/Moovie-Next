@@ -6,6 +6,7 @@ package danmaku
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"regexp"
 	"sort"
@@ -30,6 +31,11 @@ const (
 	// 第三方弹幕在内存里最多缓存多少集。一集最多 6000 条、约 0.6 MB，200 集封顶在 120 MB 左右；
 	// 超过就整个清空重来（丢了只是下次打开时重新取一次）。
 	externalCacheMax = 200
+	// 第三方弹幕库第一次查一集要先搜片、再去各平台分段拉弹幕，常常要十几秒到几十秒。
+	// 查询放到后台做，最多做 externalFetchTimeout；页面请求只等 externalWait，没等到就先返回站内弹幕，
+	// 标记 pending，浏览器过几秒再来取（那时一般已经进了缓存）。
+	externalWait         = 12 * time.Second
+	externalFetchTimeout = 90 * time.Second
 )
 
 // Key 标识一集的弹幕。MediaID 非 0 时按作品归档，否则按片名归档。
@@ -108,19 +114,30 @@ type cached struct {
 	at    time.Time
 }
 
+// inflight 是一次正在进行的第三方查询，同一集的并发请求共用它。
+type inflight struct {
+	done  chan struct{}
+	items []providers.DanmuComment
+}
+
 // Service 合并用户弹幕和第三方弹幕。
 type Service struct {
 	store    *Store
 	media    *media.Store
 	upstream Upstream
+	// Log 记录第三方弹幕库的错误，可以为 nil。
+	Log *slog.Logger
 
-	mu    sync.Mutex
-	cache map[string]cached
+	wait    time.Duration // 页面请求最多等第三方弹幕多久
+	mu      sync.Mutex
+	cache   map[string]cached
+	pending map[string]*inflight
 }
 
 // NewService 创建 Service。upstream 可以为 nil。
 func NewService(store *Store, mediaStore *media.Store, upstream Upstream) *Service {
-	return &Service{store: store, media: mediaStore, upstream: upstream, cache: map[string]cached{}}
+	return &Service{store: store, media: mediaStore, upstream: upstream, wait: externalWait,
+		cache: map[string]cached{}, pending: map[string]*inflight{}}
 }
 
 // resolve 返回站内归档键和第三方查询键。
@@ -144,47 +161,85 @@ func (s *Service) resolve(ctx context.Context, key Key) (Key, Key, error) {
 	return key, Key{Title: base, Season: key.Season, Episode: key.Episode}, nil
 }
 
-// List 返回一集的全部弹幕，按时间排序。第三方弹幕库出错时只返回用户弹幕。
+// List 返回一集的全部弹幕，按时间排序。第三方弹幕库出错或还没查完时只返回用户弹幕。
 func (s *Service) List(ctx context.Context, key Key) ([]providers.DanmuComment, error) {
+	items, _, err := s.list(ctx, key)
+	return items, err
+}
+
+// list 同 List，另外返回第三方弹幕是否还在后台查询。
+func (s *Service) list(ctx context.Context, key Key) ([]providers.DanmuComment, bool, error) {
 	key, externalKey, err := s.resolve(ctx, key)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	local, err := s.store.List(ctx, key, localMaximum)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	merged := append(local, s.external(ctx, externalKey.Title, externalKey.Season, externalKey.Episode)...)
+	external, pending := s.external(ctx, externalKey.Title, externalKey.Season, externalKey.Episode)
+	merged := append(local, external...)
 	sort.SliceStable(merged, func(a, b int) bool { return merged[a].Time < merged[b].Time })
-	return merged, nil
+	return merged, pending, nil
 }
 
-func (s *Service) external(ctx context.Context, title string, season, episode int) []providers.DanmuComment {
+// external 返回第三方弹幕。缓存过期或没有时在后台查询（同一集只查一次），最多等 externalWait；
+// 没等到时返回旧缓存（可能为空）并报告 pending。
+func (s *Service) external(ctx context.Context, title string, season, episode int) ([]providers.DanmuComment, bool) {
 	if s.upstream == nil || !s.upstream.Enabled() || strings.TrimSpace(title) == "" {
-		return nil
+		return nil, false
 	}
 	cacheKey := fmt.Sprintf("%s|%d|%d", media.Normalize(title), season, episode)
 	s.mu.Lock()
 	entry, ok := s.cache[cacheKey]
-	if len(s.cache) > externalCacheMax {
-		s.cache = map[string]cached{}
-	}
-	s.mu.Unlock()
 	if ok && time.Since(entry.at) < externalTTL {
-		return entry.items
+		s.mu.Unlock()
+		return entry.items, false
 	}
-	fetchCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
-	defer cancel()
-	items, err := s.upstream.Fetch(fetchCtx, title, max(1, season), episode)
-	if err != nil {
-		// 失败时用旧缓存兜底，没有就不返回第三方弹幕。
-		return entry.items
+	call := s.pending[cacheKey]
+	if call == nil {
+		call = &inflight{done: make(chan struct{})}
+		s.pending[cacheKey] = call
+		go s.fetch(cacheKey, call, title, season, episode, entry.items)
 	}
-	items = sample(items, externalMaximum)
-	s.mu.Lock()
-	s.cache[cacheKey] = cached{items: items, at: time.Now()}
 	s.mu.Unlock()
-	return items
+
+	timer := time.NewTimer(s.wait)
+	defer timer.Stop()
+	select {
+	case <-call.done:
+		return call.items, false
+	case <-timer.C:
+	case <-ctx.Done():
+	}
+	return entry.items, true
+}
+
+// fetch 在后台查第三方弹幕库并写缓存。不跟页面请求的 context：用户关掉页面也要查完，下次打开直接用缓存。
+func (s *Service) fetch(cacheKey string, call *inflight, title string, season, episode int, stale []providers.DanmuComment) {
+	ctx, cancel := context.WithTimeout(context.Background(), externalFetchTimeout)
+	defer cancel()
+	started := time.Now()
+	items, err := s.upstream.Fetch(ctx, title, max(1, season), episode)
+	s.mu.Lock()
+	if err != nil {
+		// 失败时用旧缓存兜底，没有就不返回第三方弹幕；不写缓存，下次再试。
+		call.items = stale
+	} else {
+		items = sample(items, externalMaximum)
+		if len(s.cache) >= externalCacheMax {
+			s.cache = map[string]cached{}
+		}
+		s.cache[cacheKey] = cached{items: items, at: time.Now()}
+		call.items = items
+	}
+	delete(s.pending, cacheKey)
+	s.mu.Unlock()
+	close(call.done)
+	if err != nil && s.Log != nil {
+		s.Log.Warn("第三方弹幕库查询失败", "title", title, "season", season, "episode", episode,
+			"elapsed", time.Since(started).Round(time.Millisecond), "error", err)
+	}
 }
 
 // sample 弹幕过多时按固定间隔抽样，保证时间分布均匀。
@@ -258,14 +313,15 @@ func keyFrom(mediaID int64, title string, season, episode int) Key {
 func (h *Handler) list(c *gin.Context) {
 	mediaID, _ := strconv.ParseInt(c.Query("media_id"), 10, 64)
 	key := keyFrom(mediaID, c.Query("title"), httpx.QueryInt(c, "season", 1), httpx.QueryInt(c, "episode", 1))
-	items, err := h.service.List(c.Request.Context(), key)
+	items, pending, err := h.service.list(c.Request.Context(), key)
 	if err != nil {
 		httpx.Error(c, http.StatusNotFound, "作品不存在")
 		return
 	}
 	// 不让浏览器缓存：刚发的弹幕刷新后就要看得到。第三方弹幕在服务器上已经缓存了，库里的查一次很快。
 	c.Header("Cache-Control", "no-store")
-	c.JSON(http.StatusOK, gin.H{"items": items})
+	// pending：第三方弹幕库还在查，浏览器过一会儿再来取。
+	c.JSON(http.StatusOK, gin.H{"items": items, "pending": pending})
 }
 
 func (h *Handler) post(c *gin.Context) {
