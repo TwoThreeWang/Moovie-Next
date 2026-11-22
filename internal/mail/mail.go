@@ -13,11 +13,14 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"mime"
+	"mime/multipart"
 	"net"
 	"net/mail"
 	"net/smtp"
+	"net/textproto"
 	"strconv"
 	"strings"
 	"time"
@@ -40,16 +43,26 @@ var (
 	ErrSend = errors.New("邮件发送失败，请稍后再试")
 )
 
-// Message 是一封纯文本邮件。Kind 用于日志和频率统计（register、reset、email 等）。
+// Message 是一封邮件，同时发纯文本和 HTML 两个版本（见 layout.go）。
+// Kind 用于日志和频率统计（register、reset、email 等）。
 type Message struct {
 	To      string
 	Subject string
-	Text    string
+	Title   string // 正文开头的大标题
+	Text    string // 按钮前的正文，段落之间空一行
+	Button  Button // 主按钮，可以不填
+	Note    string // 按钮后的正文，可以不填
 	Kind    string
 	// Security 表示安全提醒（如"邮箱已修改"）：不受单个收件人的频率限制，只受全站上限，
 	// 免得有人先刷满对方的次数，让提醒发不出去。
 	Security bool
 }
+
+// Button 是邮件里的主按钮。纯文本版本里显示为"Label：URL"。
+type Button struct{ Label, URL string }
+
+// Site 是邮件页头的站名和页脚的网址。
+type Site struct{ Name, URL string }
 
 // Transport 把一封编好的邮件交给邮件服务器。
 type Transport interface {
@@ -72,13 +85,14 @@ type Mailer struct {
 	checker   *Checker
 	db        db.Querier
 	from      string
+	site      Site
 	limits    Limits
 	log       *slog.Logger
 }
 
 // New 创建 Mailer。transport 为 nil 时 Send 一律返回 ErrDisabled。
-func New(transport Transport, checker *Checker, q db.Querier, from string, limits Limits, log *slog.Logger) *Mailer {
-	return &Mailer{transport: transport, checker: checker, db: q, from: from, limits: limits, log: log}
+func New(transport Transport, checker *Checker, q db.Querier, from string, site Site, limits Limits, log *slog.Logger) *Mailer {
+	return &Mailer{transport: transport, checker: checker, db: q, from: from, site: site, limits: limits, log: log}
 }
 
 // Enabled 表示配置了邮件服务。
@@ -117,7 +131,7 @@ func (m *Mailer) Send(ctx context.Context, message Message) error {
 		m.log.Warn("发信频率超限", "kind", message.Kind, "domain", domainOf(message.To), "err", err)
 		return err
 	}
-	raw := build(m.from, message, time.Now())
+	raw := build(m.from, m.site, message, time.Now())
 	if err := m.transport.Send(ctx, addressOf(m.from), message.To, raw); err != nil {
 		m.log.Error("发信失败", "kind", message.Kind, "domain", domainOf(message.To), "err", err)
 		return ErrSend
@@ -176,8 +190,8 @@ func addressOf(from string) string {
 	return from
 }
 
-// build 编码一封纯文本 UTF-8 邮件。
-func build(from string, message Message, now time.Time) []byte {
+// build 编码一封 UTF-8 邮件：multipart/alternative，纯文本在前、HTML 在后。
+func build(from string, site Site, message Message, now time.Time) []byte {
 	clean := func(s string) string { return strings.NewReplacer("\r", "", "\n", "").Replace(s) }
 	sender := from
 	if parsed, err := mail.ParseAddress(from); err == nil {
@@ -186,6 +200,7 @@ func build(from string, message Message, now time.Time) []byte {
 	var id [12]byte
 	_, _ = rand.Read(id[:])
 	var b bytes.Buffer
+	parts := multipart.NewWriter(&b)
 	header := func(key, value string) { b.WriteString(key + ": " + clean(value) + "\r\n") }
 	header("From", sender)
 	header("To", message.To)
@@ -193,17 +208,50 @@ func build(from string, message Message, now time.Time) []byte {
 	header("Date", now.Format(time.RFC1123Z))
 	header("Message-ID", "<"+hex.EncodeToString(id[:])+"@"+domainOf(addressOf(from))+">")
 	header("MIME-Version", "1.0")
-	header("Content-Type", "text/plain; charset=utf-8")
-	header("Content-Transfer-Encoding", "base64")
+	header("Content-Type", `multipart/alternative; boundary="`+parts.Boundary()+`"`)
 	header("Auto-Submitted", "auto-generated")
 	b.WriteString("\r\n")
-	body := base64.StdEncoding.EncodeToString([]byte(strings.ReplaceAll(message.Text, "\n", "\r\n")))
-	for len(body) > 76 {
-		b.WriteString(body[:76] + "\r\n")
-		body = body[76:]
+	for _, part := range [][2]string{{"text/plain", message.plain()}, {"text/html", message.html(site)}} {
+		w, _ := parts.CreatePart(textproto.MIMEHeader{"Content-Type": {part[0] + "; charset=utf-8"}, "Content-Transfer-Encoding": {"base64"}})
+		body := base64.StdEncoding.EncodeToString([]byte(strings.ReplaceAll(part[1], "\n", "\r\n")))
+		for len(body) > 76 {
+			io.WriteString(w, body[:76]+"\r\n")
+			body = body[76:]
+		}
+		io.WriteString(w, body+"\r\n")
 	}
-	b.WriteString(body + "\r\n")
+	parts.Close()
 	return b.Bytes()
+}
+
+// Decode 解出邮件的主题、纯文本和 HTML 正文，给开发环境的日志和测试用。
+func Decode(raw []byte) (subject, text, html string, err error) {
+	msg, err := mail.ReadMessage(bytes.NewReader(raw))
+	if err != nil {
+		return "", "", "", err
+	}
+	subject, _ = new(mime.WordDecoder).DecodeHeader(msg.Header.Get("Subject"))
+	_, params, err := mime.ParseMediaType(msg.Header.Get("Content-Type"))
+	if err != nil {
+		return subject, "", "", err
+	}
+	reader := multipart.NewReader(msg.Body, params["boundary"])
+	for {
+		part, err := reader.NextRawPart()
+		if err == io.EOF {
+			return subject, text, html, nil
+		}
+		if err != nil {
+			return subject, text, html, err
+		}
+		data, _ := io.ReadAll(base64.NewDecoder(base64.StdEncoding, part))
+		body := strings.ReplaceAll(string(data), "\r\n", "\n")
+		if strings.HasPrefix(part.Header.Get("Content-Type"), "text/html") {
+			html = body
+		} else {
+			text = body
+		}
+	}
 }
 
 // SMTP 通过 SMTP 服务器发信。端口 465 用 TLS 直连，其他端口要求 STARTTLS（本机除外）。
@@ -295,12 +343,7 @@ type LogTransport struct{ Log *slog.Logger }
 
 // Send 实现 Transport。
 func (t LogTransport) Send(_ context.Context, _, to string, raw []byte) error {
-	text := string(raw)
-	if i := strings.Index(text, "\r\n\r\n"); i >= 0 {
-		if decoded, err := base64.StdEncoding.DecodeString(strings.ReplaceAll(text[i+4:], "\r\n", "")); err == nil {
-			text = text[:i] + "\n\n" + string(decoded)
-		}
-	}
-	t.Log.Info("开发环境：邮件没有真的发出，内容如下", "to", to, "mail", text)
+	subject, text, _, _ := Decode(raw)
+	t.Log.Info("开发环境：邮件没有真的发出，内容如下", "to", to, "subject", subject, "text", text)
 	return nil
 }

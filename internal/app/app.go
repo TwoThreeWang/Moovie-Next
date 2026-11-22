@@ -464,5 +464,5 @@ func newMailer(cfg config.Config, pool *db.Pool, log *slog.Logger, options Optio
 	if cfg.MailHourlyLimit > 0 {
 		limits.PerHour = cfg.MailHourlyLimit
 	}
-	return mail.New(transport, mail.NewChecker(options.MXResolver), pool, from, limits, log)
+	return mail.New(transport, mail.NewChecker(options.MXResolver), pool, from, mail.Site{Name: cfg.SiteName, URL: cfg.SiteURL}, limits, log)
 }

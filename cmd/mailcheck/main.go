@@ -65,11 +65,11 @@ func main() {
 			fail(errors.New("请设置 SMTP_FROM，例如 \"影牛 <hello@你的域名>\""))
 		}
 		logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
-		mailer := mail.New(transport, checker, pool, from, mail.DefaultLimits, logger)
+		mailer := mail.New(transport, checker, pool, from, mail.Site{Name: cfg.SiteName, URL: cfg.SiteURL}, mail.DefaultLimits, logger)
 		start := time.Now()
-		err := mailer.Send(ctx, mail.Message{To: *to, Kind: "test", Subject: cfg.SiteName + "：测试邮件",
-			Text: "这是一封测试邮件。\n\n能看到它，说明 SMTP 配置是对的。请再看一下：\n" +
-				"1. 它是不是在收件箱里（而不是垃圾邮件）；\n2. 邮件头里 SPF、DKIM、DMARC 是否都是 pass。\n"})
+		err := mailer.Send(ctx, mail.Message{To: *to, Kind: "test", Subject: cfg.SiteName + "：测试邮件", Title: "测试邮件",
+			Text: "能看到它，说明 SMTP 配置是对的。请再看一下：\n" +
+				"1. 它是不是在收件箱里（而不是垃圾邮件）；\n2. 邮件头里 SPF、DKIM、DMARC 是否都是 pass；\n3. HTML 和纯文本两个版本是否都显示正常。"})
 		if err != nil {
 			fail(err)
 		}

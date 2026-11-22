@@ -74,15 +74,23 @@ func TestMailerLimitsAndEncoding(t *testing.T) {
 	recorder := &mailtest.Recorder{}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	mailer := mail.New(recorder, mail.NewChecker(mailtest.Default()), pool, "影牛 <noreply@example.com>",
-		mail.Limits{Gap: time.Hour, PerDay: 2, PerHour: 3}, logger)
+		mail.Site{Name: "影牛", URL: "https://moovie.test"}, mail.Limits{Gap: time.Hour, PerDay: 2, PerHour: 3}, logger)
 
-	message := mail.Message{To: "a@example.com", Subject: "你的密码", Text: "密码：abc\n第二行", Kind: "register"}
+	message := mail.Message{To: "a@example.com", Subject: "你的密码", Title: "欢迎", Text: "密码：<abc>\n第二行",
+		Button: mail.Button{Label: "登录", URL: "https://moovie.test/login?a=1&b=2"}, Note: "不是你就忽略", Kind: "register"}
 	if err := mailer.Send(ctx, message); err != nil {
 		t.Fatal(err)
 	}
 	got, ok := recorder.Last("a@example.com")
-	if !ok || got.Subject != "你的密码" || got.Text != "密码：abc\n第二行" {
-		t.Errorf("邮件内容不对: %+v", got)
+	want := "欢迎\n\n密码：<abc>\n第二行\n\n登录：\nhttps://moovie.test/login?a=1&b=2\n\n不是你就忽略\n"
+	if !ok || got.Subject != "你的密码" || got.Text != want {
+		t.Errorf("纯文本内容不对: %+v", got)
+	}
+	for _, part := range []string{"<b style=\"font-size:17px;color:#e2605d\">影牛</b>", ">欢迎</h2>", "<p>密码：&lt;abc&gt;<br>第二行</p>",
+		`href="https://moovie.test/login?a=1&amp;b=2"`, ">登录</a>", "<p>不是你就忽略</p>", `href="https://moovie.test" style="color:#999">moovie.test</a>`} {
+		if !strings.Contains(got.HTML, part) {
+			t.Errorf("HTML 里缺少 %q:\n%s", part, got.HTML)
+		}
 	}
 	if err := mailer.Send(ctx, message); !errors.Is(err, mail.ErrTooSoon) {
 		t.Errorf("间隔太短应该被拒绝: %v", err)
@@ -111,7 +119,7 @@ func TestMailerLimitsAndEncoding(t *testing.T) {
 	}
 
 	// 每天上限：换一个间隔为 0 的发信器
-	daily := mail.New(recorder, mail.NewChecker(mailtest.Default()), pool, "noreply@example.com", mail.Limits{PerDay: 2}, logger)
+	daily := mail.New(recorder, mail.NewChecker(mailtest.Default()), pool, "noreply@example.com", mail.Site{}, mail.Limits{PerDay: 2}, logger)
 	daily.Send(ctx, mail.Message{To: "e@example.com", Subject: "x", Text: "x"})
 	daily.Send(ctx, mail.Message{To: "e@example.com", Subject: "x", Text: "x"})
 	if err := daily.Send(ctx, mail.Message{To: "e@example.com", Subject: "x", Text: "x"}); !errors.Is(err, mail.ErrTooMany) {

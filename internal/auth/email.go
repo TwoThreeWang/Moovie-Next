@@ -226,12 +226,13 @@ func (h *Handler) registerSubmit(c *gin.Context) {
 		fail(http.StatusInternalServerError, "注册失败，请重试", false)
 		return
 	}
-	err = h.Mail.Send(ctx, mail.Message{To: email, Kind: "register", Subject: "欢迎使用" + h.SiteName + "：你的登录密码", Text: "你好，\n\n" +
-		"你用这个邮箱注册了" + h.SiteName + "。登录信息如下：\n\n" +
-		"邮箱：" + email + "\n密码：" + password + "\n\n" +
-		"登录地址：" + h.SiteURL + welcomeLogin(email) + "\n\n" +
-		"你现在的用户名是「" + user.Username + "」。登录后可以在「设置 → 账号」里修改用户名和密码。\n\n" +
-		"如果不是你本人注册的，忽略这封邮件即可：没有这个密码，别人无法登录。\n"})
+	err = h.Mail.Send(ctx, mail.Message{To: email, Kind: "register", Subject: "欢迎使用" + h.SiteName + "：你的登录密码",
+		Title: "欢迎来到" + h.SiteName,
+		Text: "你用这个邮箱注册了" + h.SiteName + "，登录信息如下：\n\n" +
+			"邮箱：" + email + "\n密码：" + password + "\n\n" +
+			"你现在的用户名是「" + user.Username + "」。登录后可以在「设置 → 账号」里修改用户名和密码。",
+		Button: mail.Button{Label: "登录" + h.SiteName, URL: h.SiteURL + welcomeLogin(email)},
+		Note:   "如果不是你本人注册的，忽略这封邮件即可：没有这个密码，别人无法登录。"})
 	if err != nil {
 		// 密码没送到，账号就没法用，删掉让用户重新注册。
 		_ = h.users.Delete(ctx, user.ID)
@@ -273,10 +274,11 @@ func (h *Handler) forgotSubmit(c *gin.Context) {
 	}
 	// 邮箱没注册过时也显示同样的结果，不让人用这个页面试探谁注册过。
 	if user, err := h.users.ByEmail(ctx, email); err == nil {
-		err = h.Mail.Send(ctx, mail.Message{To: user.Email, Kind: "reset", Subject: h.SiteName + "：重置密码", Text: "你好，\n\n" +
-			"有人（希望是你）在" + h.SiteName + "申请重置这个邮箱对应账号的密码。点下面的链接设置新密码：\n\n" +
-			h.ResetLink(user) + "\n\n" +
-			"链接 30 分钟内有效，只能用一次。如果不是你本人操作，忽略这封邮件即可，密码不会改变。\n"})
+		err = h.Mail.Send(ctx, mail.Message{To: user.Email, Kind: "reset", Subject: h.SiteName + "：重置密码",
+			Title:  "重置密码",
+			Text:   "有人（希望是你）在" + h.SiteName + "申请重置这个邮箱对应账号的密码。点下面的按钮设置新密码：",
+			Button: mail.Button{Label: "设置新密码", URL: h.ResetLink(user)},
+			Note:   "链接 30 分钟内有效，只能用一次。如果不是你本人操作，忽略这封邮件即可，密码不会改变。"})
 		if err != nil && !errors.Is(err, mail.ErrUndeliverable) {
 			fail(http.StatusServiceUnavailable, err.Error())
 			return
@@ -358,9 +360,11 @@ func (h *Handler) updateEmail(c *gin.Context) {
 		return
 	}
 	link := h.SiteURL + "/auth/email?t=" + url.QueryEscape(h.emailToken(user, email, time.Now()))
-	err := h.Mail.Send(ctx, mail.Message{To: email, Kind: "email", Subject: h.SiteName + "：确认新邮箱", Text: "你好，\n\n" +
-		h.SiteName + "的用户「" + user.Username + "」要把登录邮箱改成这个地址。点下面的链接确认：\n\n" + link + "\n\n" +
-		"链接 24 小时内有效。确认之前，登录邮箱不会改变。如果不是你本人操作，忽略这封邮件即可。\n"})
+	err := h.Mail.Send(ctx, mail.Message{To: email, Kind: "email", Subject: h.SiteName + "：确认新邮箱",
+		Title:  "确认新邮箱",
+		Text:   h.SiteName + "的用户「" + user.Username + "」要把登录邮箱改成这个地址。点下面的按钮确认：",
+		Button: mail.Button{Label: "确认新邮箱", URL: link},
+		Note:   "链接 24 小时内有效。确认之前，登录邮箱不会改变。如果不是你本人操作，忽略这封邮件即可。"})
 	if err != nil {
 		done(c, "account", mailErrorCode(err))
 		return
@@ -400,9 +404,10 @@ func (h *Handler) confirmEmail(c *gin.Context) {
 		return
 	}
 	// 通知旧邮箱，万一不是本人操作还能发现。发不出去不影响结果。
-	_ = h.Mail.Send(ctx, mail.Message{To: old, Kind: "email-changed", Security: true, Subject: h.SiteName + "：登录邮箱已修改", Text: "你好，\n\n" +
-		"你在" + h.SiteName + "的账号「" + user.Username + "」的登录邮箱已经改为 " + maskEmail(email) + "。\n\n" +
-		"如果不是你本人操作，请尽快通过 " + h.SiteURL + "/feedback 联系我们。\n"})
+	_ = h.Mail.Send(ctx, mail.Message{To: old, Kind: "email-changed", Security: true, Subject: h.SiteName + "：登录邮箱已修改",
+		Title:  "登录邮箱已修改",
+		Text:   "你在" + h.SiteName + "的账号「" + user.Username + "」的登录邮箱已经改为 " + maskEmail(email) + "。\n\n如果不是你本人操作，请尽快联系我们。",
+		Button: mail.Button{Label: "联系我们", URL: h.SiteURL + "/feedback"}})
 	h.message(c, http.StatusOK, "邮箱已修改", "以后请用 "+email+" 登录。", "/settings#account", "回到设置")
 }
 

@@ -3,11 +3,11 @@ package mailtest
 
 import (
 	"context"
-	"encoding/base64"
-	"mime"
 	"net"
 	"strings"
 	"sync"
+
+	"moovie/internal/mail"
 )
 
 // Mail 是收到的一封邮件（已解码）。
@@ -15,6 +15,7 @@ type Mail struct {
 	To      string
 	Subject string
 	Text    string
+	HTML    string
 }
 
 // Recorder 把邮件存在内存里。
@@ -25,18 +26,13 @@ type Recorder struct {
 
 // Send 实现 mail.Transport。
 func (r *Recorder) Send(_ context.Context, _, to string, raw []byte) error {
-	text := string(raw)
-	head, body, _ := strings.Cut(text, "\r\n\r\n")
-	decoded, _ := base64.StdEncoding.DecodeString(strings.ReplaceAll(body, "\r\n", ""))
-	var subject string
-	for _, line := range strings.Split(head, "\r\n") {
-		if value, ok := strings.CutPrefix(line, "Subject: "); ok {
-			subject, _ = new(mime.WordDecoder).DecodeHeader(value)
-		}
+	subject, text, html, err := mail.Decode(raw)
+	if err != nil {
+		return err
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.sent = append(r.sent, Mail{To: to, Subject: subject, Text: strings.ReplaceAll(string(decoded), "\r\n", "\n")})
+	r.sent = append(r.sent, Mail{To: to, Subject: subject, Text: text, HTML: html})
 	return nil
 }
 

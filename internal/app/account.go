@@ -73,8 +73,9 @@ func (a *App) deleteOwnAccount(c *gin.Context) {
 	a.Sessions.SignOut(c)
 	// 告诉本人一声：万一不是本人操作（比如密码泄露），也能知道。发不出去不影响结果。
 	_ = a.Mail.Send(ctx, mail.Message{To: user.Email, Kind: "deleted", Security: true, Subject: a.Config.SiteName + "：账号已注销",
-		Text: "你好，\n\n你在" + a.Config.SiteName + "的账号「" + user.Username + "」已经注销，账号下的所有数据（想看、看过、评分、短评、回复、进度、加密历史、弹幕、通知）都已删除，无法恢复。\n\n" +
-			"欢迎以后再来。\n"})
+		Title: "账号已注销",
+		Text: "你在" + a.Config.SiteName + "的账号「" + user.Username + "」已经注销，账号下的所有数据（想看、看过、评分、短评、回复、进度、加密历史、弹幕、通知）都已删除，无法恢复。\n\n" +
+			"欢迎以后再来。"})
 	a.render.Page(c, http.StatusOK, "message.html", gin.H{"Title": "账号已注销", "Heading": "账号已注销",
 		"Message": "账号和所有数据都已删除。这台设备上保存的播放源和密钥也已清除。", "Bare": true,
 		"ClearUser": user.ID, "Scripts": []string{"pages/goodbye.js"}})
