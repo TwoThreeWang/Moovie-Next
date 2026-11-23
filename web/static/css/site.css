@@ -164,6 +164,15 @@ body.bare .doc { margin: 0 auto; }
 .ep-grid a[aria-current="true"] { background: var(--text); color: var(--on-accent); }
 .ep-grid .ep-soon { color: var(--text-3); background: transparent; border: 1px dashed var(--line); }
 @media (hover: hover) and (pointer: fine) { .ep-grid a:hover:not([aria-current="true"]) { background: var(--surface-2); } }
+/* 综艺按期分行：左边期号，右边这一期的各段（上、下、加更……） */
+.ep-grid.ep-issues { display: flex; flex-direction: column; gap: 8px; }
+.ep-issue { display: grid; grid-template-columns: 64px 1fr; align-items: start; gap: 8px; }
+.ep-issue[hidden] { display: none; }
+.ep-issue-no { line-height: 44px; font-size: 13px; color: var(--text-2); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.ep-parts { display: flex; flex-wrap: wrap; gap: 8px; }
+.ep-grid .ep-parts a { min-width: 52px; padding: 0 14px; font-size: 13px; white-space: nowrap; }
+.ep-grid a[data-seen]:not([aria-current="true"]) { color: var(--text-3); }
+.ep-issues .episode-gap { height: 24px; justify-content: start; padding-left: 24px; }
 .play-main { display: flex; gap: 8px; align-items: center; }
 .d-actions .lib .btn-icon { width: 54px; height: 54px; }
 .d-bar .btn-primary { flex: 1; }

@@ -98,7 +98,7 @@ func wideViews(recent []playback.Recent) []WideView {
 	for _, item := range recent {
 		sub := remaining(item.Position, item.Duration)
 		if item.Card.Type != media.TypeMovie {
-			sub = strings.TrimSuffix(fmt.Sprintf("第 %d 集 · %s", item.Episode, sub), " · ")
+			sub = strings.TrimSuffix(media.EpisodeLabel(item.Card.Type, item.Episode)+" · "+sub, " · ")
 		}
 		pct := 0
 		if item.Duration > 0 {
@@ -109,8 +109,10 @@ func wideViews(recent []playback.Recent) []WideView {
 	return views
 }
 
-// episodeStatus 是"更新至第 8 集 / 全 24 集"这样的状态文字。
+// episodeStatus 是"更新至第 8 集 / 全 24 集"这样的状态文字，综艺是"期"。
+// aired 是分集资料里已经播出的最后一集（综艺是第几期）。
 func episodeStatus(m media.Media, aired int) string {
+	unit := media.EpisodeUnit(m.Type)
 	switch {
 	case m.Type == media.TypeMovie:
 		if m.DurationMinutes > 0 {
@@ -120,10 +122,11 @@ func episodeStatus(m media.Media, aired int) string {
 	case m.IsShort() && m.SeriesStatus == "ongoing" && m.EpisodeCount > 0:
 		// 短剧没有分集的播出日期，集数就是已经上线的集数。
 		return fmt.Sprintf("更新至第 %d 集", m.EpisodeCount)
-	case m.SeriesStatus == "ongoing" && aired > 0 && (m.EpisodeCount == 0 || aired < m.EpisodeCount):
-		return fmt.Sprintf("更新至第 %d 集", aired)
+	case m.SeriesStatus == "ongoing" && aired > 0:
+		// 还在播的就是"更新至"：分集资料常常没录全，播出的集数等于总集数不代表完结
+		return fmt.Sprintf("更新至第 %d %s", aired, unit)
 	case m.EpisodeCount > 0:
-		return fmt.Sprintf("全 %d 集", m.EpisodeCount)
+		return fmt.Sprintf("全 %d %s", m.EpisodeCount, unit)
 	}
 	return ""
 }

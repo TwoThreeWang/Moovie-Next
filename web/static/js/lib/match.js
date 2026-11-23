@@ -83,10 +83,11 @@ export function bestMatch(media, items) {
 }
 
 /** 在一条线路里找到某一集。电影直接取第一个。 */
-export function findEpisode(line, episode, isMovie) {
+export function findEpisode(line, episode, isMovie, key = 'number') {
   if (!line?.episodes?.length) return null;
   if (isMovie) return line.episodes[0];
-  return line.episodes.find((e) => e.number === episode) ?? null;
+  // 综艺按期对齐，用的是 lib/issue.js 写上的 issue；其他按集数
+  return line.episodes.find((e) => e[key] === episode) ?? null;
 }
 
 /** 搜索用的关键词：去掉"第二季"这类后缀，资源站按包含关系搜索，这样各季都能搜到。 */

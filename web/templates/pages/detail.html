@@ -17,13 +17,13 @@
 </div>
 {{if .M.Summary}}<p class="d-summary" id="d-summary">{{.M.Summary}}</p>
 <button class="d-more" data-more="d-summary">更多</button>{{end}}
-{{with .NextAir}}<p class="d-schedule"><svg class="i"><use href="#i-bell"/></svg><span>第 {{.Number}} 集 <b>{{date .AirDate}}</b> 更新</span></p>{{end}}
+{{with .NextAir}}<p class="d-schedule"><svg class="i"><use href="#i-bell"/></svg><span>第 {{.Number}} {{$.Unit}} <b>{{date .AirDate}}</b> 更新</span></p>{{end}}
 </div>
 </section>
 <div class="d-grid">
 <div class="d-main">
-{{if .Episodes}}<section class="d-sec" id="episodes"><div class="row-head"><h2 class="row-title">选集<span class="row-sub">{{.Status}}</span></h2></div>
-<div class="ep-grid">{{range .Episodes}}{{if .Upcoming}}<span class="ep-soon" title="{{date .AirDate}} 更新">{{.Number}}</span>{{else}}<a href="{{.Href}}" data-no-prerender{{if .Completed}} data-seen{{end}}{{if .Current}} aria-current="true"{{end}} title="{{.Title}}">{{.Number}}</a>{{end}}{{end}}</div>
+{{if or .Episodes .IsShow}}<section class="d-sec" id="episodes"{{if not .Episodes}} hidden{{end}}><div class="row-head"><h2 class="row-title">选集<span class="row-sub" id="ep-status">{{.Status}}</span></h2></div>
+<div class="ep-grid" id="ep-grid" data-current="{{.PlayEpisode}}" data-seen="{{json .Seen}}">{{range .Episodes}}{{if .Upcoming}}<span class="ep-soon" title="{{date .AirDate}} 更新">{{.Number}}</span>{{else}}<a href="{{.Href}}" data-no-prerender{{if .Completed}} data-seen{{end}}{{if .Current}} aria-current="true"{{end}} title="{{.Title}}">{{.Number}}</a>{{end}}{{end}}</div>
 </section>{{end}}
 <section class="d-sec" id="sources">
 {{if .User}}<div class="row-head"><h2 class="row-title">播放源<span class="row-sub" id="src-status"></span></h2><a class="row-more" href="/settings#sources">设置<svg class="i"><use href="#i-chev-r"/></svg></a></div>
@@ -45,7 +45,7 @@
 {{if .M.Topics}}<div><dt>{{if .M.IsShort}}题材{{else}}类型{{end}}</dt><dd>{{join .M.Topics " / "}}</dd></div>{{end}}
 {{if .M.Countries}}<div><dt>地区</dt><dd>{{join .M.Countries " / "}}</dd></div>{{end}}
 {{if .M.Year}}<div><dt>年份</dt><dd>{{.M.Year}}</dd></div>{{end}}
-{{if .M.IsSeries}}{{if .M.EpisodeCount}}<div><dt>集数</dt><dd>{{.M.EpisodeCount}} 集</dd></div>{{end}}{{else if .M.DurationMinutes}}<div><dt>片长</dt><dd>{{.M.DurationMinutes}} 分钟</dd></div>{{end}}
+{{if .M.IsSeries}}{{if .M.EpisodeCount}}<div><dt>{{.Unit}}数</dt><dd>{{.M.EpisodeCount}} {{.Unit}}</dd></div>{{end}}{{else if .M.DurationMinutes}}<div><dt>片长</dt><dd>{{.M.DurationMinutes}} 分钟</dd></div>{{end}}
 {{if .M.DoubanID}}<div><dt>豆瓣</dt><dd><a href="https://movie.douban.com/subject/{{.M.DoubanID}}/" rel="noopener noreferrer" target="_blank">{{.M.DoubanID}}</a></dd></div>{{end}}
 {{if .M.HongguoID}}<div><dt>来源</dt><dd><a href="https://hongguoduanju.com/detail?series_id={{.M.HongguoID}}" rel="noopener noreferrer" target="_blank">红果短剧</a></dd></div>{{end}}
 {{if .IMDb}}<div><dt>IMDb</dt><dd><a href="https://www.imdb.com/title/{{.IMDb}}/" rel="noopener noreferrer" target="_blank">{{.IMDb}}</a></dd></div>{{end}}

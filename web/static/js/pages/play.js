@@ -10,7 +10,8 @@ import { bestMatch, findEpisode, sameWork } from '../lib/match.js';
 import { normalizeTitle } from '../lib/title.js';
 import { analyze, isMaster, pickVariant } from '../lib/m3u8.js';
 import { parseList, lookup } from '../lib/fplist.js';
-import { collapseEpisodes } from '../core/episodes.js';
+import { collapseEpisodes, renderIssueGrid } from '../core/episodes.js';
+import { assignIssues, resolveIssue, issueLabel, latestIssue } from '../lib/issue.js';
 import { checkURL } from '../lib/cms.js';
 import { SpeedMeter, speedRatio, fasterLine, formatSpeed } from '../lib/speed.js';
 
@@ -65,6 +66,8 @@ const state = {
   media: null,      // 有元数据：{ id, title, type, season, episode_count, … }；没有：{ title, year, type, source, vodId, pic }
   rid: '',          // 没有元数据时的加密记录 ID
   isMovie: false,
+  isShow: false,    // 综艺：按期选集，集号的编法见 lib/issue.js
+  positions: [],
   season: 1,
   episode: 1,
   resume: 0,        // 从哪里继续播（秒）
@@ -92,11 +95,11 @@ async function setup() {
   if (!local) {
     state.media = JSON.parse(pl.dataset.media);
     state.isMovie = state.media.type === 'movie';
+    state.isShow = state.media.type === 'show';
     state.season = state.media.season || 1;
     state.episode = state.isMovie ? 1 : Math.max(1, +pl.dataset.episode || 1);
-    const positions = JSON.parse(pl.dataset.positions || '[]');
-    const saved = positions.find((p) => p.season === state.season && p.episode === state.episode);
-    if (saved && !saved.completed) state.resume = saved.position;
+    state.positions = JSON.parse(pl.dataset.positions || '[]');
+    resumeFromSaved();
     state.preferred = params.get('src') || (await sources.getLast('m:' + state.media.id))?.source || '';
     return true;
   }
@@ -124,8 +127,17 @@ async function setup() {
   return true;
 }
 
+function resumeFromSaved() {
+  const saved = state.positions.find((p) => p.season === state.season && p.episode === state.episode);
+  state.resume = saved && !saved.completed ? saved.position : 0;
+}
+
+/** "第 3 集"，综艺是"第 3 期 下"。 */
+const episodeName = (episode) => (state.isShow ? issueLabel(episode) : `第 ${episode} 集`);
+const episodeKey = () => (state.isShow ? 'issue' : 'number');
+
 function updateEpisodeUI() {
-  d.getElementById('vp-sub').textContent = state.isMovie ? '' : `第 ${state.episode} 集`;
+  d.getElementById('vp-sub').textContent = state.isMovie ? '' : episodeName(state.episode);
   for (const link of epGrid.querySelectorAll('[data-ep]')) {
     if (+link.dataset.ep === state.episode) { link.setAttribute('aria-current', 'true'); link.scrollIntoView({ block: 'nearest' }); } else link.removeAttribute('aria-current');
   }
@@ -143,15 +155,50 @@ function episodeHref(episode) {
 /** 各个源里一共有哪些集。 */
 function availableEpisodes() {
   const numbers = new Set();
-  for (const entry of state.entries) if (entry.status === 'ok') for (const line of entry.item.lines) for (const episode of line.episodes) numbers.add(episode.number);
+  const key = episodeKey();
+  for (const entry of state.entries) if (entry.status === 'ok') for (const line of entry.item.lines) for (const episode of line.episodes) if (episode[key] != null) numbers.add(episode[key]);
   return [...numbers].sort((a, b) => a - b);
+}
+
+/**
+ * 综艺：给各个源的集写上期号（lib/issue.js），"第 N 期，哪段都行"换成实际的段落。
+ * 每次源有更新都要重新算：只有日期的集名要靠别的源对齐。
+ */
+let issueGridKey = '';
+function alignIssues() {
+  if (!state.isShow) return;
+  assignIssues(state.entries.filter((entry) => entry.status === 'ok').flatMap((entry) => entry.item.lines));
+  if (state.episode % 100 === 0 && !state.started) {
+    const resolved = resolveIssue(state.episode, availableEpisodes());
+    if (resolved !== state.episode) {
+      state.episode = resolved;
+      resumeFromSaved();
+      const url = new URL(location.href);
+      url.searchParams.set('e', String(resolved));
+      history.replaceState(history.state, '', url);
+    }
+  }
+}
+
+function renderIssues(codes) {
+  const key = codes.join(',') + '|' + state.episode;
+  if (!codes.length || key === issueGridKey) return;
+  issueGridKey = key;
+  const seen = new Set(state.positions.filter((p) => p.season === state.season && p.completed).map((p) => p.episode));
+  renderIssueGrid(epGrid, codes, { href: episodeHref, current: state.episode, seen });
+  d.getElementById('ep-sec').hidden = false;
+  // 源里比作品资料新：状态改成源里最新的一期
+  const latest = latestIssue(codes), status = d.getElementById('ep-status');
+  const known = +(/(\d+)/.exec(status?.textContent ?? '')?.[1] ?? 0);
+  if (status && latest > known) status.textContent = `更新至第 ${latest} 期`;
 }
 
 function renderEpisodes() {
   if (state.isMovie) return;
   const numbers = availableEpisodes();
+  if (state.isShow) renderIssues(numbers);
   // 作品库里没有分集资料（或者这部作品不在作品库里）时，用源里的集数生成选集。
-  if (!epGrid.children.length && numbers.length) {
+  else if (!epGrid.children.length && numbers.length) {
     epGrid.replaceChildren(...numbers.map((n) => h('a', { href: episodeHref(n), dataset: { ep: n }, text: String(n) })));
     d.getElementById('ep-sec').hidden = false;
   }
@@ -172,7 +219,7 @@ function buildOptions() {
   for (const entry of state.entries) {
     if (entry.status !== 'ok') continue;
     for (const line of entry.item.lines) {
-      const episode = findEpisode(line, state.episode, state.isMovie);
+      const episode = findEpisode(line, state.episode, state.isMovie, episodeKey());
       if (episode) {
         options.push({ key: entry.key, name: entry.name, line: line.name, url: episode.url, insecure: episode.insecure, label: episode.label, ms: entry.ms,
           vodId: entry.item.vodId, pic: entry.item.pic, desc: [entry.item.name, entry.item.remarks].filter(Boolean).join(' · '), other: !!entry.other, unsure: !!entry.other && !entry.sure });
@@ -210,6 +257,7 @@ function pickStart(done) {
 
 function onEntries(result, { done }) {
   state.entries = result.entries;
+  alignIssues();
   buildOptions();
   renderOptions();
   renderEpisodes();
@@ -220,7 +268,7 @@ function onEntries(result, { done }) {
   if (state.options.length || state.started) return;
   const found = state.entries.some((e) => e.status === 'ok');
   const hidden = state.entries.some((e) => e.hidden); // 只有预告片或枪版，见 match.js 的 incompleteKind
-  showMessage(h('p', { text: found ? `你的源里没有第 ${state.episode} 集。` : hidden ? '你的源里目前只有预告片或枪版（已隐藏），还没有正片。' : '你的源里没有找到这部作品。' }),
+  showMessage(h('p', { text: found ? `你的源里没有${episodeName(state.episode)}。` : hidden ? '你的源里目前只有预告片或枪版（已隐藏），还没有正片。' : '你的源里没有找到这部作品。' }),
     h('button', { class: 'btn btn-glass', type: 'button', text: '重新查询', onclick: () => { message.hidden = true; findSources(true); } }),
     local ? h('a', { class: 'btn btn-glass', href: '/search?q=' + encodeURIComponent(state.media.title), text: '换个名字搜' }) : null);
 }
@@ -685,7 +733,7 @@ function warmNextEpisode() {
   if (!state.next || !option || !state.entries) return;
   const entry = state.entries.find((e) => e.key === option.key && e.status === 'ok');
   const lineInfo = entry?.item.lines.find((l) => l.name === option.line);
-  const next = lineInfo && findEpisode(lineInfo, state.next, state.isMovie);
+  const next = lineInfo && findEpisode(lineInfo, state.next, state.isMovie, episodeKey());
   if (!next || next.url === warmed || next.insecure) return;
   warmed = next.url;
   fetchPlaylist(next.url, 8000).catch(() => {});

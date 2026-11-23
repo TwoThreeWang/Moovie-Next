@@ -53,7 +53,7 @@ var items = []item{
 	{"星陨之地", media.TypeAnime, 2026, 1, 12, 8.8, []string{"动画", "奇幻", "冒险"}, "流星坠落的地方长出了一座城。少年要在它消失之前，找到回家的路。"},
 	{"夜游记", media.TypeAnime, 2024, 1, 13, 8.3, []string{"动画", "奇幻"}, "每到午夜，城里的招牌就会活过来。"},
 	{"小小的我", media.TypeAnime, 2025, 1, 26, 8.5, []string{"动画", "家庭", "喜剧"}, "一年级小学生的日常，比大人想的要忙得多。"},
-	{"周末厨房", media.TypeShow, 2026, 3, 10, 7.9, []string{"真人秀"}, "六位不会做饭的嘉宾，要在周末撑起一间小餐馆。"},
+	{"周末厨房 第三季", media.TypeShow, 2026, 3, 10, 7.9, []string{"真人秀"}, "六位不会做饭的嘉宾，要在周末撑起一间小餐馆。"},
 	{"旅行的意义", media.TypeShow, 2025, 1, 12, 8.2, []string{"真人秀"}, "不做攻略，不订酒店，只带一张单程票。"},
 }
 
@@ -150,6 +150,15 @@ func main() {
 		units = append(units, media.Unit{Season: 2, Episode: number + 1, Title: title, AirDate: &aired, RuntimeMinutes: 45})
 	}
 	must(store.ReplaceUnits(ctx, second, 2, units))
+	// 《周末厨房 第三季》是综艺，正在更新：资料里只录了前 3 期，演示源里已经到第 4 期，还分上下、加更，各个源写法不一样。
+	weekend := ids["周末厨房 第三季"]
+	must(store.ApplyPatch(ctx, weekend, media.ProviderManual, media.Patch{"series_status": "ongoing"}))
+	issues := []media.Unit{}
+	for number := 1; number <= 3; number++ {
+		aired := today.AddDate(0, 0, (number-3)*7)
+		issues = append(issues, media.Unit{Season: 3, Episode: number, AirDate: &aired})
+	}
+	must(store.ReplaceUnits(ctx, weekend, 3, issues))
 
 	lib := library.NewStore(pool)
 	_, err = lib.Save(ctx, demo.ID, second, library.StatusWish, 0, "")

@@ -121,6 +121,27 @@ func TestUpstreamMatchQueries(t *testing.T) {
 			t.Errorf("没有发出第三方匹配请求，期望 %q", tc.fileName)
 		}
 	}
+	// 综艺按期编的集号：正片整期按期号查，上下、加更不查。
+	show, _, err := mediaStore.EnsureDouban(ctx, "30000003", media.Patch{"title": "现在就出发 第四季", "media_type": media.TypeShow, "season": 4})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.List(ctx, danmaku.Key{MediaID: show, Season: 4, Episode: 501}); err != nil {
+		t.Fatal(err)
+	}
+	if got := <-queries; got != "现在就出发 S04E05" {
+		t.Errorf("综艺第 5 期的匹配参数 = %q", got)
+	}
+	for _, episode := range []int{502, 511, 1} {
+		if _, err := service.List(ctx, danmaku.Key{MediaID: show, Season: 4, Episode: episode}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	select {
+	case got := <-queries:
+		t.Errorf("综艺的上下、加更、先导片不应该去第三方查，实际查了 %q", got)
+	default:
+	}
 	// 直接读原归档键，避免发送和读取同时换集号也能通过测试。
 	if items, err := store.List(ctx, movieKey, 1); err != nil || len(items) != 1 || items[0].Text != "电影弹幕" {
 		t.Fatalf("电影弹幕应保留在站内第 1 集: %+v err=%v", items, err)

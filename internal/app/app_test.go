@@ -1434,7 +1434,7 @@ func TestCopyrightContact(t *testing.T) {
 	if strings.Contains(s.get("/terms").body, "联系方式") {
 		t.Error("没有设置联系方式的页面不应该显示联系方式")
 	}
-	mustContain(t, s.get("/changelog"), "v5.2.1", "弹幕加载不出来", "v5.2.0", "2026-11-22", "发现页的新排序", "v5.1.1", "兼容 TVBox 配置", "v5.1.0", "2026-11-20", "v5.0.0", "2026-11-16", "💥 破坏性变更 (Breaking Changes)", "✨ 新增 (Added)", "登录即同步")
+	mustContain(t, s.get("/changelog"), "v5.2.2", "综艺按期选集", "v5.2.1", "弹幕加载不出来", "v5.2.0", "2026-11-22", "发现页的新排序", "v5.1.1", "兼容 TVBox 配置", "v5.1.0", "2026-11-20", "v5.0.0", "2026-11-16", "💥 破坏性变更 (Breaking Changes)", "✨ 新增 (Added)", "登录即同步")
 }
 
 // ---------- 后台：内容审核、禁言封禁、广告指纹、趋势 ----------
@@ -1708,4 +1708,36 @@ func TestSideAds(t *testing.T) {
 	if r := s.get("/admin/ads"); r.status == http.StatusOK {
 		t.Error("普通用户不应该能打开广告设置")
 	}
+}
+
+// 综艺按期选集：服务器先按资料列出"第 N 期"，链到"这一期，哪段都行"；看过的集按期显示成"第 3 期 下"。
+func TestVarietyShowIssues(t *testing.T) {
+	s := newSite(t)
+	ctx := context.Background()
+	s.register("evan")
+	show := s.seedMedia("36000009", "现在就出发 第四季", media.TypeShow, media.Patch{"season": 4})
+	s.app.Media.ApplyPatch(ctx, show, media.ProviderTMDB, media.Patch{"series_status": "ongoing", "episode_count": 6})
+	units := []media.Unit{}
+	for number := 1; number <= 6; number++ {
+		units = append(units, media.Unit{Season: 4, Episode: number})
+	}
+	if err := s.app.Media.ReplaceUnits(ctx, show, 4, units); err != nil {
+		t.Fatal(err)
+	}
+
+	detail := s.get("/m/" + itoa(show))
+	// 资料里 6 期都播了，但还在播：是"更新至"，不是"全 6 集"
+	mustContain(t, detail, "综艺 · 更新至第 6 期", "第 1 期", `href="/play/`+itoa(show)+`?s=4&amp;e=300"`, `data-current="100"`, "6 期")
+	if strings.Contains(detail.body, "全 6 集") {
+		t.Error("还在播的综艺不应该显示全 6 集")
+	}
+	play := s.get("/play/" + itoa(show))
+	mustContain(t, play, `data-episode="100"`, `data-ep="300"`)
+
+	s.json(http.MethodPost, "/api/positions", map[string]any{"items": []map[string]any{
+		{"media_id": show, "season": 4, "episode": 304, "position": 600, "duration": 2700, "at": time.Now().UnixMilli()}}})
+	detail = s.get("/m/" + itoa(show))
+	mustContain(t, detail, "第 3 期 下 · ", `data-current="304"`)
+	home := s.get("/")
+	mustContain(t, home, "第 3 期 下")
 }

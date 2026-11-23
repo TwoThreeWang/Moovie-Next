@@ -20,8 +20,10 @@ import (
 )
 
 // EpisodeView 是详情页和播放页上一集的展示数据。
+// Number 是显示的第几集（综艺是第几期），Episode 是链接里的集号（综艺的编码见 media.DecodeIssue）。
 type EpisodeView struct {
 	Number    int
+	Episode   int
 	Title     string
 	AirDate   *time.Time
 	Runtime   int
@@ -69,10 +71,12 @@ func (a *App) loadMedia(c *gin.Context) (media.Media, bool) {
 }
 
 // episodes 生成分集列表：有分集资料时用资料，没有时按总集数生成"第 N 集"。
+// 综艺按期列出，每一期链到"这一期，哪段都行"；源里有哪几段（上下、加更）要等浏览器查完源，由页面脚本按期重排。
 func (a *App) episodes(m media.Media, units []media.Unit, positions []playback.Position, currentEpisode int) (list []EpisodeView, aired int) {
 	if m.Type == media.TypeMovie {
 		return nil, 0
 	}
+	show := m.Type == media.TypeShow
 	progress := map[int]playback.Position{}
 	for _, p := range positions {
 		if p.Season == m.Season {
@@ -81,9 +85,14 @@ func (a *App) episodes(m media.Media, units []media.Unit, positions []playback.P
 	}
 	today := media.Today()
 	add := func(view EpisodeView) {
-		view.Href = playHref(m.ID, m.Season, view.Number)
+		view.Episode = view.Number
 		view.Current = view.Number == currentEpisode
-		if p, ok := progress[view.Number]; ok {
+		if show {
+			view.Episode = media.IssueEpisode(view.Number)
+			view.Current = media.DecodeIssue(currentEpisode).Number == view.Number
+		}
+		view.Href = playHref(m.ID, m.Season, view.Episode)
+		if p, ok := progress[view.Episode]; ok {
 			view.Completed = p.Completed
 			if p.Duration > 0 {
 				view.Pct = int(min(100, p.Position/p.Duration*100))
@@ -110,6 +119,25 @@ func (a *App) episodes(m media.Media, units []media.Unit, positions []playback.P
 		}
 	}
 	return list, aired
+}
+
+// completedEpisodes 是这一季看完了的集号。综艺的选集由页面脚本按源重排，用它标出看过的。
+func completedEpisodes(m media.Media, positions []playback.Position) []int {
+	seen := []int{}
+	for _, p := range positions {
+		if p.Season == m.Season && p.Completed {
+			seen = append(seen, p.Episode)
+		}
+	}
+	return seen
+}
+
+// firstEpisode 是从头播放时的集号：第 1 集；综艺是"第 1 期，哪段都行"。
+func firstEpisode(m media.Media) int {
+	if m.Type == media.TypeShow {
+		return media.IssueEpisode(1)
+	}
+	return 1
 }
 
 func (a *App) clientMedia(c *gin.Context, m media.Media) (ClientMedia, error) {
@@ -166,16 +194,16 @@ func (a *App) detailPage(c *gin.Context) {
 	}
 
 	// 播放按钮：有进度就接着看，没有就从头开始。
-	playLabel, playSub, playEpisode := "播放", "", 1
+	playLabel, playSub, playEpisode := "播放", "", firstEpisode(m)
 	if len(positions) > 0 {
 		latest := positions[0]
 		playLabel, playEpisode = "继续播放", latest.Episode
 		playSub = remaining(latest.Position, latest.Duration)
 		if m.IsSeries() {
-			playSub = "第 " + strconv.Itoa(latest.Episode) + " 集 · " + playSub
+			playSub = strings.TrimSuffix(media.EpisodeLabel(m.Type, latest.Episode)+" · "+playSub, " · ")
 		}
 	} else if m.IsSeries() {
-		playSub = "第 1 集"
+		playSub = "第 1 " + media.EpisodeUnit(m.Type)
 	}
 	episodes, aired := a.episodes(m, units, positions, playEpisode)
 	var nextAir *EpisodeView
@@ -188,7 +216,8 @@ func (a *App) detailPage(c *gin.Context) {
 	data := gin.H{
 		"Title": m.Title, "Nav": "home", "CSS": []string{"detail"},
 		"M": m, "Client": client, "Entry": entry, "HasEntry": hasEntry,
-		"Episodes": episodes, "Status": episodeStatus(m, aired), "NextAir": nextAir, "Series": cardViews(series),
+		"Episodes": episodes, "Status": episodeStatus(m, aired), "NextAir": nextAir, "Unit": media.EpisodeUnit(m.Type), "Series": cardViews(series),
+		"IsShow": m.Type == media.TypeShow, "PlayEpisode": playEpisode, "Seen": completedEpisodes(m, positions),
 		"PlayLabel": playLabel, "PlaySub": playSub, "PlayHref": playHref(m.ID, m.Season, playEpisode),
 		"IMDb": m.IMDbID, "SEO": a.mediaSEO(m), "Card": a.mediaCard(m), "Fetching": m.MetadataSyncedAt == nil,
 		"Login": "/auth/login?redirect=" + url.QueryEscape(mediaHref(m.ID)),
@@ -245,7 +274,7 @@ func (a *App) playPage(c *gin.Context) {
 		a.fail(c, err)
 		return
 	}
-	episode := max(1, httpx.QueryInt(c, "e", 1))
+	episode := max(1, httpx.QueryInt(c, "e", firstEpisode(m)))
 	if c.Query("e") == "" && len(positions) > 0 {
 		episode = positions[0].Episode
 	}

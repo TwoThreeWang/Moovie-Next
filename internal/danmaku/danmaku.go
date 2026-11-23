@@ -158,7 +158,17 @@ func (s *Service) resolve(ctx context.Context, key Key) (Key, Key, error) {
 	}
 	// 第三方弹幕库按"剧名 S02E03"匹配，所以用去掉季数标记的片名。
 	base, _ := media.SplitSeason(m.Title)
-	return key, Key{Title: base, Season: key.Season, Episode: key.Episode}, nil
+	episode := key.Episode
+	if m.Type == media.TypeShow {
+		// 综艺的集号是按期编的（见 media.DecodeIssue）。第三方库里综艺怎么编号对不准，只有正片整期按期号去查；
+		// 上下、加更不查，免得配上别的期的弹幕。
+		issue := media.DecodeIssue(key.Episode)
+		if !issue.Main() || issue.Number == 0 {
+			return key, Key{}, nil
+		}
+		episode = issue.Number
+	}
+	return key, Key{Title: base, Season: key.Season, Episode: episode}, nil
 }
 
 // List 返回一集的全部弹幕，按时间排序。第三方弹幕库出错或还没查完时只返回用户弹幕。

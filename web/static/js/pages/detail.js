@@ -2,16 +2,25 @@
 // 作品资料来自本站，秒开；源的查询由浏览器直连，结果缓存在本机，到播放页时直接用。
 import { h, icon } from '../core/api.js';
 import * as sources from '../core/sources.js';
+import { renderIssueGrid } from '../core/episodes.js';
+import { assignIssues, latestIssue } from '../lib/issue.js';
 
 const main = document.querySelector('main.detail');
 const media = JSON.parse(main.dataset.media);
 const list = document.getElementById('src-list'), status = document.getElementById('src-status');
 const isMovie = media.type === 'movie';
+// 综艺：源里的集名按期对齐（lib/issue.js），选集按期重排
+const isShow = media.type === 'show';
+
+const issueCodes = (item) => item.lines.flatMap((line) => line.episodes.map((episode) => episode.issue)).filter((code) => code != null);
 
 function describe(item) {
   const episodes = Math.max(...item.lines.map((line) => line.episodes.length));
   const parts = [item.name];
-  if (!isMovie) parts.push(`${episodes} 集`);
+  const latest = isShow ? latestIssue(issueCodes(item)) : 0;
+  // 综艺的集数没有意义（上下、加更、纯享都算一集），写最新一期
+  if (latest) parts.push(`更新至第 ${latest} 期`);
+  else if (!isMovie) parts.push(`${episodes} 集`);
   if (item.lines.length > 1) parts.push(`${item.lines.length} 条线路`);
   if (item.remarks) parts.push(item.remarks);
   return parts.join(' · ');
@@ -39,8 +48,32 @@ function row(entry) {
 const LIMIT = 10;
 let expanded = false;
 
+// 综艺的选集：用源里实际有的期和段落重排。服务器先按资料列出"第 N 期"，这里换成"第 N 期：上 / 下 / 加更"。
+let issueGridKey = '';
+function renderIssues(entries) {
+  const grid = document.getElementById('ep-grid');
+  if (!grid) return;
+  const codes = [...new Set(entries.flatMap((entry) => issueCodes(entry.item)))];
+  const current = +grid.dataset.current || 0;
+  const key = codes.sort((a, b) => a - b).join(',');
+  if (!codes.length || key === issueGridKey) return;
+  issueGridKey = key;
+  const seen = new Set(JSON.parse(grid.dataset.seen || '[]'));
+  const season = media.season || 1;
+  renderIssueGrid(grid, codes, { href: (code) => `/play/${media.id}?s=${season}&e=${code}`, current, seen });
+  document.getElementById('episodes').hidden = false;
+  const latest = latestIssue(codes), label = document.getElementById('ep-status');
+  const known = +(/(\d+)/.exec(label?.textContent ?? '')?.[1] ?? 0);
+  if (label && latest > known) label.textContent = `更新至第 ${latest} 期`;
+}
+
 function render(result, { done }) {
   const found = result.entries.filter((entry) => entry.status === 'ok').length;
+  if (isShow) {
+    const playable = result.entries.filter((entry) => entry.status === 'ok');
+    assignIssues(playable.flatMap((entry) => entry.item.lines));
+    renderIssues(playable);
+  }
   const rows = result.entries.map(row);
   if (!expanded && rows.length > LIMIT) {
     rows.slice(LIMIT).forEach((el) => { el.hidden = true; });

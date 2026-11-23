@@ -893,12 +893,14 @@ type Airing struct {
 	First, Last int
 }
 
-// Label 是卡片上的说明："更新第 21 集"，或者一天更新好几集时的"更新第 21–24 集"。
+// Label 是卡片上的说明："更新第 21 集"，或者一天更新好几集时的"更新第 21–24 集"。综艺是"期"。
+// 分集资料（media_units）里的综艺也是按期编号的，不是集号编码。
 func (a Airing) Label() string {
+	unit := EpisodeUnit(a.Card.Type)
 	if a.Last > a.First {
-		return fmt.Sprintf("更新第 %d–%d 集", a.First, a.Last)
+		return fmt.Sprintf("更新第 %d–%d %s", a.First, a.Last, unit)
 	}
-	return fmt.Sprintf("更新第 %d 集", a.First)
+	return fmt.Sprintf("更新第 %d %s", a.First, unit)
 }
 
 // Aliases 返回作品的别名（包括片名和原名），用于在用户的源里搜索。
