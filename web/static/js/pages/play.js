@@ -14,6 +14,7 @@ import { collapseEpisodes, renderIssueGrid } from '../core/episodes.js';
 import { assignIssues, resolveIssue, issueLabel, latestIssue } from '../lib/issue.js';
 import { checkURL } from '../lib/cms.js';
 import { SpeedMeter, speedRatio, fasterLine, formatSpeed } from '../lib/speed.js';
+import { castMode, castErrorText } from '../lib/cast.js';
 
 const d = document;
 const pl = d.getElementById('pl'), vp = d.getElementById('vp'), v = vp.querySelector('video');
@@ -78,6 +79,8 @@ const state = {
   fallback: false,  // 没有元数据的作品：已经去其他源找过同一部了
   started: false,
   switched: false,  // 是否换过源（换源后往回倒几秒）
+  cast: false,      // 安卓投屏中（或正在准备）：不用 hls.js，让浏览器直接播放地址，见"投屏"一节
+  castSwitched: false, // 为了投屏从 hls.js 换成了直接播放，结束后要换回去
 };
 
 function showMessage(...children) {
@@ -457,7 +460,7 @@ async function playOption(index, { keepTime = false } = {}) {
   const autoplay = !v.paused || state.switched || state.autoplay !== false;
   startTimer = setTimeout(() => failover('超时'), 15000);
   v.preload = 'metadata';
-  if (/\.mp4(\?|#|$)/i.test(url) || nativeHLS) {
+  if (/\.mp4(\?|#|$)/i.test(url) || nativeHLS || state.cast) {
     v.src = url;
   } else {
     try {
@@ -484,7 +487,12 @@ function updateDownload(url) {
   link.hidden = false;
 }
 
-v.addEventListener('error', () => { if (state.started && v.error) failover('线路出错'); });
+v.addEventListener('error', () => {
+  if (!state.started || !v.error) return;
+  // 为了投屏换成直接播放后出错：只是这个浏览器直接播不了，线路本身没坏，由 castPrompt 换回 hls.js
+  if (state.castSwitched && v.remote?.state === 'disconnected') return;
+  failover('线路出错');
+});
 
 function failover(reason) {
   clearTimeout(startTimer);
@@ -771,9 +779,67 @@ v.addEventListener('playing', () => {
   setTimeout(() => { warn.hidden = true; }, 6000);
 }, { once: true });
 
-// 支持系统 AirPlay 选择器时就显示入口，由系统在打开选择器后列出可用设备。
-q('[data-act="airplay"]').hidden = typeof v.webkitShowPlaybackTargetPicker !== 'function';
+// 投屏入口：苹果设备的 Safari 用系统 AirPlay 选择器，安卓用 Remote Playback API（见下面"投屏"一节）。
+// 都由系统在打开选择器后列出可用设备。
+const cast = castMode(v, navigator.userAgent);
+q('[data-act="airplay"]').hidden = cast !== 'airplay';
+q('[data-act="cast"]').hidden = cast !== 'remote';
 v.addEventListener('seeking', () => { danmakuIndex = -1; });
+
+// ---------- 投屏（安卓） ----------
+// 安卓 Chrome 投屏是把视频地址交给电视（Chromecast / 内置 Google Cast 的电视），由电视自己去拉。
+// hls.js 播放的是页面用 MediaSource 拼出来的流，没有地址可交，Chrome 会拒绝投屏。
+// 所以点投屏时先把这一集换成浏览器直接播放原地址，等读到视频信息（Chrome 这时才判断能不能投）
+// 再弹出设备列表；取消或投屏结束后换回 hls.js，接着原来的进度。
+// 电视和这里一样直接连资源站，同样需要对方允许跨域，所以在这里能播的线路一般都能投。
+
+const castReady = (ms) => new Promise((resolve) => {
+  const done = (ok) => { clearTimeout(timer); v.removeEventListener('loadedmetadata', onMeta); v.removeEventListener('error', onError); resolve(ok); };
+  const onMeta = () => done(true), onError = () => done(false);
+  const timer = setTimeout(() => done(false), ms);
+  v.addEventListener('loadedmetadata', onMeta);
+  v.addEventListener('error', onError);
+});
+
+function stopCast() {
+  if (!state.cast) return;
+  state.cast = false;
+  if (state.castSwitched) { state.castSwitched = false; playOption(state.current, { keepTime: true }); }
+}
+
+let castPreparing = false;
+async function castPrompt() {
+  const remote = v.remote;
+  if (castPreparing) return; // 正在换成直接播放，等它好了再弹设备列表
+  // 已经连上电视：再点一次，Chrome 弹出的是"停止投放"
+  if (remote.state !== 'disconnected') return remote.prompt().catch(() => {});
+  if (!state.started || state.current < 0) return showHint('等视频开始播放后再投屏', 1800);
+  if (!state.cast) {
+    state.cast = true;
+    if (hls) {
+      state.castSwitched = true;
+      showHint('正在准备投屏…', 8000);
+      playOption(state.current, { keepTime: true });
+      castPreparing = true;
+      const ready = await castReady(8000);
+      castPreparing = false;
+      if (!ready) { showHint('这条线路没法投屏，换一条线路再试', 2400); return stopCast(); }
+      showHint('请选择要投到的设备', 1600);
+    }
+  }
+  // 等视频信息的时间太长时，已经不算在点击的那一下里，Chrome 不让弹设备列表
+  if (navigator.userActivation && !navigator.userActivation.isActive) return showHint('准备好了，请再点一次投屏按钮', 2400);
+  remote.prompt().catch((error) => {
+    if (remote.state === 'disconnected') stopCast();
+    const text = castErrorText(error);
+    if (text) toast(text);
+  });
+}
+
+if (cast === 'remote') {
+  v.remote.addEventListener('connect', () => showHint('正在电视上播放', 2400));
+  v.remote.addEventListener('disconnect', () => { showHint('已停止投屏', 1600); stopCast(); });
+}
 
 // ---------- 广告跳过 ----------
 // 判断完全在本地完成：分析播放清单的文本算出指纹，和服务器下发的列表比对。
@@ -1199,6 +1265,7 @@ const actions = {
     showHint(locked ? '已锁定，点锁图标解锁' : '已解锁');
   },
   airplay: () => v.webkitShowPlaybackTargetPicker?.(),
+  cast: castPrompt,
   pip: () => {
     if (d.pictureInPictureElement) return d.exitPictureInPicture();
     if (v.requestPictureInPicture) v.requestPictureInPicture().catch(() => {});

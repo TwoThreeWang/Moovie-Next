@@ -14,6 +14,7 @@
   <a class="vbtn" href="{{if .Local}}/search{{else if .Manual}}/{{else}}/m/{{.M.ID}}{{end}}" data-back aria-label="返回"><svg class="i"><use href="#i-chev-l"/></svg></a>
   <div class="t"><b id="vp-title">{{if not $noMedia}}{{.M.Title}}{{end}}</b><span id="vp-sub"></span></div>
   <button class="vbtn" data-act="airplay" aria-label="隔空播放" hidden><svg class="i"><use href="#i-airplay"/></svg></button>
+  <button class="vbtn" data-act="cast" aria-label="投屏" hidden><svg class="i"><use href="#i-cast"/></svg></button>
   <button class="vbtn" data-act="pip" aria-label="画中画"><svg class="i"><use href="#i-pip"/></svg></button>
  </div>
  <div class="vp-mid">
