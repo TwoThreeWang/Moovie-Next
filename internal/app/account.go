@@ -114,10 +114,17 @@ type exportText struct {
 }
 
 type exportFeedback struct {
-	Kind    string    `json:"kind"`
+	Kind     string                  `json:"kind"`
+	Content  string                  `json:"content"` // 最初提交的内容
+	Status   string                  `json:"status"`  // staff（等管理员回复）、user（等你回复）、closed
+	Outcome  string                  `json:"outcome,omitempty"`
+	Messages []exportFeedbackMessage `json:"messages"`
+	At       time.Time               `json:"created_at"`
+}
+
+type exportFeedbackMessage struct {
+	From    string    `json:"from"` // me 或 staff
 	Content string    `json:"content"`
-	Status  string    `json:"status"`
-	Reply   string    `json:"reply,omitempty"`
 	At      time.Time `json:"created_at"`
 }
 
@@ -229,8 +236,19 @@ LEFT JOIN media m ON m.id = d.media_id WHERE d.user_id = $1 AND NOT d.deleted OR
 	if err != nil {
 		return nil, err
 	}
+	if err := a.Feedback.WithMessages(ctx, feedbacks); err != nil {
+		return nil, err
+	}
 	for _, f := range feedbacks {
-		data.Feedback = append(data.Feedback, exportFeedback{Kind: f.Kind, Content: f.Content, Status: f.Status, Reply: f.Reply, At: f.CreatedAt})
+		item := exportFeedback{Kind: f.Kind, Content: f.Preview, Status: f.State, Outcome: f.Outcome, Messages: []exportFeedbackMessage{}, At: f.CreatedAt}
+		for _, m := range f.Messages {
+			from := "me"
+			if m.Staff {
+				from = "staff"
+			}
+			item.Messages = append(item.Messages, exportFeedbackMessage{From: from, Content: m.Content, At: m.CreatedAt})
+		}
+		data.Feedback = append(data.Feedback, item)
 	}
 	if err := a.Pool.QueryRow(ctx, `SELECT
     COALESCE((SELECT jsonb_agg(to_jsonb(owned) ORDER BY owned.updated_at DESC, owned.id DESC) FROM (

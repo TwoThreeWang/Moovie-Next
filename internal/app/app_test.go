@@ -713,10 +713,12 @@ func TestAdminActions(t *testing.T) {
 		t.Error("管理员不能把自己降级")
 	}
 	s.form("/api/feedback", url.Values{"kind": {"dmca"}, "content": {"海报侵权"}})
-	if r := s.form("/admin/feedback/1", url.Values{"status": {"resolved"}, "reply": {"已处理"}}); r.status != http.StatusSeeOther {
+	if r := s.form("/admin/feedback/1", url.Values{"action": {"close"}, "outcome": {"done"}, "reply": {"海报已下架"}}); r.status != http.StatusSeeOther {
 		t.Errorf("回复反馈失败: %d", r.status)
 	}
-	mustContain(t, s.get("/feedback"), "已处理", "已解决")
+	mustContain(t, s.get("/feedback"), "海报侵权", "已处理")
+	mustContain(t, s.get("/feedback/1"), "海报侵权", "海报已下架", "已处理", "会重新打开这条反馈")
+	mustContain(t, s.get("/admin/feedback?state=closed"), "海报已下架", "已关闭 · 已处理")
 }
 
 func TestStaticFiles(t *testing.T) {
@@ -1220,8 +1222,16 @@ func TestAdminNotifications(t *testing.T) {
 	if feedbackID == nil {
 		t.Fatal("后台没有找到反馈")
 	}
-	s.form("/admin/feedback/"+feedbackID[1], url.Values{"status": {"resolved"}, "reply": {"已修复，请刷新"}})
-	s.form("/admin/feedback/"+feedbackID[1], url.Values{"status": {"resolved"}, "reply": {"已修复，请刷新"}}) // 回复没变，不重复通知
+	s.form("/admin/feedback/"+feedbackID[1], url.Values{"action": {"reply"}, "reply": {"已修复，请刷新"}})
+	if r := s.form("/admin/feedback/"+feedbackID[1], url.Values{"action": {"reply"}, "reply": {"  "}}); r.status != http.StatusBadRequest {
+		t.Errorf("空回复应该被拒绝: %d", r.status)
+	}
+	if strings.Contains(s.get("/admin/feedback").body, "播放卡顿") {
+		t.Error("回复后这条反馈不应该还在待回复里")
+	}
+	if r := s.get("/feedback/" + feedbackID[1]); r.status != http.StatusNotFound {
+		t.Errorf("别人的反馈应该看不到: %d", r.status)
+	}
 
 	s.client = lin
 	mustContain(t, s.get("/discover"), `class="nav-dot"`, `href="/notifications"`)
@@ -1229,14 +1239,24 @@ func TestAdminNotifications(t *testing.T) {
 	mustContain(t, notes, "管理员", "回复了你的反馈", "已修复，请刷新",
 		"删除了你在《回声》下的一条内容", "垃圾广告 加我微信", "原因：广告")
 	if strings.Count(notes.body, "回复了你的反馈") != 1 {
-		t.Error("同样的回复不应该重复通知")
+		t.Error("只回复了一次，应该只有一条通知")
 	}
 	first := regexp.MustCompile(`id="note-(\d+)"`).FindStringSubmatch(notes.body)[1] // 最新的一条：反馈被回复
-	if r := s.get("/notifications/" + first + "/open"); r.header.Get("Location") != "/feedback#f-"+feedbackID[1] {
+	if r := s.get("/notifications/" + first + "/open"); r.header.Get("Location") != "/feedback/"+feedbackID[1] {
 		t.Errorf("点开反馈通知应该去反馈页: %s", r.header.Get("Location"))
 	}
 	feedbackPage := s.get("/feedback")
-	mustContain(t, feedbackPage, `id="f-`+feedbackID[1]+`"`, `class="nav-dot"`) // 还有一条没读
+	mustContain(t, feedbackPage, `id="f-`+feedbackID[1]+`"`, `href="/feedback/`+feedbackID[1]+`"`, "已回复", `class="nav-dot"`) // 还有一条没读
+	mustContain(t, s.get("/feedback/"+feedbackID[1]), "播放卡顿", "已修复，请刷新", "关闭这条反馈")
+	// lin 接着补充，又回到管理员的待回复
+	if r := s.form("/api/feedback/"+feedbackID[1]+"/reply", url.Values{"content": {"刷新后还是卡"}}); r.status != http.StatusSeeOther {
+		t.Errorf("用户回复失败: %d", r.status)
+	}
+	s.client = admin
+	mustContain(t, s.get("/admin/feedback"), "播放卡顿", "已修复，请刷新", "刷新后还是卡", "待回复")
+	s.client = lin
+	s.form("/api/feedback/"+feedbackID[1]+"/close", url.Values{})
+	mustContain(t, s.get("/feedback/"+feedbackID[1]), "已关闭", "会重新打开这条反馈")
 	s.form("/notifications/read-all", url.Values{})
 	if strings.Contains(s.get("/feedback").body, `class="nav-dot"`) {
 		t.Error("全部已读后导航栏不应该再有红点")
@@ -1434,7 +1454,7 @@ func TestCopyrightContact(t *testing.T) {
 	if strings.Contains(s.get("/terms").body, "联系方式") {
 		t.Error("没有设置联系方式的页面不应该显示联系方式")
 	}
-	mustContain(t, s.get("/changelog"), "v5.2.2", "综艺按期选集", "v5.2.1", "弹幕加载不出来", "v5.2.0", "2026-11-22", "发现页的新排序", "v5.1.1", "兼容 TVBox 配置", "v5.1.0", "2026-11-20", "v5.0.0", "2026-11-16", "💥 破坏性变更 (Breaking Changes)", "✨ 新增 (Added)", "登录即同步")
+	mustContain(t, s.get("/changelog"), "v5.2.3", "反馈改成对话", "安卓投屏", "v5.2.2", "综艺按期选集", "v5.2.1", "弹幕加载不出来", "v5.2.0", "2026-11-22", "发现页的新排序", "v5.1.1", "兼容 TVBox 配置", "v5.1.0", "2026-11-20", "v5.0.0", "2026-11-16", "💥 破坏性变更 (Breaking Changes)", "✨ 新增 (Added)", "登录即同步")
 }
 
 // ---------- 后台：内容审核、禁言封禁、广告指纹、趋势 ----------

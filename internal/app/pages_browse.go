@@ -91,6 +91,9 @@ func (a *App) memberRoutes(r gin.IRouter) {
 	r.POST("/api/users/:id/follow", a.toggleFollow)
 	r.GET("/feedback", a.feedbackPage)
 	r.POST("/api/feedback", a.feedbackSubmit)
+	r.GET("/feedback/:id", a.feedbackThread)
+	r.POST("/api/feedback/:id/reply", a.feedbackReply)
+	r.POST("/api/feedback/:id/close", a.feedbackClose)
 
 	// 我的
 	r.GET("/me", a.mePage)

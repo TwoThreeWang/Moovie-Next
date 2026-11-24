@@ -352,7 +352,7 @@ func (n Notification) Target() string {
 	case n.Kind == "follow":
 		return "/user/" + id(n.ActorID)
 	case n.Kind == "feedback":
-		return "/feedback#f-" + id(n.FeedbackID)
+		return "/feedback/" + id(n.FeedbackID)
 	case n.CollectionID > 0:
 		return "/me/collections/" + id(n.CollectionID)
 	case n.MediaID > 0 && n.Kind == "removed":
@@ -386,6 +386,12 @@ func (s *Store) Unread(ctx context.Context, userID int64) (int, error) {
 	var count int
 	err := s.pool.QueryRow(ctx, `SELECT count(*) FROM notifications WHERE user_id = $1 AND read_at IS NULL`, userID).Scan(&count)
 	return count, err
+}
+
+// MarkFeedbackRead 把某条反馈的通知标为已读，用户打开这条反馈的对话页时调用。
+func (s *Store) MarkFeedbackRead(ctx context.Context, userID, feedbackID int64) error {
+	_, err := s.pool.Exec(ctx, `UPDATE notifications SET read_at = now() WHERE user_id = $1 AND feedback_id = $2 AND read_at IS NULL`, userID, feedbackID)
+	return err
 }
 
 // MarkAllRead 把所有通知标为已读。

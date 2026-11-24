@@ -455,43 +455,71 @@ func (a *App) adminFilterDelete(c *gin.Context) {
 // ---------- 反馈 ----------
 
 func (a *App) adminFeedback(c *gin.Context) {
-	_, offset := httpx.Page(c, adminPageSize)
-	status := c.DefaultQuery("status", "open")
-	if status == "all" {
-		status = ""
+	page, offset := httpx.Page(c, adminPageSize)
+	state := c.DefaultQuery("state", feedback.StateStaff)
+	filter := state
+	if filter == "all" {
+		filter = ""
 	}
-	list, err := a.Feedback.List(c.Request.Context(), 0, status, adminPageSize, offset)
+	ctx := c.Request.Context()
+	list, err := a.Feedback.List(ctx, 0, filter, adminPageSize, offset)
+	if err == nil {
+		err = a.Feedback.WithMessages(ctx, list)
+	}
 	if err != nil {
 		a.fail(c, err)
 		return
 	}
-	data := gin.H{"List": list, "Status": c.DefaultQuery("status", "open")}
-	page, _ := httpx.Page(c, adminPageSize)
+	data := gin.H{"List": list, "State": state, "AutoCloseDays": feedback.AutoCloseDays}
 	if len(list) == adminPageSize {
-		data["Next"] = "/admin/feedback?status=" + c.DefaultQuery("status", "open") + "&page=" + strconv.Itoa(page+1)
+		data["Next"] = "/admin/feedback?state=" + url.QueryEscape(state) + "&page=" + strconv.Itoa(page+1)
 	}
 	a.adminPage(c, "admin_feedback.html", "反馈", "feedback", data)
 }
 
+// adminFeedbackRespond 回复一条反馈；action 为 close 时同时关闭并标上结果（这时回复可以不写）。每次都通知提交人。
 func (a *App) adminFeedbackRespond(c *gin.Context) {
 	id, ok := httpx.ParamID(c, "id")
 	if !ok {
 		return
 	}
-	ctx := c.Request.Context()
-	userID, replied, err := a.Feedback.Respond(ctx, id, c.PostForm("status"), c.PostForm("reply"))
-	if err == nil && replied {
-		err = a.Social.Notify(ctx, social.Notice{UserID: userID, ActorID: auth.Current(c).ID, Kind: "feedback", FeedbackID: id, Body: c.PostForm("reply")})
-	}
-	if errors.Is(err, feedback.ErrInvalid) {
-		httpx.Error(c, http.StatusBadRequest, "状态不正确")
+	ctx, admin := c.Request.Context(), auth.Current(c)
+	reply, closing := strings.TrimSpace(c.PostForm("reply")), c.PostForm("action") == "close"
+	if reply == "" && !closing {
+		httpx.Error(c, http.StatusBadRequest, "请填写回复")
 		return
 	}
-	if err != nil {
+	var userID int64
+	var err error
+	if reply != "" {
+		userID, err = a.Feedback.Reply(ctx, id, 0, admin.ID, true, reply)
+	}
+	body := reply
+	if err == nil && closing {
+		outcome := c.PostForm("outcome")
+		userID, err = a.Feedback.Close(ctx, id, 0, outcome)
+		if body == "" {
+			body = "已关闭这条反馈"
+			if f, getErr := a.Feedback.Get(ctx, id, 0); getErr == nil && f.OutcomeLabel() != "" {
+				body += "，结果：" + f.OutcomeLabel()
+			}
+		}
+	}
+	if err == nil {
+		err = a.Social.Notify(ctx, social.Notice{UserID: userID, ActorID: admin.ID, Kind: "feedback", FeedbackID: id, Body: body})
+	}
+	switch {
+	case errors.Is(err, feedback.ErrInvalid):
+		httpx.Error(c, http.StatusBadRequest, "回复最多 5000 字，结果只能从列表里选")
+	case errors.Is(err, feedback.ErrNotFound):
+		httpx.Error(c, http.StatusNotFound, "反馈不存在")
+	case err != nil:
 		a.fail(c, err)
-		return
+	case closing:
+		adminBack(c, "/admin/feedback", "已关闭")
+	default:
+		adminBack(c, "/admin/feedback", "已回复")
 	}
-	adminBack(c, "/admin/feedback", "已保存")
 }
 
 // laneView 是后台概览上一条执行通道的状态。

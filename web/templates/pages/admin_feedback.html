@@ -1,14 +1,20 @@
 {{define "content"}}<main class="admin">{{template "admin_nav" .}}
-<div class="chips pad"><a class="chip-l" href="/admin/feedback?status=open"{{if eq .Status "open"}} aria-current="true"{{end}}>待处理</a>
-<a class="chip-l" href="/admin/feedback?status=resolved"{{if eq .Status "resolved"}} aria-current="true"{{end}}>已解决</a>
-<a class="chip-l" href="/admin/feedback?status=rejected"{{if eq .Status "rejected"}} aria-current="true"{{end}}>未采纳</a>
-<a class="chip-l" href="/admin/feedback?status=all"{{if eq .Status "all"}} aria-current="true"{{end}}>全部</a></div>
-<ul class="fb-list pad">{{range .List}}<li class="card-panel">
-<p><span class="tag">{{.KindLabel}}</span><b>{{if .Username}}{{.Username}}{{else}}已注销用户{{end}}</b> <time>{{timeago .CreatedAt}}</time></p>
-<p>{{.Content}}</p>{{if .PageURL}}<p class="dim">相关页面：{{.PageURL}}</p>{{end}}
+<div class="chips pad"><a class="chip-l" href="/admin/feedback?state=staff"{{if eq .State "staff"}} aria-current="true"{{end}}>待回复</a>
+<a class="chip-l" href="/admin/feedback?state=user"{{if eq .State "user"}} aria-current="true"{{end}}>等用户回复</a>
+<a class="chip-l" href="/admin/feedback?state=closed"{{if eq .State "closed"}} aria-current="true"{{end}}>已关闭</a>
+<a class="chip-l" href="/admin/feedback?state=all"{{if eq .State "all"}} aria-current="true"{{end}}>全部</a></div>
+<p class="hint pad">用户发了最后一条的在"待回复"；你回复后用户 {{.AutoCloseDays}} 天没有再回，自动算作关闭。任何一方再发消息都会重新打开。</p>
+<ul class="fb-list pad">{{range .List}}<li class="card-panel" id="f-{{.ID}}">
+<p><span class="tag">{{.KindLabel}}</span><span class="tag admin-state-{{.State}}">{{.AdminStateLabel}}</span><b>{{if .Username}}{{.Username}}{{else}}已注销用户{{end}}</b> <time>{{timeago .CreatedAt}}</time></p>
+{{if .PageURL}}<p class="dim">相关页面：{{.PageURL}}</p>{{end}}
+<ol class="thread">{{range .Messages}}<li class="msg{{if .Staff}} staff{{end}}">
+<p class="msg-head"><b>{{if .Staff}}管理员{{else}}用户{{end}}</b><time>{{timeago .CreatedAt}}</time></p>
+<p class="msg-body">{{.Content}}</p></li>{{end}}</ol>
 <form class="form" method="post" action="/admin/feedback/{{.ID}}">{{template "csrf" $.CSRF}}
-<textarea name="reply" rows="2" maxlength="2000" placeholder="回复（用户能看到）">{{.Reply}}</textarea>
-<div class="form-actions"><select name="status"><option value="open"{{if eq .Status "open"}} selected{{end}}>待处理</option><option value="resolved"{{if eq .Status "resolved"}} selected{{end}}>已解决</option><option value="rejected"{{if eq .Status "rejected"}} selected{{end}}>未采纳</option></select><button class="btn btn-primary">保存</button></div></form></li>
+<textarea name="reply" rows="2" maxlength="5000" placeholder="回复（用户能看到，会通知用户）"></textarea>
+<div class="form-actions"><button class="btn btn-primary" name="action" value="reply">回复</button>
+<span class="fb-close">{{$outcome := .Outcome}}<select name="outcome" aria-label="关闭时的结果"><option value="">不标结果</option>{{range .Outcomes}}<option value="{{.Key}}"{{if eq $outcome .Key}} selected{{end}}>{{.Label}}</option>{{end}}</select>
+<button class="btn btn-glass" name="action" value="close">{{if eq .State "closed"}}更新结果{{else}}关闭{{end}}</button></span></div></form></li>
 {{else}}<li class="empty">没有反馈</li>{{end}}</ul>
 {{if .Next}}<nav class="pager"><a class="btn btn-glass" href="{{.Next}}">下一页</a></nav>{{end}}
 </main>{{end}}

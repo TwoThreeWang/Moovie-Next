@@ -182,13 +182,12 @@ func (a *App) feedbackPage(c *gin.Context) {
 		return
 	}
 	a.render.Page(c, http.StatusOK, "feedback.html", gin.H{
-		"Title": "反馈", "Nav": "me", "Kinds": feedback.Kinds, "Mine": mine, "Sent": c.Query("sent") == "1",
-		"Kind": c.Query("kind"),
+		"Title": "反馈", "Nav": "me", "Kinds": feedback.Kinds, "Mine": mine, "Kind": c.Query("kind"),
 	})
 }
 
 func (a *App) feedbackSubmit(c *gin.Context) {
-	err := a.Feedback.Create(c.Request.Context(), auth.Current(c).ID, c.PostForm("kind"), c.PostForm("content"), c.PostForm("page_url"))
+	id, err := a.Feedback.Create(c.Request.Context(), auth.Current(c).ID, c.PostForm("kind"), c.PostForm("content"), c.PostForm("page_url"))
 	if errors.Is(err, feedback.ErrInvalid) {
 		httpx.Error(c, http.StatusBadRequest, "请选择类型并填写内容（最多 5000 字）")
 		return
@@ -197,7 +196,62 @@ func (a *App) feedbackSubmit(c *gin.Context) {
 		a.fail(c, err)
 		return
 	}
-	c.Redirect(http.StatusSeeOther, "/feedback?sent=1")
+	c.Redirect(http.StatusSeeOther, "/feedback/"+strconv.FormatInt(id, 10)+"?sent=1")
+}
+
+// feedbackThread 是一条反馈的对话页，只有提交人能看。打开时把这条反馈的通知标为已读。
+func (a *App) feedbackThread(c *gin.Context) {
+	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
+	ctx, user := c.Request.Context(), auth.Current(c)
+	f, err := a.Feedback.Get(ctx, id, user.ID)
+	if errors.Is(err, feedback.ErrNotFound) {
+		a.errorPage(c, http.StatusNotFound, "这条反馈不存在", "可以回到反馈页查看你提交过的反馈。")
+		return
+	}
+	if err == nil {
+		err = a.Social.MarkFeedbackRead(ctx, user.ID, id)
+	}
+	if err != nil {
+		a.fail(c, err)
+		return
+	}
+	a.render.Page(c, http.StatusOK, "feedback_thread.html", gin.H{
+		"Title": f.KindLabel(), "Nav": "me", "F": f, "Sent": c.Query("sent") == "1", "AutoCloseDays": feedback.AutoCloseDays,
+	})
+}
+
+// feedbackReply 是提交人在对话里继续回复，已关闭的会重新打开。
+func (a *App) feedbackReply(c *gin.Context) {
+	id, ok := httpx.ParamID(c, "id")
+	if !ok {
+		return
+	}
+	user := auth.Current(c)
+	_, err := a.Feedback.Reply(c.Request.Context(), id, user.ID, user.ID, false, c.PostForm("content"))
+	a.feedbackDone(c, id, err)
+}
+
+// feedbackClose 是提交人自己关闭对话（问题已经解决了）。
+func (a *App) feedbackClose(c *gin.Context) {
+	id, ok := httpx.ParamID(c, "id")
+	if !ok {
+		return
+	}
+	_, err := a.Feedback.Close(c.Request.Context(), id, auth.Current(c).ID, "")
+	a.feedbackDone(c, id, err)
+}
+
+func (a *App) feedbackDone(c *gin.Context, id int64, err error) {
+	switch {
+	case errors.Is(err, feedback.ErrInvalid):
+		httpx.Error(c, http.StatusBadRequest, "请填写内容（最多 5000 字）")
+	case errors.Is(err, feedback.ErrNotFound):
+		httpx.Error(c, http.StatusNotFound, "反馈不存在")
+	case err != nil:
+		a.fail(c, err)
+	default:
+		c.Redirect(http.StatusSeeOther, "/feedback/"+strconv.FormatInt(id, 10))
+	}
 }
 
 // ---------- 说明文档页 ----------

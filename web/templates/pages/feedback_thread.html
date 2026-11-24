@@ -1,0 +1,15 @@
+{{define "content"}}<main class="narrow">{{with .F}}
+<header class="page-head"><p><a class="link" href="/feedback">← 我的反馈</a></p>
+<h1 class="page-title">{{.KindLabel}}</h1>
+<p class="hint"><span class="tag state-{{.State}}">{{.UserStateLabel}}</span>提交于 {{timeago .CreatedAt}}{{if .PageURL}} · 相关页面：{{.PageURL}}{{end}}</p></header>
+{{if $.Sent}}<p class="flash ok" role="status">已收到，谢谢你的反馈。管理员回复后会通知你。</p>{{end}}
+<ol class="thread">{{range .Messages}}<li class="msg{{if .Staff}} staff{{end}}" id="msg-{{.ID}}">
+<p class="msg-head"><b>{{if .Staff}}管理员{{else}}我{{end}}</b><time>{{timeago .CreatedAt}}</time></p>
+<p class="msg-body">{{.Content}}</p></li>{{end}}</ol>
+<section class="card-panel"><form class="form" method="post" action="/api/feedback/{{.ID}}/reply"><input type="hidden" name="_csrf" value="{{$.CSRF}}">
+<label>{{if eq .State "closed"}}继续补充（会重新打开这条反馈）{{else}}继续补充{{end}}<textarea name="content" rows="4" maxlength="5000" required></textarea></label>
+<div class="form-actions"><button class="btn btn-primary">发送</button></div></form>
+{{if ne .State "closed"}}<form class="form" method="post" action="/api/feedback/{{.ID}}/close"><input type="hidden" name="_csrf" value="{{$.CSRF}}">
+<p class="hint">问题已经解决了？可以直接关闭。管理员回复后 {{$.AutoCloseDays}} 天内没有新消息，也会自动关闭。<button class="link-inline">关闭这条反馈</button></p></form>{{end}}</section>
+{{end}}{{template "footer" .}}
+</main>{{end}}

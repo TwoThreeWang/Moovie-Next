@@ -221,7 +221,22 @@ body.bare .doc { margin: 0 auto; }
 .fb-list li:not(.card-panel) { display: grid; gap: 6px; padding-bottom: 12px; border-bottom: 1px solid var(--line); }
 .fb-list li.card-panel { margin: 0; }
 .fb-list p { overflow-wrap: anywhere; white-space: pre-wrap; }
-.reply-text { color: var(--ok); }
+.fb-item { display: grid; gap: 6px; color: inherit; text-decoration: none; }
+.fb-item:hover .fb-preview { text-decoration: underline; text-underline-offset: 3px; }
+.tag.state-user { color: var(--ok); }
+.tag.admin-state-staff { color: var(--new); }
+.thread { list-style: none; margin: 0 0 16px; padding: 0; display: grid; gap: 10px; }
+/* 用户的对话页：左右留和标题、下面的回复面板一样的边距，三者对齐 */
+.narrow > .thread { margin: 0 var(--gutter) 18px; }
+.msg { display: grid; gap: 6px; max-width: min(640px, 92%); padding: 12px 14px; border-radius: var(--r-m); background: var(--surface); }
+.msg.staff { justify-self: start; background: var(--surface-2); box-shadow: inset 3px 0 0 var(--ok); }
+.msg:not(.staff) { justify-self: end; }
+.card-panel .msg:not(.staff) { background: var(--bg-2); }
+.msg-head { display: flex; gap: 10px; align-items: baseline; font-size: 13px; }
+.msg-head time { color: var(--text-3); font-size: 12px; }
+.msg-body { color: var(--text-2); white-space: pre-wrap; overflow-wrap: anywhere; }
+.fb-close { display: flex; gap: 10px; align-items: center; margin-left: auto; }
+.form .fb-close select { width: auto; }
 .menu button { display: flex; align-items: center; gap: 14px; width: 100%; min-height: 52px; padding: 0 12px; border-top: 1px solid var(--line); color: var(--new); }
 
 /* ---------- 设置 ---------- */
