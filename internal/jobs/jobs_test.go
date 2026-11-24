@@ -192,6 +192,65 @@ func TestHeldLaneKeepsJobsAndDoesNotBlockOthers(t *testing.T) {
 	}
 }
 
+// 长任务优先级再高，也占不满一条通道：留出的执行位照样做短任务。
+func TestLongJobsLeaveReservedLoops(t *testing.T) {
+	queue, worker := newWorker(t)
+	ctx := context.Background()
+	var mu sync.Mutex
+	running, most, quick := 0, 0, 0
+	worker.Handle("slow", func(ctx context.Context, _ jobs.Job) error {
+		mu.Lock()
+		running++
+		most = max(most, running)
+		mu.Unlock()
+		<-ctx.Done()
+		mu.Lock()
+		running--
+		mu.Unlock()
+		return ctx.Err()
+	})
+	worker.Handle("quick", func(context.Context, jobs.Job) error { mu.Lock(); quick++; mu.Unlock(); return nil })
+	worker.Lane(jobs.Lane{Kinds: []string{"slow", "quick"}, Loops: 3, Long: []string{"slow"}, Reserved: 1})
+	for _, subject := range []string{"1", "2", "3"} {
+		queue.Enqueue(ctx, "slow", subject, jobs.Options{Priority: 20})
+	}
+	queue.Enqueue(ctx, "quick", "1", jobs.Options{})
+	queue.Enqueue(ctx, "quick", "2", jobs.Options{})
+	runCtx, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
+	worker.Run(runCtx)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if most != 2 || quick != 2 {
+		t.Errorf("长任务最多同时跑 2 个，短任务应该照常做完：长任务最多 %d 个，短任务做了 %d 个", most, quick)
+	}
+}
+
+// 执行情况从任务表里统计：做完了几个、最近一次什么时候做完、排队的任务最近一次为什么出错。
+func TestActivity(t *testing.T) {
+	queue, worker := newWorker(t)
+	ctx := context.Background()
+	worker.Handle("douban", func(_ context.Context, job jobs.Job) error {
+		if job.Subject == "bad" {
+			return errors.New("豆瓣返回 HTTP 403")
+		}
+		return nil
+	})
+	if activity, err := queue.Activity(ctx, "douban"); err != nil || activity.Done != 0 || activity.LastDone != nil || activity.LastError != "" {
+		t.Fatalf("还没有任务时应该是空的: %+v %v", activity, err)
+	}
+	queue.Enqueue(ctx, "douban", "good", jobs.Options{Priority: 1})
+	queue.Enqueue(ctx, "douban", "bad", jobs.Options{})
+	queue.Enqueue(ctx, "other", "x", jobs.Options{})
+	worker.RunOne(ctx)
+	worker.RunOne(ctx)
+	activity, err := queue.Activity(ctx, "douban")
+	if err != nil || activity.Done != 1 || activity.LastDone == nil || activity.LastError != "豆瓣返回 HTTP 403" {
+		t.Errorf("应该做完 1 个、记下最近的错误: %+v %v", activity, err)
+	}
+}
+
 // 被对方限流的失败：任务放回队列稍后再做，不算一次失败，重试次数不会被耗光。
 func TestPostponedFailureDoesNotCountAsAttempt(t *testing.T) {
 	queue, worker := newWorker(t)

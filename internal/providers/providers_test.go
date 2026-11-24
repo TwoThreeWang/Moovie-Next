@@ -314,6 +314,48 @@ func TestDoubanRateLimitIn400(t *testing.T) {
 	}
 }
 
+// 只有个别条目返回 403、谁都能打开的那部电影能正常打开：是这个条目打不开，不是限流，不能让整条通道停下。
+// 那部电影也返回 403 才是真的被拒绝了。
+func TestDouban403OnlyThrottlesWhenEverythingIsRefused(t *testing.T) {
+	refuseAll := false
+	canary := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/1292052") {
+			canary++
+			if !refuseAll {
+				w.Write([]byte(`{"id": "1292052", "title": "肖申克的救赎", "type": "movie"}`))
+				return
+			}
+		}
+		http.Error(w, "forbidden", http.StatusForbidden)
+	}))
+	defer server.Close()
+	douban := providers.NewDouban(server.Client())
+	douban.MobileBase, douban.Pace = server.URL, providers.NewPacer(10*time.Millisecond)
+
+	_, err := douban.Subject(context.Background(), "36000001", "movie")
+	if err == nil || errors.Is(err, providers.ErrThrottled) {
+		t.Fatalf("个别条目的 403 不应该算限流: %v", err)
+	}
+	if interval, paused := douban.Pace.Status(); interval != 10*time.Millisecond || !paused.IsZero() {
+		t.Errorf("个别条目的 403 不应该让请求放慢: %s %v", interval, paused)
+	}
+	douban.Subject(context.Background(), "36000002", "movie")
+	if canary != 1 {
+		t.Errorf("一分钟内只该检查一次那部电影，实际 %d 次", canary)
+	}
+
+	refuseAll = true
+	douban = providers.NewDouban(server.Client())
+	douban.MobileBase, douban.Pace = server.URL, providers.NewPacer(10*time.Millisecond)
+	if _, err := douban.Subject(context.Background(), "36000001", "movie"); !errors.Is(err, providers.ErrThrottled) {
+		t.Fatalf("那部电影也打不开，应该算限流: %v", err)
+	}
+	if interval, _ := douban.Pace.Status(); interval <= 10*time.Millisecond {
+		t.Errorf("被限流后应该放慢: %s", interval)
+	}
+}
+
 func TestDoubanThrottleSlowsDown(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "rate limited", http.StatusTooManyRequests)

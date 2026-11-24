@@ -11,6 +11,7 @@ import (
 
 	"moovie/internal/auth"
 	"moovie/internal/db"
+	"moovie/internal/ingest"
 	"moovie/internal/jobs"
 	"moovie/internal/library"
 	"moovie/internal/providers"
@@ -24,11 +25,10 @@ const (
 
 const (
 	pageSize = 50
-	// 用户点"同步"是有人在等，排在前面；每天自动的那次没人等，排在最后。
-	manualPriority = 5
-	dailyPriority  = -2
-	// 同步时新发现的作品，补全资料的优先级（对应 ingest.PriorityImport）。
-	importPriority = 0
+	// 为什么这样排见 ingest.PriorityViewing 那一组的注释。
+	manualPriority = ingest.PriorityManual    // 用户点"同步"，看着进度条在等
+	dailyPriority  = ingest.PriorityDailySync // 每天自动的那次：没人等，但不做的话新标记就不会出现
+	importPriority = ingest.PriorityImport    // 同步时新发现的作品，补全资料的优先级
 )
 
 // payload 是同步任务的参数。
@@ -130,7 +130,7 @@ func (s *Service) Register(worker *jobs.Worker) {
 		return s.Sync(ctx, userID, options.Full, func(progress Progress) { s.Queue.SetProgress(ctx, job.ID, progress) })
 	})
 	worker.Handle(KindDaily, func(ctx context.Context, _ jobs.Job) error { return s.StartAll(ctx) })
-	worker.Every(KindDaily, 24*time.Hour)
+	worker.Every(KindDaily, 24*time.Hour, 0)
 }
 
 // Sync 同步一个用户的豆瓣标记。本站已有的标记不会被覆盖，只有"想看"会升级成"看过"。

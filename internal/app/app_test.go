@@ -1454,7 +1454,7 @@ func TestModerationTools(t *testing.T) {
 	// 内容审核：按关键词搜，批量删除，作者收到通知
 	s.client = admin
 	s.app.Ingest.EnqueueRefresh(context.Background(), film, 0)
-	mustContain(t, s.get("/admin"), "最近 30 天", "新用户", "观影人数", "class=\"spark\"", "等待采集的作品", "最早的已经等了")
+	mustContain(t, s.get("/admin"), "最近 30 天", "新用户", "观影人数", "class=\"spark\"", "等待采集的作品", "最早的已经等了", "停滞", "一个也没做完")
 	page := s.get("/admin/content?q=" + url.QueryEscape("微信"))
 	mustContain(t, page, "加微信看全集", "lin")
 	id := regexp.MustCompile(`name="ids" value="(\d+)"`).FindStringSubmatch(page.body)[1]

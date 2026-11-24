@@ -16,8 +16,8 @@
 <div class="spark" role="img" aria-label="{{.Label}}：最近 30 天每天的数量">{{range .Bars}}<i style="--h:{{.}}%"></i>{{end}}</div></div>{{end}}</div></section>{{end}}
 <div class="admin-panels">
 <section class="card-panel"><h2>外部来源</h2>
-<ul class="plain"><li>豆瓣：已启用（主要来源）· 请求节奏：{{.DoubanPace}}{{if .DoubanProxy}} · 通过 DOUBAN_PROXY 出站{{end}}</li><li>TMDB：{{if .TMDB}}已启用{{else}}未配置 TMDB_API_TOKEN，没有剧照和分集信息{{end}}</li><li>AI 语义描述：{{if .AI}}已启用{{else}}未配置 AI_BASE_URL / AI_MODEL，新作品不写描述，也就没有向量{{end}}</li>
-<li>红果短剧：请求节奏：{{.HongguoPace}} · {{if .ShortSync}}每天抓榜单、重点剧目和新上架的短剧，每周抓分类{{else}}定期抓取已关闭（HONGGUO_SYNC=false），只在有人打开时抓单部{{end}}</li>
+<ul class="plain"><li>豆瓣：已启用（主要来源）· {{template "admin_lane" .DoubanLane}}{{if .DoubanProxy}} · 通过 DOUBAN_PROXY 出站{{end}}</li><li>TMDB：{{if .TMDB}}已启用{{else}}未配置 TMDB_API_TOKEN，没有剧照和分集信息{{end}}</li><li>AI 语义描述：{{if .AI}}已启用{{else}}未配置 AI_BASE_URL / AI_MODEL，新作品不写描述，也就没有向量{{end}}</li>
+<li>红果短剧：{{template "admin_lane" .HongguoLane}} · {{if .ShortSync}}每天抓榜单、重点剧目和新上架的短剧，每周抓分类{{else}}定期抓取已关闭（HONGGUO_SYNC=false），只在有人打开时抓单部{{end}}</li>
 <li>向量：{{if .Embedder}}已启用{{else}}未配置 EMBEDDING_BASE_URL，推荐按类型和热门榜生成{{end}}</li>
 <li>发信：{{if .Mail}}已启用{{else}}未配置 SMTP，不能注册和找回密码{{end}}</li>
 <li>Telegram 图床：{{if .Telegram}}已启用，已备份 {{.Mirrored}} 张图片（{{printf "%.1f" .MirroredMB}} MB）{{else}}未配置 TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID，图片每次从原站取{{end}}</li></ul></section>

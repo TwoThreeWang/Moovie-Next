@@ -124,13 +124,15 @@ func (a *App) adminDashboard(c *gin.Context) {
 		a.fail(c, err)
 		return
 	}
+	doubanLane, backlog := a.laneStatus(ctx, doubanKinds, ingest.KindRefresh, "等待采集的作品 %d 部")
+	hongguoLane, shortBacklog := a.laneStatus(ctx, ingest.ShortKinds, ingest.KindShortRefresh, "等待抓取的短剧 %d 部")
 	a.adminPage(c, "admin.html", "概览", "dashboard", gin.H{
 		"Shorts": shorts, "ShortsComplete": shortsComplete, "ShortsWaiting": shortsWaiting, "ShortSync": a.Ingest.ShortSync,
-		"HongguoPace": pacerStatus(a.Ingest.Hongguo.Pace), "ShortBacklog": a.shortBacklogText(ctx),
+		"HongguoLane": hongguoLane, "ShortBacklog": shortBacklog,
 		"Trends":   trends,
 		"Telegram": a.images.Mirror != nil, "Mirrored": mirrored, "MirroredMB": float64(mirroredBytes) / 1e6,
 		"Mail": a.Mail.Enabled(), "DoubanProxy": a.Config.DoubanProxy != "",
-		"DoubanPace": pacerStatus(a.Ingest.Douban.Pace), "Backlog": a.backlogText(ctx),
+		"DoubanLane": doubanLane, "Backlog": backlog,
 		"Users": userCount, "MediaTotal": total, "MediaComplete": complete, "MediaHidden": hidden, "MediaEmbedded": embedded,
 		"Jobs": jobCounts, "OpenFeedback": openFeedback, "PendingCollections": pendingCollections,
 		"Fingerprints": fingerprints, "FingerprintsConfirmed": confirmed, "FingerprintsRejected": rejected,
@@ -492,22 +494,53 @@ func (a *App) adminFeedbackRespond(c *gin.Context) {
 	adminBack(c, "/admin/feedback", "已保存")
 }
 
-// backlogText 说明还有多少作品在等采集、最早的等了多久、照现在的速度大概多久能做完。
-func (a *App) backlogText(ctx context.Context) string {
-	count, oldest, err := a.Queue.Backlog(ctx, ingest.KindRefresh)
+// laneView 是后台概览上一条执行通道的状态。
+type laneView struct {
+	Text    string
+	Stalled bool // 有任务在排队，最近 1 小时却一个也没做完
+}
+
+// laneStatus 说明一条执行通道实际做得怎么样，以及 backlogKind 还有多少在排队、照最近的速度大概多久能做完。
+//
+// 全部从任务表里统计：任务可能由单独的 worker 进程执行，网站进程内存里的请求节奏只反映它自己发出的请求，
+// 拿来判断会出现"豆瓣一直在拒绝，后台却写着正常"。
+func (a *App) laneStatus(ctx context.Context, kinds []string, backlogKind, backlogFormat string) (laneView, string) {
+	activity, err := a.Queue.Activity(ctx, kinds...)
+	if err != nil {
+		return laneView{Text: "查询失败：" + err.Error()}, ""
+	}
+	waiting, _, err := a.Queue.Backlog(ctx, kinds...)
+	if err != nil {
+		return laneView{Text: "查询失败：" + err.Error()}, ""
+	}
+	var lane laneView
+	switch {
+	case activity.Done > 0:
+		lane.Text = fmt.Sprintf("最近 1 小时做完 %d 个任务", activity.Done)
+	case waiting == 0:
+		lane.Text = "空闲"
+	default:
+		lane.Stalled = true
+		lane.Text = fmt.Sprintf("%d 个任务在排队，最近 1 小时一个也没做完", waiting)
+		if activity.LastDone != nil {
+			lane.Text += "，上一次做完是" + roughDuration(time.Since(*activity.LastDone)) + "前"
+		} else {
+			lane.Text += "，3 天内没有做完过"
+		}
+		if activity.LastError != "" {
+			lane.Text += "。最近的错误：" + activity.LastError
+		}
+	}
+
+	count, oldest, err := a.Queue.Backlog(ctx, backlogKind)
 	if err != nil || count == 0 || oldest == nil {
-		return ""
+		return lane, ""
 	}
-	text := fmt.Sprintf("等待采集的作品 %d 部，最早的已经等了%s", count, roughDuration(time.Since(*oldest)))
-	if pause := a.doubanPause(); pause > 0 {
-		return text + "；豆瓣暂停中，恢复后继续"
+	backlog := fmt.Sprintf(backlogFormat, count) + "，最早的已经等了" + roughDuration(time.Since(*oldest))
+	if activity.Done > 0 {
+		backlog += "；照最近 1 小时的速度大约还要" + roughDuration(time.Duration(count)*time.Hour/time.Duration(activity.Done))
 	}
-	if d := a.Ingest.Douban; d != nil && d.Pace != nil {
-		interval, _ := d.Pace.Status()
-		// 一部作品要向豆瓣发一到两次请求，这里按一次半估算。
-		text += "；照现在的速度大约还要" + roughDuration(time.Duration(count)*interval*3/2)
-	}
-	return text
+	return lane, backlog
 }
 
 func roughDuration(d time.Duration) string {
@@ -520,33 +553,4 @@ func roughDuration(d time.Duration) string {
 		return fmt.Sprintf(" %d 小时", int(d.Hours()))
 	}
 	return fmt.Sprintf(" %d 天", int(d.Hours()/24))
-}
-
-// shortBacklogText 说明还有多少部短剧在等红果的详情。一部短剧只发一次请求。
-func (a *App) shortBacklogText(ctx context.Context) string {
-	count, oldest, err := a.Queue.Backlog(ctx, ingest.KindShortRefresh)
-	if err != nil || count == 0 || oldest == nil {
-		return ""
-	}
-	text := fmt.Sprintf("等待抓取的短剧 %d 部，最早的已经等了%s", count, roughDuration(time.Since(*oldest)))
-	if pause := a.hongguoPause(); pause > 0 {
-		return text + "；红果暂停中，恢复后继续"
-	}
-	interval, _ := a.Ingest.Hongguo.Pace.Status()
-	return text + "；照现在的速度大约还要" + roughDuration(time.Duration(count)*interval)
-}
-
-// pacerStatus 是请求节奏的说明：正常、放慢了、暂停中。
-func pacerStatus(pace *providers.Pacer) string {
-	if pace == nil {
-		return ""
-	}
-	interval, paused := pace.Status()
-	switch {
-	case !paused.IsZero():
-		return "被限流，暂停到 " + paused.Format("15:04")
-	case interval > time.Second:
-		return "被限流过，请求间隔放慢到 " + interval.Round(time.Second).String()
-	}
-	return "正常"
 }

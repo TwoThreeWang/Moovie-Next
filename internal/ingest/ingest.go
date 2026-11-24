@@ -42,13 +42,25 @@ const (
 // maxSemanticRunes 是语义描述最多保留的字数，和老系统一致（向量模型一次读不了更多）。
 const maxSemanticRunes = 450
 
-// 采集任务的优先级。豆瓣允许的请求数是有限的，先花在有人等着看的作品上。
+// 全站后台任务共用的优先级（豆瓣同步 doubansync 也用这几档）。
+//
+// 豆瓣、红果允许的请求数有限，被限流时一小时只有几十次，排不完的总是最低的那几档，所以按这几条排：
+//  1. 有人正盯着屏幕等结果的最先。
+//  2. 一次只有一个、只花几次请求、所有访客都看得到的周期任务（首页榜单）其次：先做几乎不占预算，晚了大家都看到旧榜单。
+//  3. 用户自己的数据（每天的豆瓣增量同步）排在补资料前面：没有新标记的用户每人每天只花两次请求，
+//     而且它不做，用户新标记的作品就根本不会出现；补资料不做，作品也已经有片名和海报能用。
+//  4. 只是让资料更新鲜的排最后：限流时它们一直排不上也不影响使用。
+//
+// 优先级只决定空出来的执行位先拿哪个，不会打断正在跑的任务。
 const (
-	PriorityViewing  = 20 // 有人正开着这部作品的页面
-	PriorityManual   = 10 // 管理员手动刷新
-	PriorityDiscover = 5  // 榜单、搜索带来的新作品
-	PriorityImport   = 0  // 用户导入豆瓣标记带来的新作品：列表里已经有片名和海报，晚点补全不影响使用
-	PriorityRoutine  = -1 // 定期重新同步
+	PriorityViewing   = 20 // 有人正开着这部作品的页面，显示着"资料获取中"
+	PriorityManual    = 10 // 有人点了按钮在等：管理员手动刷新、用户点"同步豆瓣"
+	PriorityLists     = 8  // 首页的豆瓣热门榜、短剧频道的红果榜单
+	PriorityDailySync = 6  // 每天给每个绑定了豆瓣的用户做一次增量同步
+	PriorityDiscover  = 5  // 榜单、搜索、老链接带来的新作品：卡片上已有片名和海报，有人点开时会升到 PriorityViewing
+	PriorityImport    = 0  // 用户导入豆瓣标记带来的新作品：列表里已经有片名和海报，晚点补全不影响使用
+	PriorityRoutine   = -1 // 定期重新同步已有资料的作品
+	PriorityBackfill  = -2 // 巡检补漏：AI 描述、向量、上映日期（各有各的通道或不用豆瓣，排在最后也不挡别人）
 )
 
 // ChartKinds 是首页用到的榜单，和豆瓣的榜单类型一一对应。
@@ -121,10 +133,10 @@ func (s *Service) Register(worker *jobs.Worker) {
 	}
 	worker.Handle(KindCharts, func(ctx context.Context, _ jobs.Job) error { return s.RefreshCharts(ctx) })
 	worker.Handle(KindSweep, func(ctx context.Context, _ jobs.Job) error { return s.Sweep(ctx) })
-	worker.Every(KindCharts, 6*time.Hour)
-	worker.Every(KindSweep, time.Hour)
+	worker.Every(KindCharts, 6*time.Hour, PriorityLists)
+	worker.Every(KindSweep, time.Hour, 0)
 	worker.Handle(KindPopularity, func(ctx context.Context, _ jobs.Job) error { return s.RefreshPopularity(ctx) })
-	worker.Every(KindPopularity, 24*time.Hour)
+	worker.Every(KindPopularity, 24*time.Hour, 0)
 	s.registerShort(worker)
 }
 
@@ -657,11 +669,11 @@ func (s *Service) Sweep(ctx context.Context) error {
 	for _, item := range []pick{
 		{KindRefresh, true, PriorityRoutine, func() ([]int64, error) { return s.Media.Stale(ctx, KindRefresh, 200) }},
 		{KindEnrich, s.Wikidata != nil || s.TMDB.Enabled(), PriorityRoutine, func() ([]int64, error) { return s.Media.NeedsEnrich(ctx, KindEnrich, 200) }},
-		{KindSemantic, s.AI.Enabled(), -2, func() ([]int64, error) { return s.Media.NeedsSemantic(ctx, KindSemantic, KindEnrich, 100) }},
-		{KindEmbed, s.Embedder.Enabled(), -2, func() ([]int64, error) { return s.Media.MissingEmbedding(ctx, KindEmbed, 200) }},
+		{KindSemantic, s.AI.Enabled(), PriorityBackfill, func() ([]int64, error) { return s.Media.NeedsSemantic(ctx, KindSemantic, KindEnrich, 100) }},
+		{KindEmbed, s.Embedder.Enabled(), PriorityBackfill, func() ([]int64, error) { return s.Media.MissingEmbedding(ctx, KindEmbed, 200) }},
 		{KindShortRefresh, s.Hongguo != nil, PriorityRoutine, func() ([]int64, error) { return s.Media.StaleShort(ctx, KindShortRefresh, 300) }},
 		// 补上映日期：每个作品只问 TMDB 一次，补完就不再挑中。
-		{KindRelease, s.TMDB.Enabled(), -2, func() ([]int64, error) { return s.Media.NeedsRelease(ctx, KindRelease, 1000) }},
+		{KindRelease, s.TMDB.Enabled(), PriorityBackfill, func() ([]int64, error) { return s.Media.NeedsRelease(ctx, KindRelease, 1000) }},
 	} {
 		if !item.enabled {
 			continue

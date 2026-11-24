@@ -17,3 +17,4 @@
 
 {{define "csrf"}}<input type="hidden" name="_csrf" value="{{.}}">{{end}}
 {{define "reset_link"}}<div class="flash ok pad" role="status"><p>{{.ResetFor}} 的重置密码链接（30 分钟内有效，只能用一次）：</p><p><input class="copy-field" value="{{.ResetLink}}" readonly aria-label="重置链接"></p></div>{{end}}
+{{define "admin_lane"}}{{if .Stalled}}<span class="tag status-rejected">停滞</span> {{end}}{{.Text}}{{end}}

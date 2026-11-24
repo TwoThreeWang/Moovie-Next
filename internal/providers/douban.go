@@ -120,7 +120,19 @@ type Douban struct {
 	MobileBase string // 默认 https://m.douban.com
 	WebBase    string // 默认 https://movie.douban.com
 	Pace       *Pacer
+
+	canary canaryState
 }
+
+// canaryState 记着最近一次用 canaryID 检查"豆瓣是不是在拒绝我们"的结果，一分钟内不重复检查。
+type canaryState struct {
+	mu      sync.Mutex
+	at      time.Time
+	blocked bool
+}
+
+// canaryID 是一部肯定存在、谁都能打开的电影（肖申克的救赎），用来判断一次 403 是冲着这个条目还是冲着我们。
+const canaryID = "1292052"
 
 // NewDouban 创建豆瓣客户端，默认每秒最多一次请求。
 func NewDouban(client *http.Client) *Douban {
@@ -427,9 +439,34 @@ func (d *Douban) getJSON(ctx context.Context, endpoint, referer string, destinat
 			return err
 		}
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	request, err := d.newRequest(ctx, endpoint, referer)
 	if err != nil {
 		return err
+	}
+	err = doJSON(d.HTTP, request, "豆瓣", destination)
+	// 403 不一定是限流：有的条目、不公开的用户主页，豆瓣对谁都返回 403。只有一部谁都能打开的电影也打不开，
+	// 才是在拒绝我们；否则一个打不开的条目就会让整条豆瓣通道停下来，排在后面的都跟着等。
+	var status *throttledStatus
+	if errors.As(err, &status) && status.code == http.StatusForbidden && !d.blocked(ctx) {
+		err = fmt.Errorf("豆瓣对这个地址返回 HTTP 403，同一时间别的条目能正常打开，不是限流")
+	}
+	switch {
+	case errors.Is(err, ErrThrottled):
+		// 连着代理时，旧连接可能一直走着被拒绝的那个出口；断开它，下一次请求重新连，代理有机会换一个。
+		d.HTTP.CloseIdleConnections()
+		if d.Pace != nil {
+			d.Pace.Throttled()
+		}
+	case d.Pace != nil:
+		d.Pace.Succeeded()
+	}
+	return err
+}
+
+func (d *Douban) newRequest(ctx context.Context, endpoint, referer string) (*http.Request, error) {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, err
 	}
 	request.Header.Set("User-Agent", mobileUA)
 	request.Header.Set("Referer", referer)
@@ -438,17 +475,41 @@ func (d *Douban) getJSON(ctx context.Context, endpoint, referer string, destinat
 	bid := make([]byte, 6)
 	rand.Read(bid)
 	request.Header.Set("Cookie", "bid="+hex.EncodeToString(bid)[:11])
-	err = doJSON(d.HTTP, request, "豆瓣", destination)
-	if d.Pace != nil {
-		switch {
-		case errors.Is(err, ErrThrottled):
-			d.Pace.Throttled()
-		case err == nil || errors.Is(err, ErrNotFound):
-			d.Pace.Succeeded()
+	return request, nil
+}
+
+// blocked 判断豆瓣现在是不是在拒绝我们：打开 canaryID 这部电影，正常返回（包括 404）说明没有被拒绝。
+// 结果记一分钟，很多条目接连返回 403 时不会每次都多发一次请求。
+func (d *Douban) blocked(ctx context.Context) bool {
+	d.canary.mu.Lock()
+	defer d.canary.mu.Unlock()
+	if !d.canary.at.IsZero() && time.Since(d.canary.at) < time.Minute {
+		return d.canary.blocked
+	}
+	blocked := true
+	if d.Pace == nil || d.Pace.Wait(ctx) == nil {
+		request, err := d.newRequest(ctx, d.MobileBase+"/rexxar/api/v2/movie/"+canaryID+"?ck=&for_mobile=1", "https://m.douban.com/")
+		if err == nil {
+			var ignored json.RawMessage
+			err = doJSON(d.HTTP, request, "豆瓣", &ignored)
+			blocked = err != nil && !errors.Is(err, ErrNotFound)
 		}
 	}
-	return err
+	d.canary.at, d.canary.blocked = time.Now(), blocked
+	return blocked
 }
+
+// throttledStatus 是表示限流的 HTTP 状态码（429、403、418）。豆瓣还要再分辨 403 是不是真的限流。
+type throttledStatus struct {
+	name string
+	code int
+}
+
+func (e *throttledStatus) Error() string {
+	return fmt.Sprintf("%s返回 HTTP %d: %v", e.name, e.code, ErrThrottled)
+}
+
+func (e *throttledStatus) Unwrap() error { return ErrThrottled }
 
 // doJSON 发请求并解析 JSON。404 统一转成 ErrNotFound。
 func doJSON(client *http.Client, request *http.Request, name string, destination any) error {
@@ -461,7 +522,7 @@ func doJSON(client *http.Client, request *http.Request, name string, destination
 		return ErrNotFound
 	}
 	if response.StatusCode == http.StatusTooManyRequests || response.StatusCode == http.StatusForbidden || response.StatusCode == http.StatusTeapot {
-		return fmt.Errorf("%s返回 HTTP %d: %w", name, response.StatusCode, ErrThrottled)
+		return &throttledStatus{name: name, code: response.StatusCode}
 	}
 	if response.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(response.Body, 300))

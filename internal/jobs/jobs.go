@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sync"
 	"time"
 
@@ -222,6 +223,26 @@ func (q *Queue) Backlog(ctx context.Context, kinds ...string) (count int, oldest
 	return count, oldest, err
 }
 
+// Activity 是几种任务最近实际做成了多少。它从任务表里统计，不管任务在哪个进程里执行：
+// 请求节奏（providers.Pacer）记在各个进程的内存里，网站进程看不到 worker 进程被限流了。
+type Activity struct {
+	Done      int        // 最近 1 小时做完的数量
+	LastDone  *time.Time // 最近一次做完的时间；完成记录只留 3 天，更早的为 nil
+	LastError string     // 排队中的任务里，最近一次出错（或因限流推迟）的原因
+}
+
+// Activity 返回这些类型的任务最近的执行情况。
+func (q *Queue) Activity(ctx context.Context, kinds ...string) (Activity, error) {
+	var activity Activity
+	err := q.pool.QueryRow(ctx, `SELECT
+  count(*) FILTER (WHERE status = 'done' AND finished_at > now() - interval '1 hour'),
+  max(finished_at) FILTER (WHERE status = 'done'),
+  COALESCE((SELECT last_error FROM jobs WHERE kind = ANY($1) AND status = 'queued' AND last_error <> ''
+    ORDER BY run_at DESC LIMIT 1), '')
+FROM jobs WHERE kind = ANY($1)`, kinds).Scan(&activity.Done, &activity.LastDone, &activity.LastError)
+	return activity, err
+}
+
 // lastScheduled 返回每种周期任务最近一次入队的时间。
 func (q *Queue) lastScheduled(ctx context.Context) (map[string]time.Time, error) {
 	rows, err := q.pool.Query(ctx, `SELECT kind, max(created_at) FROM jobs WHERE subject = '' GROUP BY kind`)
@@ -267,6 +288,11 @@ OR (status = 'failed' AND finished_at < now() - interval '14 days')`)
 type Lane struct {
 	Kinds []string
 	Loops int
+	// Long 是 Kinds 里一跑就很久的任务，Reserved 个执行位不接它们，留给其余的短任务。
+	// 优先级不会打断正在跑的任务，不留位置的话，几个长任务就能把执行位全占住，
+	// 有人在等的短任务也只能干等它们跑完。Reserved 至少给长任务留一个位置。
+	Long     []string
+	Reserved int
 	// Hold 返回大于 0 表示这条通道现在先别取任务（比如对方让我们暂停），过这么久再看。
 	// 任务留在队列里原样不动，不会被白白取出来失败一次。
 	Hold func() time.Duration
@@ -307,9 +333,9 @@ func (w *Worker) Handle(kind string, handler Handler) { w.handlers[kind] = handl
 // Lane 增加一条独立的执行通道。
 func (w *Worker) Lane(lane Lane) { w.lanes = append(w.lanes, lane) }
 
-// Every 注册周期任务：每隔 every 入队一次（subject 为空）。上一次还没跑完时不会重复入队。
-func (w *Worker) Every(kind string, every time.Duration) {
-	w.schedules = append(w.schedules, schedule{kind: kind, every: every})
+// Every 注册周期任务：每隔 every 按 priority 入队一次（subject 为空）。上一次还没跑完时不会重复入队。
+func (w *Worker) Every(kind string, every time.Duration, priority int) {
+	w.schedules = append(w.schedules, schedule{kind: kind, every: every, priority: priority})
 }
 
 // Run 阻塞运行，直到 ctx 取消。
@@ -325,8 +351,18 @@ func (w *Worker) Run(ctx context.Context) {
 	var taken []string
 	for _, lane := range w.lanes {
 		taken = append(taken, lane.Kinds...)
-		for range max(1, lane.Loops) {
-			start(func() { w.loop(ctx, lane.Kinds, true, lane.Hold) })
+		loops := max(1, lane.Loops)
+		reserved := min(lane.Reserved, loops-1)
+		if len(lane.Long) == 0 {
+			reserved = 0
+		}
+		short := slices.DeleteFunc(slices.Clone(lane.Kinds), func(kind string) bool { return slices.Contains(lane.Long, kind) })
+		for index := range loops {
+			kinds := lane.Kinds
+			if index < reserved {
+				kinds = short
+			}
+			start(func() { w.loop(ctx, kinds, true, lane.Hold) })
 		}
 	}
 	for range w.concurrency {

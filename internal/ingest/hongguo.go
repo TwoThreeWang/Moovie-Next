@@ -87,9 +87,9 @@ func (s *Service) registerShort(worker *jobs.Worker) {
 	worker.Handle(KindShortLists, func(ctx context.Context, _ jobs.Job) error { return s.RefreshShortLists(ctx) })
 	worker.Handle(KindShortCategories, func(ctx context.Context, _ jobs.Job) error { return s.RefreshShortCategories(ctx) })
 	worker.Handle(KindShortSitemaps, func(ctx context.Context, _ jobs.Job) error { return s.DiscoverNewShorts(ctx) })
-	worker.Every(KindShortLists, 24*time.Hour)
-	worker.Every(KindShortCategories, 7*24*time.Hour)
-	worker.Every(KindShortSitemaps, 24*time.Hour)
+	worker.Every(KindShortLists, 24*time.Hour, PriorityLists)
+	worker.Every(KindShortCategories, 7*24*time.Hour, 0)
+	worker.Every(KindShortSitemaps, 24*time.Hour, 0)
 }
 
 // refreshKind 返回重新同步这部作品要排的任务：短剧找红果，其余找豆瓣。

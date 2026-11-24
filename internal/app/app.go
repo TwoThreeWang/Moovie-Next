@@ -276,26 +276,30 @@ func (a *App) RegisterJobs(worker *jobs.Worker) {
 	a.Ingest.Register(worker)
 	a.DoubanSync.Register(worker)
 	worker.Lane(jobs.Lane{
-		// 三个执行位：请求的快慢由豆瓣的限速统一控制，多几个位置只是让某个用户的标记很多、
-		// 要读很久的时候，别的任务还能接着用豆瓣。
+		// 三个执行位。请求的快慢由豆瓣的限速统一控制：所有执行位排队分同一份额度，
+		// 位置再多也不会多出请求，只会让每个任务分到的更少，所以不加位置。
+		// 用户同步一次要读很多页，最多占两个位置，留一个给单部作品和榜单，有人开着作品页时不用干等。
 		Kinds: doubanKinds, Loops: 3,
+		Long: []string{doubansync.KindSync}, Reserved: 1,
 		Hold:     a.doubanPause,
 		Postpone: func(err error) bool { return errors.Is(err, providers.ErrThrottled) },
 	})
 	// 红果单独一条通道：它限流、暂停时只停短剧，不影响豆瓣和别的任务。请求快慢由红果的限速统一控制。
+	// 榜单、分类、站点地图一次要读很多页，共用一个位置，留一个给单部短剧。
 	worker.Lane(jobs.Lane{
 		Kinds: ingest.ShortKinds, Loops: 2,
+		Long: []string{ingest.KindShortLists, ingest.KindShortCategories, ingest.KindShortSitemaps}, Reserved: 1,
 		Hold:     a.hongguoPause,
 		Postpone: func(err error) bool { return errors.Is(err, providers.ErrThrottled) },
 	})
 	// AI 写一段描述要十几秒到一分钟，单独两个执行位，不让它把补资料、算向量这些快任务堵在后面。
 	worker.Lane(jobs.Lane{Kinds: []string{ingest.KindSemantic}, Loops: 2})
 	worker.Handle("trends.prune", func(ctx context.Context, _ jobs.Job) error { return a.Trends.Prune(ctx) })
-	worker.Every("trends.prune", 24*time.Hour)
+	worker.Every("trends.prune", 24*time.Hour, 0)
 	worker.Handle("collections.prune-views", func(ctx context.Context, _ jobs.Job) error { return a.Collections.PruneViews(ctx) })
-	worker.Every("collections.prune-views", 24*time.Hour)
+	worker.Every("collections.prune-views", 24*time.Hour, 0)
 	worker.Handle("mail.prune", func(ctx context.Context, _ jobs.Job) error { return a.Mail.Prune(ctx) })
-	worker.Every("mail.prune", 24*time.Hour)
+	worker.Every("mail.prune", 24*time.Hour, 0)
 }
 
 // Router 创建路由。HEAD 请求按 GET 处理，见 httpx.HeadAsGet。

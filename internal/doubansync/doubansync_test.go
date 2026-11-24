@@ -99,17 +99,17 @@ func TestBindAndSync(t *testing.T) {
 		t.Errorf("增量同步应该导入新标记的那一部，实际 %+v", last)
 	}
 
-	// 每天自动的那次排在最后；用户自己点同步时，把它提前并换成完整同步。
+	// 每天自动的那次是增量同步；用户自己点同步时，把它提前并换成完整同步。
 	if err := service.StartAll(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if job, found, _ := service.Queue.Latest(ctx, doubansync.KindSync, "1"); !found || job.Priority >= 0 || string(job.Payload) != `{"full": false}` {
-		t.Errorf("每天自动的同步应该是低优先级的增量同步: %+v", job)
+	if job, found, _ := service.Queue.Latest(ctx, doubansync.KindSync, "1"); !found || job.Priority != ingest.PriorityDailySync || string(job.Payload) != `{"full": false}` {
+		t.Errorf("每天自动的同步应该是增量同步: %+v", job)
 	}
 	if started, _ := service.Start(ctx, 1); started {
 		t.Error("已经有一个在排队，不应该再新建一个")
 	}
-	if job, _, _ := service.Queue.Latest(ctx, doubansync.KindSync, "1"); job.Priority <= 0 || string(job.Payload) != `{"full": true}` {
+	if job, _, _ := service.Queue.Latest(ctx, doubansync.KindSync, "1"); job.Priority != ingest.PriorityManual || string(job.Payload) != `{"full": true}` {
 		t.Errorf("用户点同步后，排着的那个应该被提前并换成完整同步: %+v", job)
 	}
 	pool.Exec(ctx, `DELETE FROM jobs`)
