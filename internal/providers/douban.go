@@ -121,18 +121,69 @@ type Douban struct {
 	WebBase    string // 默认 https://movie.douban.com
 	Pace       *Pacer
 
-	canary canaryState
+	refusals refusalState
 }
 
-// canaryState 记着最近一次用 canaryID 检查"豆瓣是不是在拒绝我们"的结果，一分钟内不重复检查。
-type canaryState struct {
+// refusalState 按接口类别记着：这一类接口上一次成功之后，豆瓣拒绝了哪些不同的对象（403 或限流）。
+//
+// 403 不一定是限流：有的条目、不公开的用户主页，豆瓣对谁都返回 403。所以单个对象的 403 只算它自己失败，
+// 不能让整条通道停下；但同一类接口接连有几个不同的对象被拒绝、中间一次成功都没有，就是在拒绝我们了。
+//
+// 以前用"打开一部热门电影试试"来判断，可豆瓣拒绝我们时那部电影有时照样能打开，
+// 结果每个 403 都被当成个别条目失败，任务白白用掉重试次数，请求也不放慢。
+//
+// 按类别分开记，是因为豆瓣分接口限流（限流的错误码叫 subject_ip_rate_limit）：条目详情被拒绝时，
+// 用户的标记列表可能还能打开。不分开的话，正在同步的用户每读一页成功就把计数清零，条目的 403 又全成了个别失败。
+type refusalState struct {
 	mu      sync.Mutex
-	at      time.Time
-	blocked bool
+	refused map[string]map[string]bool // 接口类别 → 被拒绝的对象
 }
 
-// canaryID 是一部肯定存在、谁都能打开的电影（肖申克的救赎），用来判断一次 403 是冲着这个条目还是冲着我们。
-const canaryID = "1292052"
+// refusedLimit 是同一类接口上一次成功之后，有几个不同的对象被拒绝就算限流。
+const refusedLimit = 3
+
+// refuse 记一次被拒绝，返回这一类接口是不是已经算限流了。
+func (r *refusalState) refuse(class, object string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.refused == nil {
+		r.refused = map[string]map[string]bool{}
+	}
+	if r.refused[class] == nil {
+		r.refused[class] = map[string]bool{}
+	}
+	r.refused[class][object] = true
+	return len(r.refused[class]) >= refusedLimit
+}
+
+// succeed 记一次这一类接口的正常回答（包括"没有这个条目"），清零这一类的计数。
+func (r *refusalState) succeed(class string) {
+	r.mu.Lock()
+	delete(r.refused, class)
+	r.mu.Unlock()
+}
+
+var (
+	subjectPath  = regexp.MustCompile(`/(?:movie|tv)/([0-9]+)$`) // 榜单的 /movie/hot_gaia 不是条目
+	interestPath = regexp.MustCompile(`/user/([^/]+)/interests$`)
+)
+
+// refusalKey 从请求地址里分出接口类别和对象。/movie/123 和 /tv/123 是同一个条目：
+// 先试电影接口再试剧集接口时不能算成两个。认不出的接口，整个路径既是类别也是对象。
+func refusalKey(endpoint string) (class, object string) {
+	path := endpoint
+	if parsed, err := url.Parse(endpoint); err == nil {
+		path = parsed.Path
+	}
+	path = strings.TrimSuffix(path, "/")
+	if match := subjectPath.FindStringSubmatch(path); match != nil {
+		return "subject", match[1]
+	}
+	if match := interestPath.FindStringSubmatch(path); match != nil {
+		return "interests", match[1]
+	}
+	return path, path
+}
 
 // NewDouban 创建豆瓣客户端，默认每秒最多一次请求。
 func NewDouban(client *http.Client) *Douban {
@@ -444,21 +495,29 @@ func (d *Douban) getJSON(ctx context.Context, endpoint, referer string, destinat
 		return err
 	}
 	err = doJSON(d.HTTP, request, "豆瓣", destination)
-	// 403 不一定是限流：有的条目、不公开的用户主页，豆瓣对谁都返回 403。只有一部谁都能打开的电影也打不开，
-	// 才是在拒绝我们；否则一个打不开的条目就会让整条豆瓣通道停下来，排在后面的都跟着等。
-	var status *throttledStatus
-	if errors.As(err, &status) && status.code == http.StatusForbidden && !d.blocked(ctx) {
-		err = fmt.Errorf("豆瓣对这个地址返回 HTTP 403，同一时间别的条目能正常打开，不是限流")
-	}
-	switch {
-	case errors.Is(err, ErrThrottled):
-		// 连着代理时，旧连接可能一直走着被拒绝的那个出口；断开它，下一次请求重新连，代理有机会换一个。
-		d.HTTP.CloseIdleConnections()
+	class, object := refusalKey(endpoint)
+	if err == nil || errors.Is(err, ErrNotFound) {
+		d.refusals.succeed(class)
 		if d.Pace != nil {
-			d.Pace.Throttled()
+			d.Pace.Succeeded()
 		}
-	case d.Pace != nil:
-		d.Pace.Succeeded()
+		return err
+	}
+	if !errors.Is(err, ErrThrottled) {
+		return err // 网络错误、解析失败这些和限流无关，也不算成功，不改节奏
+	}
+	tooMany := d.refusals.refuse(class, object)
+	var status *throttledStatus
+	if errors.As(err, &status) && status.code == http.StatusForbidden && !tooMany {
+		return fmt.Errorf("豆瓣对这个地址返回 HTTP 403，暂时只算它自己失败（同类接口上一次成功之后接连 %d 个不同对象被拒绝才算限流）", refusedLimit)
+	}
+	// 连着代理时，旧连接可能一直走着被拒绝的那个出口；断开它，下一次请求重新连，代理有机会换一个。
+	d.HTTP.CloseIdleConnections()
+	if d.Pace != nil {
+		d.Pace.Throttled()
+	}
+	if status != nil && status.code == http.StatusForbidden {
+		return fmt.Errorf("豆瓣接连拒绝了 %d 个不同的对象（HTTP 403）: %w", refusedLimit, ErrThrottled)
 	}
 	return err
 }
@@ -476,27 +535,6 @@ func (d *Douban) newRequest(ctx context.Context, endpoint, referer string) (*htt
 	rand.Read(bid)
 	request.Header.Set("Cookie", "bid="+hex.EncodeToString(bid)[:11])
 	return request, nil
-}
-
-// blocked 判断豆瓣现在是不是在拒绝我们：打开 canaryID 这部电影，正常返回（包括 404）说明没有被拒绝。
-// 结果记一分钟，很多条目接连返回 403 时不会每次都多发一次请求。
-func (d *Douban) blocked(ctx context.Context) bool {
-	d.canary.mu.Lock()
-	defer d.canary.mu.Unlock()
-	if !d.canary.at.IsZero() && time.Since(d.canary.at) < time.Minute {
-		return d.canary.blocked
-	}
-	blocked := true
-	if d.Pace == nil || d.Pace.Wait(ctx) == nil {
-		request, err := d.newRequest(ctx, d.MobileBase+"/rexxar/api/v2/movie/"+canaryID+"?ck=&for_mobile=1", "https://m.douban.com/")
-		if err == nil {
-			var ignored json.RawMessage
-			err = doJSON(d.HTTP, request, "豆瓣", &ignored)
-			blocked = err != nil && !errors.Is(err, ErrNotFound)
-		}
-	}
-	d.canary.at, d.canary.blocked = time.Now(), blocked
-	return blocked
 }
 
 // throttledStatus 是表示限流的 HTTP 状态码（429、403、418）。豆瓣还要再分辨 403 是不是真的限流。

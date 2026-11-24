@@ -249,6 +249,19 @@ func TestActivity(t *testing.T) {
 	if err != nil || activity.Done != 1 || activity.LastDone == nil || activity.LastError != "豆瓣返回 HTTP 403" {
 		t.Errorf("应该做完 1 个、记下最近的错误: %+v %v", activity, err)
 	}
+
+	// 最近的错误要取刚刚执行的那个任务，而不是下次重试排得最远的那个（它失败得最早，错误是旧的）
+	pool := testdb.Pool(t)
+	if _, err := pool.Exec(ctx, `UPDATE jobs SET run_at = now() + interval '1 day', attempted_at = now() - interval '2 hours' WHERE subject = 'bad'`); err != nil {
+		t.Fatal(err)
+	}
+	worker.Handle("douban", func(_ context.Context, job jobs.Job) error { return errors.New("豆瓣返回 HTTP 400（限流）") })
+	queue.Enqueue(ctx, "douban", "later", jobs.Options{})
+	worker.RunOne(ctx) // 先轮到前面排着的 other
+	worker.RunOne(ctx)
+	if activity, _ := queue.Activity(ctx, "douban"); activity.LastError != "豆瓣返回 HTTP 400（限流）" {
+		t.Errorf("最近的错误应该是刚刚发生的: %q", activity.LastError)
+	}
 }
 
 // 被对方限流的失败：任务放回队列稍后再做，不算一次失败，重试次数不会被耗光。
@@ -297,18 +310,43 @@ func TestForceAndSuccessClearCooling(t *testing.T) {
 	}
 }
 
-// 推迟只在任务入队 3 天内有效，之后按普通失败算，免得一直被拒绝的对象永远在队列里转。
+// 推迟从第一次被推迟算起最多 3 天，之后按普通失败算，免得一直被拒绝的对象永远在队列里转。
+// 从第一次推迟算起而不是从入队算起：排了几天的积压任务碰上限流，照样只是推迟，不用掉重试次数。
 func TestPostponeHasALimit(t *testing.T) {
 	queue, worker := newWorker(t)
 	pool := testdb.Pool(t)
 	ctx := context.Background()
 	throttled := errors.New("被限流了")
-	worker.Handle("douban", func(context.Context, jobs.Job) error { return throttled })
+	broken := errors.New("解析失败")
+	result := throttled
+	worker.Handle("douban", func(context.Context, jobs.Job) error { return result })
 	worker.Lane(jobs.Lane{Kinds: []string{"douban"}, Postpone: func(err error) bool { return errors.Is(err, throttled) }})
 	queue.Enqueue(ctx, "douban", "old", jobs.Options{})
-	pool.Exec(ctx, `UPDATE jobs SET created_at = now() - interval '4 days'`)
+	pool.Exec(ctx, `UPDATE jobs SET created_at = now() - interval '10 days'`)
 	worker.RunOne(ctx)
-	if job, _, _ := queue.Latest(ctx, "douban", "old"); job.Attempts != 1 {
-		t.Errorf("入队超过 3 天的任务被限流应该算一次失败，实际已尝试 %d 次", job.Attempts)
+	job, _, _ := queue.Latest(ctx, "douban", "old")
+	if job.Attempts != 0 || job.PostponedAt == nil {
+		t.Fatalf("入队很久的任务被限流也应该只是推迟: %+v", job)
+	}
+
+	// 连续被推迟超过 3 天：按普通失败算，并且之后一直这样算
+	pool.Exec(ctx, `UPDATE jobs SET postponed_at = now() - interval '4 days', run_at = now()`)
+	worker.RunOne(ctx)
+	if job, _, _ = queue.Latest(ctx, "douban", "old"); job.Attempts != 1 || job.PostponedAt == nil {
+		t.Errorf("连续推迟超过 3 天应该算一次失败、仍记着推迟开始的时间: %+v", job)
+	}
+
+	// 因为自身原因失败（不是限流）说明对方又在正常回答了，推迟重新计时
+	result = broken
+	pool.Exec(ctx, `UPDATE jobs SET run_at = now()`)
+	worker.RunOne(ctx)
+	if job, _, _ = queue.Latest(ctx, "douban", "old"); job.Attempts != 2 || job.PostponedAt != nil {
+		t.Errorf("普通失败后应该清掉推迟时间: %+v", job)
+	}
+	result = throttled
+	pool.Exec(ctx, `UPDATE jobs SET run_at = now()`)
+	worker.RunOne(ctx)
+	if job, _, _ = queue.Latest(ctx, "douban", "old"); job.Attempts != 2 || job.PostponedAt == nil {
+		t.Errorf("重新计时后被限流应该又只是推迟: %+v", job)
 	}
 }

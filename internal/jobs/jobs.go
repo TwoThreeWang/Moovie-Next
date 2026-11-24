@@ -30,6 +30,8 @@ type Job struct {
 	LastError string
 	CreatedAt time.Time
 	Finished  *time.Time
+	// PostponedAt 是这一轮"被对方限流、推迟再做"开始的时间；任务真正执行完（成功，或因为自身原因失败）后清空。
+	PostponedAt *time.Time
 }
 
 // Handler 执行一种任务。返回 error 表示失败，会按退避时间重试。
@@ -45,8 +47,10 @@ var retryDelays = []time.Duration{time.Minute, 10 * time.Minute, time.Hour, 6 * 
 // MaxAttempts 是一个任务最多执行几次。
 var MaxAttempts = len(retryDelays) + 1
 
-// postponeLimit 是"稍后再做、不算失败"最多能拖多久。超过之后再推迟就按普通失败算，
-// 免得某个对象一直让对方拒绝（比如豆瓣对某个条目总是返回 403），任务永远在队列里转。
+// postponeLimit 是一个任务连续"稍后再做、不算失败"最多能拖多久，从第一次被推迟算起。超过之后再推迟就按普通失败算，
+// 免得某个对象一直让对方拒绝（比如红果对某部短剧总是返回 403），任务永远在队列里转。
+//
+// 从第一次推迟算起，而不是从入队算起：排了几天的积压任务碰上对方限流，也应该原样等着，不该一被拒绝就用掉一次重试。
 const postponeLimit = 3 * 24 * time.Hour
 
 // defaultLease 要长于 AI 请求的 10 分钟超时，避免请求仍在执行时被回收并重复调用。
@@ -104,12 +108,12 @@ RETURNING xmax = 0`,
 	return inserted, err
 }
 
-const jobColumns = `id, kind, subject, payload, priority, status, attempts, run_at, progress, last_error, created_at, finished_at`
+const jobColumns = `id, kind, subject, payload, priority, status, attempts, run_at, progress, last_error, created_at, finished_at, postponed_at`
 
 func scanJob(row pgx.Row) (Job, error) {
 	var job Job
 	err := row.Scan(&job.ID, &job.Kind, &job.Subject, &job.Payload, &job.Priority, &job.Status, &job.Attempts,
-		&job.RunAt, &job.Progress, &job.LastError, &job.CreatedAt, &job.Finished)
+		&job.RunAt, &job.Progress, &job.LastError, &job.CreatedAt, &job.Finished, &job.PostponedAt)
 	return job, err
 }
 
@@ -119,7 +123,7 @@ func (q *Queue) claim(ctx context.Context, lease time.Duration, kinds []string, 
 	if kinds == nil {
 		kinds = []string{}
 	}
-	return scanJob(q.pool.QueryRow(ctx, `UPDATE jobs SET status = 'running', attempts = attempts + 1,
+	return scanJob(q.pool.QueryRow(ctx, `UPDATE jobs SET status = 'running', attempts = attempts + 1, attempted_at = now(),
 locked_until = now() + make_interval(secs => $1)
 WHERE id = (
   SELECT id FROM jobs WHERE status = 'queued' AND run_at <= now() AND (kind = ANY($2)) = $3
@@ -130,7 +134,7 @@ WHERE id = (
 // postpone 把任务放回队列，过一会儿再做，这一次不算失败。
 func (q *Queue) postpone(ctx context.Context, job Job, reason error, wait time.Duration) error {
 	_, err := q.pool.Exec(ctx, `UPDATE jobs SET status = 'queued', attempts = attempts - 1, locked_until = NULL,
-last_error = $2, run_at = now() + make_interval(secs => $3) WHERE id = $1`, job.ID, clip(reason.Error()), wait.Seconds())
+last_error = $2, run_at = now() + make_interval(secs => $3), postponed_at = COALESCE(postponed_at, now()) WHERE id = $1`, job.ID, clip(reason.Error()), wait.Seconds())
 	return err
 }
 
@@ -142,10 +146,11 @@ func clip(message string) string {
 }
 
 // finish 记录任务结果。失败且还有重试次数时重新排队，间隔逐次加长。
-func (q *Queue) finish(ctx context.Context, job Job, runErr error) error {
+// stillThrottled 表示这次失败仍是对方在限流（只是推迟的期限已过），这时保留推迟的起始时间，下次照样按普通失败算。
+func (q *Queue) finish(ctx context.Context, job Job, runErr error, stillThrottled bool) error {
 	if runErr == nil || errors.Is(runErr, ErrSkip) {
 		_, err := q.pool.Exec(ctx, `WITH done AS (
-  UPDATE jobs SET status = 'done', finished_at = now(), locked_until = NULL, last_error = '' WHERE id = $1 RETURNING kind, subject
+  UPDATE jobs SET status = 'done', finished_at = now(), locked_until = NULL, last_error = '', postponed_at = NULL WHERE id = $1 RETURNING kind, subject
 )
 DELETE FROM jobs j USING done WHERE j.kind = done.kind AND j.subject = done.subject AND done.subject <> '' AND j.status = 'failed'`, job.ID)
 		return err
@@ -157,7 +162,8 @@ DELETE FROM jobs j USING done WHERE j.kind = done.kind AND j.subject = done.subj
 	}
 	backoff := retryDelays[min(job.Attempts, len(retryDelays))-1]
 	_, err := q.pool.Exec(ctx, `UPDATE jobs SET status = 'queued', locked_until = NULL, last_error = $2,
-run_at = now() + make_interval(secs => $3) WHERE id = $1`, job.ID, message, backoff.Seconds())
+run_at = now() + make_interval(secs => $3), postponed_at = CASE WHEN $4 THEN postponed_at END WHERE id = $1`,
+		job.ID, message, backoff.Seconds(), stillThrottled)
 	return err
 }
 
@@ -237,8 +243,8 @@ func (q *Queue) Activity(ctx context.Context, kinds ...string) (Activity, error)
 	err := q.pool.QueryRow(ctx, `SELECT
   count(*) FILTER (WHERE status = 'done' AND finished_at > now() - interval '1 hour'),
   max(finished_at) FILTER (WHERE status = 'done'),
-  COALESCE((SELECT last_error FROM jobs WHERE kind = ANY($1) AND status = 'queued' AND last_error <> ''
-    ORDER BY run_at DESC LIMIT 1), '')
+  COALESCE((SELECT last_error FROM jobs WHERE kind = ANY($1) AND status IN ('queued', 'failed') AND last_error <> ''
+    ORDER BY attempted_at DESC NULLS LAST, id DESC LIMIT 1), '')
 FROM jobs WHERE kind = ANY($1)`, kinds).Scan(&activity.Done, &activity.LastDone, &activity.LastError)
 	return activity, err
 }
@@ -264,7 +270,7 @@ func (q *Queue) lastScheduled(ctx context.Context) (map[string]time.Time, error)
 
 // Retry 把失败的任务重新排队。id 为 0 表示重试所有失败任务。
 func (q *Queue) Retry(ctx context.Context, id int64) (int64, error) {
-	tag, err := q.pool.Exec(ctx, `UPDATE jobs j SET status = 'queued', attempts = 0, run_at = now(), finished_at = NULL
+	tag, err := q.pool.Exec(ctx, `UPDATE jobs j SET status = 'queued', attempts = 0, run_at = now(), finished_at = NULL, postponed_at = NULL
 WHERE status = 'failed' AND ($1 = 0 OR id = $1)
 AND NOT EXISTS (SELECT 1 FROM jobs o WHERE o.kind = j.kind AND o.subject = j.subject AND o.status IN ('queued', 'running'))`, id)
 	return tag.RowsAffected(), err
@@ -297,7 +303,7 @@ type Lane struct {
 	// 任务留在队列里原样不动，不会被白白取出来失败一次。
 	Hold func() time.Duration
 	// Postpone 判断一次失败是不是"对方让我们慢一点"。是的话任务放回队列稍后再做，不算一次失败
-	// （任务入队超过 3 天后不再这样处理，按普通失败算）。
+	// （从第一次被推迟算起超过 3 天后不再这样处理，按普通失败算）。
 	Postpone func(error) bool
 }
 
@@ -428,8 +434,9 @@ func (w *Worker) runOne(ctx context.Context, kinds []string, only bool) (bool, e
 	} else {
 		runErr = safely(ctx, handler, job)
 	}
-	if lane := w.laneOf(job.Kind); runErr != nil && lane != nil && lane.Postpone != nil && lane.Postpone(runErr) &&
-		time.Since(job.CreatedAt) < postponeLimit {
+	lane := w.laneOf(job.Kind)
+	throttled := runErr != nil && lane != nil && lane.Postpone != nil && lane.Postpone(runErr)
+	if throttled && (job.PostponedAt == nil || time.Since(*job.PostponedAt) < postponeLimit) {
 		wait := time.Minute
 		if lane.Hold != nil {
 			wait = max(wait, lane.Hold())
@@ -440,7 +447,7 @@ func (w *Worker) runOne(ctx context.Context, kinds []string, only bool) (bool, e
 	if runErr != nil && !errors.Is(runErr, ErrSkip) {
 		w.log.Warn("任务失败", "kind", job.Kind, "subject", job.Subject, "attempt", job.Attempts, "error", runErr)
 	}
-	return true, w.queue.finish(context.WithoutCancel(ctx), job, runErr)
+	return true, w.queue.finish(context.WithoutCancel(ctx), job, runErr, throttled)
 }
 
 // safely 执行处理函数，把 panic 变成普通错误，避免一个任务拖垮整个进程。

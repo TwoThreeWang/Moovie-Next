@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -314,45 +315,101 @@ func TestDoubanRateLimitIn400(t *testing.T) {
 	}
 }
 
-// 只有个别条目返回 403、谁都能打开的那部电影能正常打开：是这个条目打不开，不是限流，不能让整条通道停下。
-// 那部电影也返回 403 才是真的被拒绝了。
-func TestDouban403OnlyThrottlesWhenEverythingIsRefused(t *testing.T) {
-	refuseAll := false
-	canary := 0
+// 个别条目返回 403 只算这个条目失败，不能让整条通道停下，也不该放慢；
+// 上一次成功之后接连 3 个不同条目都被拒绝（哪怕热门条目还能打开），才是在拒绝我们。
+func TestDouban403OnlyThrottlesWhenManySubjectsAreRefused(t *testing.T) {
+	var mu sync.Mutex
+	refused := map[string]bool{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.Contains(r.URL.Path, "/1292052") {
-			canary++
-			if !refuseAll {
-				w.Write([]byte(`{"id": "1292052", "title": "肖申克的救赎", "type": "movie"}`))
+		mu.Lock()
+		defer mu.Unlock()
+		for id := range refused {
+			if strings.HasSuffix(r.URL.Path, "/"+id) {
+				http.Error(w, "forbidden", http.StatusForbidden)
 				return
 			}
 		}
-		http.Error(w, "forbidden", http.StatusForbidden)
+		id := r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:]
+		w.Write([]byte(`{"id": "` + id + `", "title": "片名", "type": "movie"}`))
 	}))
 	defer server.Close()
+	refuse := func(ids ...string) {
+		mu.Lock()
+		defer mu.Unlock()
+		for _, id := range ids {
+			refused[id] = true
+		}
+	}
 	douban := providers.NewDouban(server.Client())
 	douban.MobileBase, douban.Pace = server.URL, providers.NewPacer(10*time.Millisecond)
+	ctx := context.Background()
 
-	_, err := douban.Subject(context.Background(), "36000001", "movie")
-	if err == nil || errors.Is(err, providers.ErrThrottled) {
-		t.Fatalf("个别条目的 403 不应该算限流: %v", err)
+	// 一个坏条目夹在正常条目中间：电影、剧集两个接口都 403 也只算一个条目，不算限流
+	refuse("36000001", "36000002")
+	for _, id := range []string{"36000001", "1292052", "36000002", "1292052"} {
+		_, err := douban.Subject(ctx, id, "movie")
+		if errors.Is(err, providers.ErrThrottled) {
+			t.Fatalf("个别条目的 403 不应该算限流: %s %v", id, err)
+		}
 	}
 	if interval, paused := douban.Pace.Status(); interval != 10*time.Millisecond || !paused.IsZero() {
 		t.Errorf("个别条目的 403 不应该让请求放慢: %s %v", interval, paused)
 	}
-	douban.Subject(context.Background(), "36000002", "movie")
-	if canary != 1 {
-		t.Errorf("一分钟内只该检查一次那部电影，实际 %d 次", canary)
-	}
 
-	refuseAll = true
-	douban = providers.NewDouban(server.Client())
-	douban.MobileBase, douban.Pace = server.URL, providers.NewPacer(10*time.Millisecond)
-	if _, err := douban.Subject(context.Background(), "36000001", "movie"); !errors.Is(err, providers.ErrThrottled) {
-		t.Fatalf("那部电影也打不开，应该算限流: %v", err)
+	// 接连几个不同条目都被拒绝，中间没有成功：热门条目还能打开也算限流
+	refuse("36000003", "36000004", "36000005")
+	douban.Subject(ctx, "36000003", "movie")
+	if _, err := douban.Subject(ctx, "36000004", "movie"); errors.Is(err, providers.ErrThrottled) {
+		t.Fatalf("第二个被拒绝的条目还不该算限流: %v", err)
+	}
+	if _, err := douban.Subject(ctx, "36000005", "movie"); !errors.Is(err, providers.ErrThrottled) {
+		t.Fatalf("接连 3 个不同条目被拒绝应该算限流: %v", err)
 	}
 	if interval, _ := douban.Pace.Status(); interval <= 10*time.Millisecond {
 		t.Errorf("被限流后应该放慢: %s", interval)
+	}
+	// 在恢复成功之前，再被拒绝的也都算限流，不会白白用掉任务的重试次数
+	if _, err := douban.Subject(ctx, "36000001", "movie"); !errors.Is(err, providers.ErrThrottled) {
+		t.Fatalf("还没恢复时的 403 应该算限流: %v", err)
+	}
+	// 成功一次就清零
+	douban.Pace = providers.NewPacer(10 * time.Millisecond)
+	if _, err := douban.Subject(ctx, "1292052", "movie"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := douban.Subject(ctx, "36000001", "movie"); errors.Is(err, providers.ErrThrottled) {
+		t.Fatalf("成功之后的第一个 403 不该算限流: %v", err)
+	}
+}
+
+// 豆瓣分接口限流：条目详情被拒绝时，用户的标记列表、榜单可能还能打开。
+// 别的接口成功不能把条目的拒绝计数清零，否则同步用户时条目的 403 又全成了个别失败。
+func TestDoubanRefusalsAreCountedPerEndpoint(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.Contains(r.URL.Path, "/interests"):
+			w.Write([]byte(`{"total": 0, "interests": []}`))
+		case strings.Contains(r.URL.Path, "/hot_gaia"):
+			w.Write([]byte(`{"items": [{"id": "1", "title": "片名", "type": "movie"}]}`))
+		default:
+			http.Error(w, "forbidden", http.StatusForbidden)
+		}
+	}))
+	defer server.Close()
+	douban := providers.NewDouban(server.Client())
+	douban.MobileBase, douban.Pace = server.URL, providers.NewPacer(time.Millisecond)
+	ctx := context.Background()
+	for index, id := range []string{"36000001", "36000002", "36000003"} {
+		if _, _, err := douban.Interests(ctx, "u1", "done", 0, 50); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := douban.Popular(ctx, "movie"); err != nil {
+			t.Fatal(err)
+		}
+		_, err := douban.Subject(ctx, id, "movie")
+		if throttled := errors.Is(err, providers.ErrThrottled); throttled != (index == 2) {
+			t.Fatalf("第 %d 个被拒绝的条目：算限流=%v，%v", index+1, throttled, err)
+		}
 	}
 }
 
