@@ -2,11 +2,13 @@ package doubansync_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"testing"
+	"time"
 
 	"moovie/internal/auth"
 	"moovie/internal/db/testdb"
@@ -15,6 +17,7 @@ import (
 	"moovie/internal/jobs"
 	"moovie/internal/library"
 	"moovie/internal/media"
+	"moovie/internal/providers"
 	"moovie/internal/providers/providerstest"
 )
 
@@ -123,5 +126,178 @@ func TestBindAndSync(t *testing.T) {
 	service.Unbind(ctx, 1)
 	if err := service.Sync(ctx, 1, true, nil); !errors.Is(err, jobs.ErrSkip) {
 		t.Errorf("解绑后的同步任务应该被跳过，实际 %v", err)
+	}
+}
+
+// 每天的增量同步先看 RSS：上一次同步之后没有新的看过或想看，就一页标记列表都不用读；
+// 只有想看有新动态，就只读想看。RSS 说明不了问题时（读不到、覆盖不到上一次同步），照原来的办法翻标记列表。
+func TestIncrementalSyncChecksFeedFirst(t *testing.T) {
+	pool := testdb.Pool(t)
+	testdb.User(t, pool, 1)
+	fake := providerstest.New(t)
+	queue := jobs.NewQueue(pool)
+	catalog := &ingest.Service{Media: media.NewStore(pool), Queue: queue, Douban: fake.Douban(), Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	service := &doubansync.Service{Pool: pool, Users: auth.NewStore(pool), Douban: fake.Douban(), Catalog: catalog, Queue: queue}
+	ctx := context.Background()
+
+	fake.Interests["evan/done"] = []map[string]any{{"subject": map[string]any{"id": "31000001", "title": "看过一", "type": "movie"}}}
+	fake.Interests["evan/mark"] = []map[string]any{{"subject": map[string]any{"id": "32000001", "title": "想看一", "type": "movie"}}}
+	if err := service.Bind(ctx, 1, "evan"); err != nil {
+		t.Fatal(err)
+	}
+	const interests = "/rexxar/api/v2/user/evan/interests"
+	feedTime := func(ago time.Duration) string { return time.Now().Add(-ago).UTC().Format(time.RFC1123) }
+	sync := func() doubansync.Progress {
+		t.Helper()
+		var last doubansync.Progress
+		if err := service.Sync(ctx, 1, false, func(p doubansync.Progress) { last = p }); err != nil {
+			t.Fatal(err)
+		}
+		return last
+	}
+	old := map[string]string{"title": "看过看过一", "link": "https://movie.douban.com/subject/31000001/", "pubDate": feedTime(72 * time.Hour)}
+	fake.Feeds["evan"] = []map[string]string{old}
+
+	// 还没成功同步过：不看 RSS，两种状态都读。
+	before := fake.Count(interests)
+	if progress := sync(); progress.Total != 2 || fake.Count(interests)-before != 2 {
+		t.Fatalf("没同步过时应该把看过和想看都读一遍: %+v，请求了 %d 次", progress, fake.Count(interests)-before)
+	}
+	if fake.Count("/feed/people/evan/interests") != 0 {
+		t.Error("没同步过时不用看 RSS")
+	}
+
+	// 昨天同步过，RSS 里最新的动态是三天前的：一页都不用读。
+	pool.Exec(ctx, `INSERT INTO jobs (kind, subject, status, run_at, finished_at) VALUES ($1, '1', 'done', now() - interval '1 day', now() - interval '1 day')`, doubansync.KindSync)
+	before = fake.Count(interests)
+	sync()
+	if fake.Count(interests) != before {
+		t.Errorf("没有新动态时不该再读标记列表，多请求了 %d 次", fake.Count(interests)-before)
+	}
+
+	// 同步之后新标记了一部想看：只读想看。
+	fake.Interests["evan/mark"] = append([]map[string]any{{"subject": map[string]any{"id": "32000002", "title": "想看二", "type": "movie"}}}, fake.Interests["evan/mark"]...)
+	fake.Feeds["evan"] = []map[string]string{
+		{"title": "想看想看二", "link": "https://movie.douban.com/subject/32000002/", "pubDate": feedTime(time.Hour)},
+		{"title": "想读某本书", "link": "https://book.douban.com/subject/1000001/", "pubDate": feedTime(2 * time.Hour)},
+		old,
+	}
+	before = fake.Count(interests)
+	if progress := sync(); progress.Total != 2 || progress.Imported != 1 || fake.Count(interests)-before != 1 {
+		t.Errorf("只有想看有新动态时应该只读想看: %+v，请求了 %d 次", progress, fake.Count(interests)-before)
+	}
+
+	// RSS 里最早的一条也比上一次同步晚：更早的可能被挤掉了，两种都读。
+	fake.Feeds["evan"] = []map[string]string{{"title": "想读某本书", "link": "https://book.douban.com/subject/1000001/", "pubDate": feedTime(time.Minute)}}
+	before = fake.Count(interests)
+	sync()
+	if fake.Count(interests)-before != 2 {
+		t.Errorf("RSS 覆盖不到上一次同步时应该两种都读，请求了 %d 次", fake.Count(interests)-before)
+	}
+
+	// RSS 读不到：两种都读。
+	delete(fake.Feeds, "evan")
+	before = fake.Count(interests)
+	sync()
+	if fake.Count(interests)-before != 2 {
+		t.Errorf("RSS 读不到时应该两种都读，请求了 %d 次", fake.Count(interests)-before)
+	}
+
+	// 换绑豆瓣账号后，旧账号的同步记录不再算数。
+	fake.Feeds["evan"] = []map[string]string{old}
+	if err := service.Bind(ctx, 1, "evan"); err != nil {
+		t.Fatal(err)
+	}
+	before = fake.Count(interests)
+	sync()
+	if fake.Count(interests)-before != 2 {
+		t.Errorf("重新绑定后的第一次增量同步应该两种都读，请求了 %d 次", fake.Count(interests)-before)
+	}
+}
+
+// failingCatalog 让指定的条目收不进作品库，模拟数据库出错这类下次还能成功的失败。
+type failingCatalog struct {
+	doubansync.Catalog
+	fail map[string]bool
+}
+
+func (c *failingCatalog) EnsureDouban(ctx context.Context, item providers.DoubanItem, chartType string, priority int) (int64, error) {
+	if c.fail[item.ID] {
+		return 0, errors.New("数据库暂时不可用")
+	}
+	return c.Catalog.EnsureDouban(ctx, item, chartType, priority)
+}
+
+// 有条目没导入成功的同步之后，下一次同步不看 RSS、也不读到整页已导入就停，而是完整地读一遍，
+// 否则那一条在列表里靠后、又早于上一次同步，会被永远漏掉。直到有一次同步没有失败，才恢复增量。
+// 重试中的任务（以前跑过一部分）也完整地读。不合法的条目 ID 收不进来，不算失败。
+func TestSyncAfterFailuresReadsEverything(t *testing.T) {
+	pool := testdb.Pool(t)
+	testdb.User(t, pool, 1)
+	fake := providerstest.New(t)
+	queue := jobs.NewQueue(pool)
+	inner := &ingest.Service{Media: media.NewStore(pool), Queue: queue, Douban: fake.Douban(), Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	catalog := &failingCatalog{Catalog: inner, fail: map[string]bool{"31000055": true}}
+	service := &doubansync.Service{Pool: pool, Users: auth.NewStore(pool), Douban: fake.Douban(), Catalog: catalog, Queue: queue}
+	lib := library.NewStore(pool)
+	ctx := context.Background()
+
+	done := []map[string]any{{"subject": map[string]any{"id": "12", "title": "坏 ID", "type": "movie"}}}
+	for index := range 60 {
+		done = append(done, map[string]any{"subject": map[string]any{"id": fmt.Sprintf("31%06d", index), "title": fmt.Sprintf("电影 %d", index), "type": "movie"}})
+	}
+	fake.Interests["evan/done"] = done
+	fake.Interests["evan/mark"] = []map[string]any{}
+	if err := service.Bind(ctx, 1, "evan"); err != nil {
+		t.Fatal(err)
+	}
+	fake.Feeds["evan"] = []map[string]string{{"title": "看过电影 0", "link": "https://movie.douban.com/subject/31000000/", "pubDate": time.Now().Add(-72 * time.Hour).UTC().Format(time.RFC1123)}}
+	finish := func(progress doubansync.Progress, ago string) {
+		encoded, _ := json.Marshal(progress)
+		pool.Exec(ctx, `INSERT INTO jobs (kind, subject, status, run_at, finished_at, progress) VALUES ($1, '1', 'done', now() - $2::interval, now() - $2::interval, $3)`,
+			doubansync.KindSync, ago, encoded)
+	}
+	var last doubansync.Progress
+	if err := service.Sync(ctx, 1, true, func(p doubansync.Progress) { last = p }); err != nil {
+		t.Fatal(err)
+	}
+	if last.Failed != 1 || last.Imported != 59 {
+		t.Fatalf("应该有 1 条没导入成功（坏 ID 不算失败）: %+v", last)
+	}
+	finish(last, "2 days")
+
+	// 数据库恢复了。RSS 说没有新动态、第一页也都导入过，但上一次有失败：完整地读，把漏的那条补上。
+	delete(catalog.fail, "31000055")
+	last = doubansync.Progress{}
+	if err := service.Sync(ctx, 1, false, func(p doubansync.Progress) { last = p }); err != nil {
+		t.Fatal(err)
+	}
+	if last.Imported != 1 || last.Processed != 61 || last.Failed != 0 {
+		t.Fatalf("上一次有失败时应该完整地读一遍、补上漏的那条: %+v", last)
+	}
+	finish(last, "1 day")
+
+	// 这一次没有失败了：恢复增量，RSS 说没有新动态就一页都不读。
+	const interests = "/rexxar/api/v2/user/evan/interests"
+	before := fake.Count(interests)
+	if err := service.Sync(ctx, 1, false, nil); err != nil {
+		t.Fatal(err)
+	}
+	if fake.Count(interests) != before {
+		t.Errorf("没有失败、也没有新动态时不该读标记列表，多请求了 %d 次", fake.Count(interests)-before)
+	}
+
+	// 重试中的任务：以前跑过一部分，前面已经导入了，后面那一页里有一条还没导入。完整地读才能找到它。
+	pool.Exec(ctx, `DELETE FROM jobs`)
+	missing, _, _ := inner.Media.EnsureDouban(ctx, "31000058", nil)
+	pool.Exec(ctx, `DELETE FROM user_movies WHERE user_id = 1 AND media_id = $1`, missing)
+	pool.Exec(ctx, `INSERT INTO jobs (kind, subject, payload, progress) VALUES ($1, '1', '{"full": false}', '{"processed": 50}')`, doubansync.KindSync)
+	worker := jobs.NewWorker(queue, 1, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	service.Register(worker)
+	if worked, err := worker.RunOne(ctx); err != nil || !worked {
+		t.Fatalf("应该跑完重试的任务: %v %v", worked, err)
+	}
+	if _, found, _ := lib.Get(ctx, 1, missing); !found {
+		t.Error("重试的任务应该完整地读，把后面那一页里没导入的补上")
 	}
 }

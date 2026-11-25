@@ -106,6 +106,23 @@ ON CONFLICT (douban_id) WHERE douban_id <> '' DO NOTHING RETURNING id`, doubanID
 	return id, true, nil
 }
 
+// ApplyListing 用豆瓣列表（热门榜、用户的标记列表）里顺手带的资料更新已有的作品，不用为此再请求详情。
+// 评分是豆瓣当前的值，给了就写；年份和海报只补空着的：列表里的海报可能比详情里的小一档，不能覆盖。
+// 给了评分就记下 douban_listed_at，近期电影的详情因此可以隔得更久再抓（见 Stale）。
+func (s *Store) ApplyListing(ctx context.Context, id int64, rating float64, year int, poster string) error {
+	if rating <= 0 && year <= 0 && poster == "" {
+		return nil
+	}
+	_, err := s.pool.Exec(ctx, `UPDATE media SET
+  rating_douban = CASE WHEN $2::real > 0 THEN $2::real ELSE rating_douban END,
+  year = CASE WHEN year = 0 AND $3::int > 0 THEN $3::int ELSE year END,
+  poster = CASE WHEN poster = '' THEN $4::text ELSE poster END,
+  douban_listed_at = CASE WHEN $2::real > 0 THEN now() ELSE douban_listed_at END,
+  updated_at = CASE WHEN ($2::real > 0 AND rating_douban <> $2::real) OR (year = 0 AND $3::int > 0) OR (poster = '' AND $4::text <> '') THEN now() ELSE updated_at END
+WHERE id = $1 AND douban_id <> ''`, id, float32(rating), year, poster)
+	return err
+}
+
 // ApplyPatch 把某个来源的字段合并进作品。合并规则固定，不需要逐字段记录来源：
 //   - 豆瓣是主要来源（manual 是演示数据和新建时的初始信息），给的值总是写入；
 //   - 红果是短剧唯一的来源，给的值也总是写入；
@@ -749,7 +766,10 @@ func (s *Store) Stale(ctx context.Context, jobKind string, limit int) ([]int64, 
   metadata_synced_at IS NULL
   OR (media_type <> 'movie' AND metadata_synced_at < now() - interval '1 day'
       AND (series_status = 'ongoing' OR (series_status = '' AND year >= $2)))
-  OR (year >= $2 AND metadata_synced_at < now() - interval '7 days')
+  OR (year >= $2 AND metadata_synced_at < now() - interval '7 days'
+      -- 近期的电影每周重抓主要是为了评分；这一周已经从列表里拿到过评分的，放宽到 30 天
+      AND (media_type <> 'movie' OR douban_listed_at IS NULL OR douban_listed_at <= now() - interval '7 days'
+           OR metadata_synced_at <= now() - interval '30 days'))
 ) ORDER BY metadata_synced_at NULLS FIRST, id LIMIT $3`, jobKind, time.Now().Year()-1, limit)
 }
 

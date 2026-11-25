@@ -6,6 +6,8 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -397,7 +399,7 @@ func TestDoubanRefusalsAreCountedPerEndpoint(t *testing.T) {
 	}))
 	defer server.Close()
 	douban := providers.NewDouban(server.Client())
-	douban.MobileBase, douban.Pace = server.URL, providers.NewPacer(time.Millisecond)
+	douban.MobileBase, douban.WebBase, douban.Pace = server.URL, server.URL, providers.NewPacer(time.Millisecond)
 	ctx := context.Background()
 	for index, id := range []string{"36000001", "36000002", "36000003"} {
 		if _, _, err := douban.Interests(ctx, "u1", "done", 0, 50); err != nil {
@@ -453,5 +455,212 @@ func TestTMDBPopularityExport(t *testing.T) {
 	}
 	if err := tmdb.Popularity(ctx, "person", day, func(int, float64) {}); err == nil {
 		t.Error("不认识的类型应该报错")
+	}
+}
+
+// 请求头扮成普通浏览器：手机版接口用 iPhone，网页版接口用电脑上的 Chrome；
+// bid 和豆瓣发的一样是 11 位大小写字母加数字，每次都不同，还带着城市 Cookie 和中文的 Accept-Language。
+func TestDoubanRequestHeaders(t *testing.T) {
+	var mu sync.Mutex
+	headers := map[string]http.Header{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		headers[r.URL.Path] = r.Header.Clone()
+		mu.Unlock()
+		switch r.URL.Path {
+		case "/j/subject_suggest":
+			w.Write([]byte(`[]`))
+		case "/feed/people/u1/interests":
+			w.Write([]byte(`<?xml version="1.0"?><rss><channel></channel></rss>`))
+		default:
+			w.Write([]byte(`{"id": "1292052", "title": "片名", "type": "movie"}`))
+		}
+	}))
+	defer server.Close()
+	douban := providers.NewDouban(server.Client())
+	douban.MobileBase, douban.WebBase, douban.FeedBase, douban.Pace = server.URL, server.URL, server.URL, nil
+	ctx := context.Background()
+	if _, err := douban.Subject(ctx, "1292052", "movie"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := douban.Suggest(ctx, "片名"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := douban.RecentInterests(ctx, "u1"); err != nil {
+		t.Fatal(err)
+	}
+	bid := regexp.MustCompile(`^ll="108288"; bid=([A-Za-z0-9]{11})$`)
+	bids := map[string]bool{}
+	for path, wantUA := range map[string]string{"/rexxar/api/v2/movie/1292052": "iPhone", "/j/subject_suggest": "Macintosh", "/feed/people/u1/interests": "Macintosh"} {
+		header := headers[path]
+		if !strings.Contains(header.Get("User-Agent"), wantUA) {
+			t.Errorf("%s 的 UA 应该是 %s: %q", path, wantUA, header.Get("User-Agent"))
+		}
+		if !strings.HasPrefix(header.Get("Accept-Language"), "zh-CN") {
+			t.Errorf("%s 应该带中文的 Accept-Language: %q", path, header.Get("Accept-Language"))
+		}
+		match := bid.FindStringSubmatch(header.Get("Cookie"))
+		if match == nil {
+			t.Errorf("%s 的 Cookie 不像浏览器的: %q", path, header.Get("Cookie"))
+			continue
+		}
+		bids[match[1]] = true
+	}
+	if len(bids) != 3 {
+		t.Errorf("每次请求的 bid 应该都不同: %v", bids)
+	}
+	if headers["/j/subject_suggest"].Get("X-Requested-With") != "XMLHttpRequest" {
+		t.Error("网页版的 /j/ 接口应该像页面里的 Ajax 请求")
+	}
+}
+
+// 被转到验证页、或者该是数据的地方返回了网页，都是豆瓣在拦我们：按限流算，请求放慢。
+// 同一个域名里的跳转（电影接口跳到剧集接口）照常跟着走。
+func TestDoubanVerificationPageCountsAsThrottle(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/misc/sorry"):
+			w.Header().Set("Content-Type", "text/html")
+			w.Write([]byte(`<html><title>禁止访问</title></html>`))
+		case strings.HasSuffix(r.URL.Path, "/36000001"):
+			http.Redirect(w, r, "/misc/sorry?original-url="+r.URL.Path, http.StatusFound)
+		case strings.HasSuffix(r.URL.Path, "/36000002"):
+			w.Header().Set("Content-Type", "text/html")
+			w.Write([]byte("\n<!DOCTYPE html><html><head><title>豆瓣</title></head></html>"))
+		case r.URL.Path == "/feed/people/u1/interests":
+			w.Write([]byte(`<!DOCTYPE html><html><title>登录豆瓣</title></html>`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	douban := providers.NewDouban(server.Client())
+	douban.MobileBase, douban.FeedBase = server.URL, server.URL
+	ctx := context.Background()
+	for _, id := range []string{"36000001", "36000002"} {
+		douban.Pace = providers.NewPacer(10 * time.Millisecond)
+		if _, err := douban.Subject(ctx, id, "movie"); !errors.Is(err, providers.ErrThrottled) {
+			t.Fatalf("%s：验证页应该按限流算: %v", id, err)
+		}
+		if interval, _ := douban.Pace.Status(); interval <= 10*time.Millisecond {
+			t.Errorf("%s：被拦下后应该放慢: %s", id, interval)
+		}
+	}
+	if _, err := douban.RecentInterests(ctx, "u1"); !errors.Is(err, providers.ErrThrottled) {
+		t.Errorf("RSS 返回网页也应该按限流算: %v", err)
+	}
+}
+
+// 热门榜先用网页版接口；网页版取不到（出错或者是空的）再用手机版接口兜底。
+func TestDoubanPopularPrefersWebAndFallsBackToRexxar(t *testing.T) {
+	fake := providerstest.New(t)
+	fake.WebPopular["movie/热门"] = []map[string]any{
+		{"id": "1292052", "title": "肖申克的救赎", "rate": "9.7", "cover": "https://img2.doubanio.com/p1.jpg"},
+		{"id": "1292052", "title": "重复的"},
+		{"id": "36000001", "title": "新片", "rate": ""},
+	}
+	fake.Popular["hot_gaia"] = []map[string]any{{"id": "9999999", "title": "手机版的"}}
+	items, err := fake.Douban().Popular(context.Background(), "movie")
+	if err != nil || len(items) != 2 || items[0].Rating != 9.7 || items[0].Kind != "movie" || items[0].Poster == "" || items[1].Rating != 0 {
+		t.Fatalf("应该用网页版的榜单并去重: %+v err=%v", items, err)
+	}
+	if fake.Count("/rexxar/api/v2/movie/hot_gaia") != 0 {
+		t.Error("网页版取到了就不该再问手机版")
+	}
+
+	fake.WebPopular["tv/综艺"] = []map[string]any{}
+	fake.Popular["tv_variety_show"] = []map[string]any{{"id": "3000001", "title": "综艺一", "type": "tv"}}
+	items, err = fake.Douban().Popular(context.Background(), "show")
+	if err != nil || len(items) != 1 || items[0].ID != "3000001" {
+		t.Fatalf("网页版是空的时应该用手机版兜底: %+v err=%v", items, err)
+	}
+	// 网页版出错（假服务器对没配置的返回 500）也用手机版兜底。
+	fake.Popular["tv_animation"] = []map[string]any{{"id": "4000001", "title": "动漫一"}}
+	if items, err := fake.Douban().Popular(context.Background(), "anime"); err != nil || len(items) != 1 {
+		t.Fatalf("网页版出错时应该用手机版兜底: %+v err=%v", items, err)
+	}
+}
+
+// RSS 里只认影视条目的看过和想看；书、音乐、在看这些只留下时间。
+func TestDoubanRecentInterests(t *testing.T) {
+	fake := providerstest.New(t)
+	fake.Feeds["evan"] = []map[string]string{
+		{"title": "看过雾港", "link": "https://movie.douban.com/subject/36000001/", "pubDate": "Tue, 24 Nov 2026 13:45:12 GMT"},
+		{"title": "想看回声", "link": "https://movie.douban.com/subject/36000002/", "pubDate": "Mon, 23 Nov 2026 21:00:00 +0800"},
+		{"title": "在看漫长的季节", "link": "https://movie.douban.com/subject/35588177/", "pubDate": "Mon, 23 Nov 2026 20:00:00 +0800"},
+		{"title": "想读三体", "link": "https://book.douban.com/subject/2567698/", "pubDate": "Sun, 22 Nov 2026 10:00:00 +0800"},
+	}
+	recent, err := fake.Douban().RecentInterests(context.Background(), "evan")
+	if err != nil || len(recent) != 4 {
+		t.Fatalf("应该读到 4 条动态: %+v err=%v", recent, err)
+	}
+	if recent[0].ID != "36000001" || recent[0].Status != "done" || recent[0].At.UTC().Hour() != 13 {
+		t.Errorf("看过解析不对: %+v", recent[0])
+	}
+	if recent[1].Status != "mark" || recent[1].At.UTC().Hour() != 13 {
+		t.Errorf("想看解析不对: %+v", recent[1])
+	}
+	if recent[2].Status != "" || recent[3].ID != "" || recent[3].Status != "" || recent[3].At.IsZero() {
+		t.Errorf("在看和书只该留下时间: %+v %+v", recent[2], recent[3])
+	}
+	if _, err := fake.Douban().RecentInterests(context.Background(), "nobody"); !errors.Is(err, providers.ErrNotFound) {
+		t.Errorf("不存在的用户应该返回 ErrNotFound，实际 %v", err)
+	}
+}
+
+// 详情网页有自己的节奏：详情接口被限流暂停时，网页照样能打开。没有的条目是 ErrNotFound，验证页按限流算。
+func TestDoubanSubjectPageHasItsOwnPace(t *testing.T) {
+	fake := providerstest.New(t)
+	page, err := os.ReadFile("testdata/subject_tv.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fake.Pages["35588177"] = string(page)
+	fake.Pages["36000009"] = `<html><head><title>豆瓣</title></head><body>检测到有异常请求</body></html>`
+	douban := fake.Douban()
+	douban.Pace, douban.PagePace = providers.NewPacer(time.Millisecond), providers.NewPacer(time.Millisecond)
+	for range 3 {
+		douban.Pace.Throttled()
+	}
+	if _, paused := douban.Pace.Status(); paused.IsZero() {
+		t.Fatal("详情接口应该已经暂停了")
+	}
+	ctx := context.Background()
+	subject, err := douban.SubjectPage(ctx, "35588177")
+	if err != nil || subject.Title != "漫长的季节" || subject.Kind != "tv" {
+		t.Fatalf("接口暂停时详情网页应该照样能打开: %+v err=%v", subject, err)
+	}
+	if _, err := douban.SubjectPage(ctx, "36000001"); !errors.Is(err, providers.ErrNotFound) {
+		t.Errorf("没有的条目应该返回 ErrNotFound: %v", err)
+	}
+	if _, err := douban.SubjectPage(ctx, "36000009"); !errors.Is(err, providers.ErrThrottled) {
+		t.Errorf("验证页应该按限流算: %v", err)
+	}
+	if interval, _ := douban.PagePace.Status(); interval <= time.Millisecond {
+		t.Errorf("网页被拦下后网页的节奏应该放慢: %s", interval)
+	}
+	if _, err := douban.SubjectPage(ctx, "1292052/../x"); err == nil {
+		t.Error("不是纯数字的 ID 应该被拒绝")
+	}
+}
+
+// 详情接口对个别条目返回 403 时，错误里带着 ErrRefused，调用方可以改用详情网页。
+func TestDoubanRefusedSubjectIsMarked(t *testing.T) {
+	fake := providerstest.New(t)
+	fake.Refuse["36000001"] = true
+	_, err := fake.Douban().Subject(context.Background(), "36000001", "movie")
+	if !errors.Is(err, providers.ErrRefused) || errors.Is(err, providers.ErrThrottled) {
+		t.Errorf("个别条目的 403 应该是 ErrRefused、还不算限流: %v", err)
+	}
+}
+
+// 标记列表里条目的豆瓣评分也读出来，用来顺手更新已有的作品。
+func TestDoubanInterestsCarrySubjectRating(t *testing.T) {
+	fake := providerstest.New(t)
+	fake.Interests["evan/done"] = []map[string]any{{"rating": map[string]any{"value": 2},
+		"subject": map[string]any{"id": "36000001", "title": "雾港", "type": "tv", "rating": map[string]any{"value": 8.6}}}}
+	interests, _, err := fake.Douban().Interests(context.Background(), "evan", "done", 0, 50)
+	if err != nil || len(interests) != 1 || interests[0].Item.Rating != 8.6 || interests[0].Rating != 2 {
+		t.Fatalf("条目的豆瓣评分和用户自己打的分要分开: %+v err=%v", interests, err)
 	}
 }

@@ -182,6 +182,12 @@ func (s *Service) EnsureDouban(ctx context.Context, item providers.DoubanItem, c
 	if err != nil {
 		return 0, err
 	}
+	if !created {
+		// 已有的作品：列表里带的评分、年份、海报顺手更新，省掉一次详情请求。
+		if err := s.Media.ApplyListing(ctx, id, item.Rating, item.Year, item.Poster); err != nil {
+			return id, err
+		}
+	}
 	if created {
 		if err := s.EnqueueRefresh(ctx, id, priority); err != nil {
 			return id, err
@@ -254,6 +260,16 @@ func (s *Service) Refresh(ctx context.Context, id int64, job jobs.Job) error {
 			first = "movie"
 		}
 		subject, err := s.Douban.Subject(ctx, m.DoubanID, first)
+		if err != nil && job.Priority >= PriorityManual && (errors.Is(err, providers.ErrThrottled) || errors.Is(err, providers.ErrRefused)) {
+			// 有人在等：详情接口被限流或拒绝了这个条目，改打开详情网页。只给有人等的用，
+			// 后台批量的任务也来抢的话，网页这条路很快也会被限流。网页说没有这个条目时不算数，接口的结论还没出来。
+			page, pageErr := s.Douban.SubjectPage(ctx, m.DoubanID)
+			if pageErr == nil {
+				subject, err = page, nil
+			} else {
+				s.Log.Info("豆瓣详情网页兜底也没成功", "douban", m.DoubanID, "error", pageErr)
+			}
+		}
 		if errors.Is(err, providers.ErrNotFound) {
 			// 豆瓣上没有这个条目：标记后不再自动同步，也不在站内展示。
 			if err := s.Media.MarkSynced(ctx, id, "not_found"); err != nil {

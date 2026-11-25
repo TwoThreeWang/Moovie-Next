@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"os"
 	"strconv"
 	"strings"
 	"testing"
@@ -230,6 +231,17 @@ metadata_synced_at = now() - make_interval(secs => $6) WHERE id = $1`, id, media
 		add("37000015", "movie", "", "complete", thisYear, 3):    "今年的电影但三天前才同步过",
 		add("37000017", "movie", "", "not_found", thisYear, 400): "豆瓣上没有的",
 	}
+	// 这一周已经从列表里拿到过评分的近期电影，详情放宽到 30 天；剧集不放宽（集数还在变）。
+	listed := func(id int64) int64 {
+		pool.Exec(ctx, `UPDATE media SET douban_listed_at = now() - interval '1 day' WHERE id = $1`, id)
+		return id
+	}
+	skip[listed(add("37000019", "movie", "", "complete", thisYear, 8))] = "今年的电影，这周列表里拿到过评分"
+	want[listed(add("37000020", "movie", "", "complete", thisYear, 31))] = "列表里拿到过评分，但详情已经一个月没抓"
+	want[listed(add("37000021", "tv", "ended", "complete", thisYear-1, 8))] = "去年完结的剧，列表里拿到过评分也照常每周一次"
+	stalelisted := add("37000022", "movie", "", "complete", thisYear, 8)
+	pool.Exec(ctx, `UPDATE media SET douban_listed_at = now() - interval '8 days' WHERE id = $1`, stalelisted)
+	want[stalelisted] = "列表里拿到评分已经是一周多以前"
 	cooling := add("37000018", "movie", "", "complete", thisYear, 8)
 	pool.Exec(ctx, `INSERT INTO jobs (kind, subject, status, finished_at) VALUES ($1, $2, 'failed', now())`, ingest.KindRefresh, strconv.FormatInt(cooling, 10))
 	skip[cooling] = "重试用完失败了、还在冷却期的"
@@ -545,5 +557,66 @@ func TestRefreshPopularityFromExports(t *testing.T) {
 	delete(fake.Exports, name("tv_series_ids"))
 	if err := service.RefreshPopularity(ctx); err == nil {
 		t.Error("连前一天的文件都没有时应该报错，下次再试")
+	}
+}
+
+// 榜单、标记列表里已有的作品：评分直接更新，年份和海报只补空着的。
+func TestListingUpdatesExistingWorks(t *testing.T) {
+	service, _ := newService(t)
+	ctx := context.Background()
+	id, _, err := service.Media.EnsureDouban(ctx, "36000001", media.Patch{"title": "雾港", "poster": "https://img9.doubanio.com/l.jpg", "rating_douban": 7.5})
+	if err != nil {
+		t.Fatal(err)
+	}
+	again, err := service.EnsureDouban(ctx, providers.DoubanItem{ID: "36000001", Title: "雾港", Rating: 8.6, Year: 2026, Poster: "https://img9.doubanio.com/s.jpg"}, "", ingest.PriorityDiscover)
+	if err != nil || again != id {
+		t.Fatalf("应该找到已有的作品: %d %v", again, err)
+	}
+	m, err := service.Media.Get(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.RatingDouban < 8.59 || m.RatingDouban > 8.61 || m.Year != 2026 || m.Poster != "https://img9.doubanio.com/l.jpg" {
+		t.Errorf("评分应该更新、年份补上、海报不被列表里的小图覆盖: %+v", m)
+	}
+	// 列表里没有评分（比如网页版热门榜的新片）时不清掉已有的评分。
+	if _, err := service.EnsureDouban(ctx, providers.DoubanItem{ID: "36000001", Title: "雾港"}, "", ingest.PriorityDiscover); err != nil {
+		t.Fatal(err)
+	}
+	if m, _ := service.Media.Get(ctx, id); m.RatingDouban < 8.59 {
+		t.Errorf("没有评分的列表不该清掉已有的评分: %v", m.RatingDouban)
+	}
+}
+
+// 详情接口拒绝了这个条目：有人在等的改用详情网页，后台批量的照常失败、稍后重试。
+func TestRefreshFallsBackToPageWhenSomeoneWaits(t *testing.T) {
+	service, fake := newService(t)
+	service.Wikidata, service.TMDB = nil, nil
+	page, err := os.ReadFile("../providers/testdata/subject_tv.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fake.Refuse["35588177"] = true
+	fake.Pages["35588177"] = string(page)
+	ctx := context.Background()
+	id, err := service.EnsureDouban(ctx, providers.DoubanItem{ID: "35588177", Title: "漫长的季节", Kind: "tv"}, "", ingest.PriorityImport)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Refresh(ctx, id, jobs.Job{Priority: ingest.PriorityRoutine}); err == nil {
+		t.Fatal("后台任务不该用详情网页兜底")
+	}
+	if fake.Count("/subject/35588177/") != 0 {
+		t.Error("后台任务不该打开详情网页")
+	}
+	if err := service.Refresh(ctx, id, jobs.Job{Priority: ingest.PriorityViewing}); err != nil {
+		t.Fatal(err)
+	}
+	m, err := service.Media.Get(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.Title != "漫长的季节" || m.EpisodeCount != 12 || m.RatingDouban < 9.39 || m.Year != 2023 {
+		t.Errorf("应该用详情网页的资料: %+v", m)
 	}
 }

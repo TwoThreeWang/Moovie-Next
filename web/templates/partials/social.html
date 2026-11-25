@@ -54,7 +54,7 @@
 
 {{define "douban_status"}}<div id="douban-status" class="douban-status"{{if .Running}} hx-get="/api/htmx/douban-status" hx-trigger="every 2s" hx-swap="outerHTML"{{end}}>
 {{if .Running}}<p class="hint">正在同步… 已处理 {{.Progress.Processed}} / {{.Progress.Total}} 条，新增 {{.Progress.Imported}} 条。</p>
-{{else if .Found}}{{if eq .Job.Status "done"}}<p class="hint">上次同步：{{timeago .Job.Finished}}，处理 {{.Progress.Processed}} 条，新增 {{.Progress.Imported}} 条。</p>
+{{else if .Found}}{{if eq .Job.Status "done"}}<p class="hint">上次同步：{{timeago .Job.Finished}}，处理 {{.Progress.Processed}} 条，新增 {{.Progress.Imported}} 条。{{if .Progress.Failed}}有 {{.Progress.Failed}} 条没导入成功，下次同步会重试。{{end}}</p>
 {{else}}<p class="hint error">上次同步失败：{{.Job.LastError}}</p>{{end}}{{end}}
 {{if and .Bound (not .Running)}}<button class="btn btn-primary" hx-post="/settings/douban/sync" hx-target="#douban-status" hx-swap="outerHTML">立即同步</button>{{end}}
 </div>{{end}}

@@ -9,11 +9,14 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+
 	"moovie/internal/auth"
 	"moovie/internal/db"
 	"moovie/internal/ingest"
 	"moovie/internal/jobs"
 	"moovie/internal/library"
+	"moovie/internal/media"
 	"moovie/internal/providers"
 )
 
@@ -40,6 +43,7 @@ type payload struct {
 // Interests 是读取豆瓣用户标记的能力，由 providers.Douban 实现。
 type Interests interface {
 	Interests(ctx context.Context, userID, status string, start, count int) ([]providers.DoubanInterest, int, error)
+	RecentInterests(ctx context.Context, userID string) ([]providers.DoubanRecent, error)
 }
 
 // Catalog 把豆瓣条目收进作品库，由 ingest.Service 实现。
@@ -52,6 +56,9 @@ type Progress struct {
 	Total     int `json:"total"`
 	Processed int `json:"processed"`
 	Imported  int `json:"imported"`
+	// Failed 是读到了、但没能收进作品库的标记数（数据库出错之类，下次还能成功的）。
+	// 有失败的同步之后，下一次同步要完整地读一遍，见 Sync。
+	Failed int `json:"failed"`
 }
 
 // Service 执行豆瓣同步。
@@ -76,12 +83,25 @@ func (s *Service) Bind(ctx context.Context, userID int64, doubanUserID string) e
 	if _, _, err := s.Douban.Interests(ctx, doubanUserID, "done", 0, 1); err != nil {
 		return ErrInvalidUser
 	}
-	return s.Users.Update(ctx, userID, "douban_user_id", doubanUserID)
+	if err := s.Users.Update(ctx, userID, "douban_user_id", doubanUserID); err != nil {
+		return err
+	}
+	return s.forgetSyncs(ctx, userID)
 }
 
 // Unbind 解除绑定。已经同步过来的标记保留。
 func (s *Service) Unbind(ctx context.Context, userID int64) error {
-	return s.Users.Update(ctx, userID, "douban_user_id", "")
+	if err := s.Users.Update(ctx, userID, "douban_user_id", ""); err != nil {
+		return err
+	}
+	return s.forgetSyncs(ctx, userID)
+}
+
+// forgetSyncs 删掉这个用户已完成的同步记录。增量同步拿"上一次同步是什么时候"去对照 RSS，
+// 换了豆瓣账号以后，旧账号的同步时间对新账号没有意义，不删的话新账号较早的标记会被当成已经同步过。
+func (s *Service) forgetSyncs(ctx context.Context, userID int64) error {
+	_, err := s.Pool.Exec(ctx, `DELETE FROM jobs WHERE kind = $1 AND subject = $2 AND status = 'done'`, KindSync, strconv.FormatInt(userID, 10))
+	return err
 }
 
 // Start 把一次完整同步放进队列（用户自己点的）。已经在排队或运行时返回 false；
@@ -127,7 +147,12 @@ func (s *Service) Register(worker *jobs.Worker) {
 		}
 		var options payload
 		json.Unmarshal(job.Payload, &options)
-		return s.Sync(ctx, userID, options.Full, func(progress Progress) { s.Queue.SetProgress(ctx, job.ID, progress) })
+		// 这个任务以前跑过一部分（中途出错或被限流，正在重试）：前面几页已经导入，
+		// "读到整页都已导入就停"会停在第一页，没读到的那些就漏了，所以重试时完整地读。
+		var earlier Progress
+		json.Unmarshal(job.Progress, &earlier)
+		full := options.Full || earlier.Processed > 0
+		return s.Sync(ctx, userID, full, func(progress Progress) { s.Queue.SetProgress(ctx, job.ID, progress) })
 	})
 	worker.Handle(KindDaily, func(ctx context.Context, _ jobs.Job) error { return s.StartAll(ctx) })
 	worker.Every(KindDaily, 24*time.Hour, 0)
@@ -136,6 +161,7 @@ func (s *Service) Register(worker *jobs.Worker) {
 // Sync 同步一个用户的豆瓣标记。本站已有的标记不会被覆盖，只有"想看"会升级成"看过"。
 //
 // full 为 false 时是增量同步：豆瓣的标记按时间倒序排列，读到一整页都已经导入过，后面的就不用再读了。
+// 增量同步先看用户的 RSS（见 recentStatuses），上一次同步之后没有新的看过或想看，就一页都不用读。
 // 第一次同步、或者上一次中途失败过，要用完整同步，否则后面没读到的那些会被漏掉。
 func (s *Service) Sync(ctx context.Context, userID int64, full bool, report func(Progress)) error {
 	user, err := s.Users.ByID(ctx, userID)
@@ -146,7 +172,29 @@ func (s *Service) Sync(ctx context.Context, userID int64, full bool, report func
 		return err
 	}
 	progress := Progress{}
+	wanted := map[string]bool{"done": true, "mark": true}
+	if !full {
+		last, lastFailed, err := s.lastSync(ctx, userID)
+		if err != nil {
+			return err
+		}
+		// 上一次同步有没导入成功的：那几条在列表里的位置可能很靠后，"读到整页都已导入就停"读不到它们，
+		// RSS 里它们也早于上一次同步、会被当成处理过了。所以完整地读一遍，直到有一次同步没有失败。
+		full = lastFailed > 0
+		if !full && last != nil {
+			recent, known, err := s.recentStatuses(ctx, *last, user.DoubanUserID)
+			if err != nil {
+				return err
+			}
+			if known {
+				wanted = recent
+			}
+		}
+	}
 	for _, pass := range []struct{ doubanStatus, status string }{{"done", library.StatusWatched}, {"mark", library.StatusWish}} {
+		if !wanted[pass.doubanStatus] {
+			continue
+		}
 		for start := 0; start < 20000; start += pageSize {
 			interests, total, err := s.Douban.Interests(ctx, user.DoubanUserID, pass.doubanStatus, start, pageSize)
 			if err != nil {
@@ -158,8 +206,12 @@ func (s *Service) Sync(ctx context.Context, userID int64, full bool, report func
 			changed := 0
 			for _, interest := range interests {
 				progress.Processed++
+				if !media.ValidDoubanID(interest.Item.ID) {
+					continue // 不是合法的条目 ID，再试多少次也收不进来，不算失败
+				}
 				mediaID, err := s.Catalog.EnsureDouban(ctx, interest.Item, "", importPriority)
 				if err != nil {
+					progress.Failed++
 					changed++ // 没能处理的也算"这一页还没读完整"，不能据此提前结束
 					continue
 				}
@@ -181,6 +233,61 @@ func (s *Service) Sync(ctx context.Context, userID int64, full bool, report func
 		}
 	}
 	return nil
+}
+
+// feedSlack 是对照 RSS 时间时留的余量，抵消豆瓣和本机的时钟差。
+const feedSlack = time.Hour
+
+// lastSync 返回最近一次成功的同步是什么时候开始的、有几条没导入成功。没有成功同步过时 last 为 nil。
+//
+// 时间取任务的 run_at（排定的开始时间，不晚于真正开始读的时间），这样同步途中新标记的也会被下一次看到。
+func (s *Service) lastSync(ctx context.Context, userID int64) (last *time.Time, failed int, err error) {
+	var progress []byte
+	err = s.Pool.QueryRow(ctx, `SELECT run_at, progress FROM jobs WHERE kind = $1 AND subject = $2 AND status = 'done'
+ORDER BY run_at DESC LIMIT 1`, KindSync, strconv.FormatInt(userID, 10)).Scan(&last, &progress)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, 0, nil
+	}
+	if err != nil {
+		return nil, 0, err
+	}
+	var previous Progress
+	json.Unmarshal(progress, &previous)
+	return last, previous.Failed, nil
+}
+
+// recentStatuses 用 RSS 判断上一次同步（last）之后，哪些状态（done 看过、mark 想看）有新的标记。
+// known 为 false 表示 RSS 说明不了问题，调用方照原来的办法去翻标记列表：
+// RSS 读不到或者是空的、有动态的时间解析不出来，
+// 或者 RSS 里最早的一条也比上一次同步晚（RSS 只有最近十来条，更早的动态可能被挤掉了）。
+// 调用方要保证上一次同步没有失败的条目，否则早于 last 的那几条会被当成处理过了。
+func (s *Service) recentStatuses(ctx context.Context, last time.Time, doubanUserID string) (statuses map[string]bool, known bool, err error) {
+	recent, err := s.Douban.RecentInterests(ctx, doubanUserID)
+	if errors.Is(err, providers.ErrThrottled) {
+		return nil, false, err // 被限流了，翻标记列表也一样会被拒绝，任务稍后重试
+	}
+	if err != nil || len(recent) == 0 {
+		return nil, false, nil
+	}
+	cutoff := last.Add(-feedSlack)
+	statuses = map[string]bool{}
+	covered := false
+	for _, item := range recent {
+		if item.At.IsZero() {
+			return nil, false, nil
+		}
+		if !item.At.After(cutoff) {
+			covered = true
+			continue
+		}
+		if item.Status != "" {
+			statuses[item.Status] = true
+		}
+	}
+	if !covered {
+		return nil, false, nil
+	}
+	return statuses, true, nil
 }
 
 func (s *Service) importOne(ctx context.Context, userID, mediaID int64, status string, interest providers.DoubanInterest) (bool, error) {

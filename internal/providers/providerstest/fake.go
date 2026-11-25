@@ -5,6 +5,7 @@ import (
 	"compress/gzip"
 	"encoding/json"
 	"fmt"
+	"html"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -19,12 +20,20 @@ type Fake struct {
 	mu sync.Mutex
 	// Subjects：豆瓣 ID → 详情 JSON。键加前缀 "tv:" 表示这个条目在剧集接口下。
 	Subjects map[string]map[string]any
+	// Pages：豆瓣 ID → 详情网页（movie.douban.com/subject/<id>/）的 HTML。没有配置时返回 404。
+	Pages map[string]string
+	// Refuse：这些豆瓣 ID 的详情接口返回 403（详情网页不受影响）。
+	Refuse map[string]bool
 	// Suggest：关键词 → 联想结果。
 	Suggest map[string][]map[string]any
-	// Popular：接口路径里的关键字（如 "hot_gaia"、"tv_domestic"）→ 条目列表。
+	// Popular：手机版榜单接口路径里的关键字（如 "hot_gaia"、"tv_domestic"）→ 条目列表。
 	Popular map[string][]map[string]any
+	// WebPopular：网页版热门榜的 "类型/标签"（如 "movie/热门"、"tv/综艺"）→ 条目列表。没有配置时返回 500，客户端改用手机版接口。
+	WebPopular map[string][]map[string]any
 	// Interests：豆瓣用户 ID + "/" + 状态 → 标记列表。
 	Interests map[string][]map[string]any
+	// Feeds：豆瓣用户 ID → RSS 里的条目（title、link、pubDate）。没有配置时返回 404。
+	Feeds map[string][]map[string]string
 	// Wikidata：豆瓣 ID → SPARQL bindings。
 	Wikidata map[string][]map[string]string
 	// TMDB：路径 → 响应 JSON。
@@ -44,8 +53,8 @@ type Fake struct {
 // New 启动假服务器，测试结束时自动关闭。
 func New(t *testing.T) *Fake {
 	fake := &Fake{
-		Subjects: map[string]map[string]any{}, Suggest: map[string][]map[string]any{}, Popular: map[string][]map[string]any{},
-		Interests: map[string][]map[string]any{}, Wikidata: map[string][]map[string]string{}, TMDB: map[string]any{},
+		Subjects: map[string]map[string]any{}, Pages: map[string]string{}, Refuse: map[string]bool{}, Suggest: map[string][]map[string]any{}, Popular: map[string][]map[string]any{},
+		WebPopular: map[string][]map[string]any{}, Interests: map[string][]map[string]any{}, Feeds: map[string][]map[string]string{}, Wikidata: map[string][]map[string]string{}, TMDB: map[string]any{},
 		Exports: map[string][]map[string]any{},
 	}
 	fake.Server = httptest.NewServer(http.HandlerFunc(fake.serve))
@@ -55,7 +64,7 @@ func New(t *testing.T) *Fake {
 
 // Douban 返回指向假服务器的豆瓣客户端（不限速）。
 func (f *Fake) Douban() *providers.Douban {
-	return &providers.Douban{HTTP: f.Server.Client(), MobileBase: f.Server.URL, WebBase: f.Server.URL}
+	return &providers.Douban{HTTP: f.Server.Client(), MobileBase: f.Server.URL, WebBase: f.Server.URL, FeedBase: f.Server.URL}
 }
 
 // TMDBClient 返回指向假服务器的 TMDB 客户端。
@@ -125,6 +134,33 @@ func (f *Fake) serve(w http.ResponseWriter, r *http.Request) {
 			items = []map[string]any{}
 		}
 		writeJSON(w, items)
+	case strings.HasPrefix(path, "/subject/"):
+		page, ok := f.Pages[strings.Trim(strings.TrimPrefix(path, "/subject/"), "/")]
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		fmt.Fprint(w, page)
+	case path == "/j/search_subjects":
+		items, ok := f.WebPopular[r.URL.Query().Get("type")+"/"+r.URL.Query().Get("tag")]
+		if !ok {
+			http.Error(w, "unavailable", http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, map[string]any{"subjects": items})
+	case strings.HasPrefix(path, "/feed/people/"):
+		items, ok := f.Feeds[strings.TrimSuffix(strings.TrimPrefix(path, "/feed/people/"), "/interests")]
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/rss+xml; charset=utf-8")
+		fmt.Fprint(w, `<?xml version="1.0" encoding="UTF-8"?><rss version="2.0"><channel><title>的收藏</title>`)
+		for _, item := range items {
+			fmt.Fprintf(w, "<item><title>%s</title><link>%s</link><pubDate>%s</pubDate></item>", html.EscapeString(item["title"]), html.EscapeString(item["link"]), item["pubDate"])
+		}
+		fmt.Fprint(w, `</channel></rss>`)
 	case strings.HasPrefix(path, "/rexxar/api/v2/user/"):
 		parts := strings.Split(strings.TrimPrefix(path, "/rexxar/api/v2/user/"), "/")
 		list, ok := f.Interests[parts[0]+"/"+r.URL.Query().Get("status")]
@@ -152,6 +188,10 @@ func (f *Fake) serve(w http.ResponseWriter, r *http.Request) {
 	case strings.HasPrefix(path, "/rexxar/api/v2/movie/"), strings.HasPrefix(path, "/rexxar/api/v2/tv/"):
 		parts := strings.Split(strings.TrimPrefix(path, "/rexxar/api/v2/"), "/")
 		key := parts[1]
+		if f.Refuse[key] {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
 		if parts[0] == "tv" {
 			key = "tv:" + key
 		}
