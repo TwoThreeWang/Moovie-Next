@@ -184,8 +184,19 @@ func (a *App) collectionPreview(c *gin.Context) {
 	for _, card := range cards {
 		entries = append(entries, listEntry(card, draft.Notes[card.ID]))
 	}
-	a.render.Page(c, http.StatusOK, "list.html", gin.H{
-		"Title": draft.Title + " · 预览", "Nav": "me", "PreviewLabel": "编辑预览 · 仅自己可见", "Entries": entries, "SEO": SEO{NoIndex: true},
-		"Collection": collections.Collection{Title: draft.Title, Description: draft.Description, Count: len(entries)},
-	})
+	data := gin.H{"Entries": entries, "Collection": collections.Collection{Title: draft.Title, Description: draft.Description, Count: len(entries)}}
+	// 编辑器用 fetch 取片段，显示在页内对话框里。不再把表单 POST 到新标签页：
+	// 安卓上已安装的网页应用、各家浏览器的 WebView 打开新窗口时只带地址，POST 的内容会丢，变成一次 GET。
+	if httpx.IsHTMX(c) {
+		a.render.Partial(c, "collection_preview", data)
+		return
+	}
+	data["Title"], data["Nav"], data["PreviewLabel"], data["SEO"] = draft.Title+" · 预览", "me", "编辑预览 · 仅自己可见", SEO{NoIndex: true}
+	a.render.Page(c, http.StatusOK, "list.html", data)
+}
+
+// 直接打开预览地址（旧版本在安卓新标签页里打开预览、刷新预览页）时没有草稿内容。
+// 单独接住，免得落到 /me/collections/:id，把 preview 当成片单编号报「参数不正确」。
+func (a *App) collectionPreviewGet(c *gin.Context) {
+	httpx.Error(c, http.StatusBadRequest, "预览内容只在片单编辑器里生成。请回到编辑器，再点「预览」。")
 }

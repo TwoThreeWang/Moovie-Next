@@ -101,6 +101,7 @@ func (a *App) memberRoutes(r gin.IRouter) {
 	r.GET("/me/collections/favorites", a.favoriteCollections)
 	r.GET("/me/collections/new", a.collectionEdit)
 	r.GET("/me/collections/search", a.collectionSearch)
+	r.GET("/me/collections/preview", a.collectionPreviewGet)
 	r.GET("/me/collections/:id", a.collectionEdit)
 	r.POST("/me/collections", a.collectionSave)
 	r.POST("/me/collections/preview", a.collectionPreview)

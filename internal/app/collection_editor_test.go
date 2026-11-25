@@ -1,9 +1,11 @@
 package app_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"html"
+	"mime/multipart"
 	"net/http"
 	"net/url"
 	"strings"
@@ -326,4 +328,52 @@ func TestCollectionOrderingAndErrorResponses(t *testing.T) {
 	if r := s.get("/api/nonexistent"); r.status != 404 || !strings.HasPrefix(r.header.Get("Content-Type"), "application/json") {
 		t.Fatalf("API 错误应保留 JSON: %d %s", r.status, r.header.Get("Content-Type"))
 	}
+}
+
+// 安卓上已安装的网页应用、国产浏览器和应用内浏览器打开新窗口时只带地址：旧版把预览表单 POST 到新标签页，
+// 到了服务器变成 GET /me/collections/preview，落到 /me/collections/:id，报「400 参数不正确」。
+// 现在预览在编辑页里用 fetch（multipart 表单，HX-Request）取片段，直接打开地址时给出明确提示。
+func TestCollectionPreviewWithoutNewWindow(t *testing.T) {
+	s := newSite(t)
+	s.register("author")
+	one := s.seedMedia("36000051", "雨夜谜案", media.TypeMovie, nil)
+
+	editor := s.get("/me/collections/new")
+	mustContain(t, editor, "data-preview-dialog", `type="button" data-preview`)
+	if strings.Contains(editor.body, "formtarget") || strings.Contains(editor.body, "/me/collections/preview") {
+		t.Fatal("预览不应再靠表单提交到新窗口")
+	}
+
+	lost := s.get("/me/collections/preview")
+	if lost.status != http.StatusBadRequest || strings.Contains(lost.body, "参数不正确") {
+		t.Fatalf("丢了 POST 内容的预览请求应给出明确提示: HTTP %d %.300s", lost.status, lost.body)
+	}
+	mustContain(t, lost, "预览内容只在片单编辑器里生成")
+
+	entries, _ := json.Marshal([]map[string]string{{"id": itoa(one), "note": "第一场雨\r\n要留意。"}})
+	preview := func(fields map[string]string) reply {
+		var body bytes.Buffer
+		form := multipart.NewWriter(&body)
+		for key, value := range fields {
+			_ = form.WriteField(key, value)
+		}
+		_ = form.Close()
+		return s.do(s.client, http.MethodPost, "/me/collections/preview", &body, map[string]string{
+			"Content-Type": form.FormDataContentType(), "HX-Request": "true", "X-CSRF-Token": s.csrf(s.client),
+		})
+	}
+	ok := preview(map[string]string{"id": "0", "base": "", "title": "雨天片单", "description": "适合雨天", "entries": string(entries)})
+	if ok.status != http.StatusOK || ok.header.Get("Cache-Control") != "no-store" {
+		t.Fatalf("预览片段: HTTP %d %q", ok.status, ok.header.Get("Cache-Control"))
+	}
+	mustContain(t, ok, "雨天片单", "适合雨天", "1 部", "雨夜谜案", "要留意。")
+	if strings.Contains(ok.body, "<html") || strings.Contains(ok.body, "<main") {
+		t.Fatalf("预览应只返回片段: %.300s", ok.body)
+	}
+
+	bad := preview(map[string]string{"id": "0", "title": "雨天片单", "entries": "[]"})
+	if bad.status != http.StatusBadRequest || !strings.HasPrefix(bad.header.Get("Content-Type"), "text/plain") {
+		t.Fatalf("预览出错时应返回纯文本，方便编辑器显示: HTTP %d %q", bad.status, bad.header.Get("Content-Type"))
+	}
+	mustContain(t, bad, "请在片单中加入 1 至 200 部作品。")
 }

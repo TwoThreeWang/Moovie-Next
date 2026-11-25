@@ -640,6 +640,20 @@ main:not(.narrow, .detail) .comments { max-width: none; }
 .collection-editor-messages:has(> .hint:empty):has(> .flash[hidden]) { display: none; }
 .collection-editor-messages .flash { margin: 6px 0 0; max-width: none; }
 .collection-editor-bar .form-actions { justify-content: flex-end; }
+/* 预览：编辑页里的全屏对话框，内容和公开页用同一套片单样式 */
+.collection-preview {
+  width: 100%; max-width: none; height: 100%; max-height: none; margin: 0; padding: 0; border: 0;
+  background: var(--bg); color: var(--text); overflow-y: auto; overscroll-behavior: contain;
+}
+.collection-preview::backdrop { background: var(--bg); }
+.collection-preview-bar {
+  position: sticky; top: 0; z-index: 2; display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: calc(10px + var(--safe-top)) var(--gutter) 10px; border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--bg) 92%, transparent);
+}
+.collection-preview-bar .kicker { margin: 0; }
+.collection-preview-body { max-width: calc(1240px + 2 * var(--gutter)); margin-inline: auto; padding-bottom: calc(24px + env(safe-area-inset-bottom)); }
+.collection-preview .page-head { padding-top: clamp(16px, 2vw, 28px); }
 @media (max-width: 900px) {
   .collection-editor-grid { grid-template-columns: minmax(0, 1fr); grid-template-areas: "info" "picker" "items"; gap: 14px; }
   .collection-picker { position: static; max-height: none; }

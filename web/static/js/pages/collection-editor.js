@@ -20,13 +20,15 @@ function init(root) {
   const restore = root.querySelector('[data-restore]');
   const saveButtons = [...root.querySelectorAll('[data-save]')];
   const preview = root.querySelector('[data-preview]');
+  const previewDialog = root.querySelector('[data-preview-dialog]');
+  const previewBody = root.querySelector('[data-preview-body]');
   const undo = root.querySelector('[data-undo-wrap]');
   const key = userKey('collection-draft:' + form.elements.id.value);
   const base = form.elements.base.value;
 
   let entries = JSON.parse(root.dataset.entries);
   let found = [], searchTimer, searchRequest, removed, dragged;
-  let restoreDraft, saving = false;
+  let restoreDraft, previewRequest, saving = false;
   const snapshot = () => ({
     base, title: title.value, description: description.value, entries,
   });
@@ -215,7 +217,7 @@ function init(root) {
     find();
   });
 
-  // 标题框里按回车会触发表单里第一个提交按钮（预览），不让它意外打开预览页。
+  // 标题框里按回车会触发表单里第一个提交按钮（保存或投稿），不让它意外提交。
   title.addEventListener('keydown', event => { if (event.key === 'Enter' && !event.isComposing) event.preventDefault(); });
   form.addEventListener('input', event => { if (event.target !== search) persist(); });
   discard.addEventListener('click', () => {
@@ -236,16 +238,55 @@ function init(root) {
     update();
   });
 
-  form.addEventListener('submit', async event => {
-    if (saving || !entries.length) { event.preventDefault(); return; }
+  function formData() {
     entryField.value = JSON.stringify(entries.map(({ id, note }) => ({ id, note })));
-    if (event.submitter === preview) return;
+    return new FormData(form);
+  }
 
+  // 预览用 fetch 取回片段，显示在本页的对话框里。不能把表单 POST 到新标签页：
+  // 安卓上已安装的网页应用、国产浏览器和应用内浏览器打开新窗口时只带地址，POST 的内容会丢，
+  // 服务器收到的是 GET /me/collections/preview，只能报错。
+  preview.addEventListener('click', async () => {
+    if (saving || !entries.length) return;
+    showError('');
+    previewRequest?.abort();
+    const request = previewRequest = new AbortController();
+    const timer = setTimeout(() => request.abort(), 15000);
+    preview.setAttribute('aria-busy', 'true');
+    try {
+      const response = await fetch('/me/collections/preview', {
+        method: 'POST', headers: { 'HX-Request': 'true', 'X-CSRF-Token': csrfToken() }, body: formData(),
+        signal: request.signal,
+      });
+      const text = await response.text();
+      if (request !== previewRequest) return;
+      if (!response.ok) {
+        const plain = (response.headers.get('Content-Type') ?? '').startsWith('text/plain');
+        throw new Error(plain && text.trim() ? text.trim() : '预览失败，请重试。');
+      }
+      previewBody.innerHTML = text;
+      previewDialog.showModal();
+      previewDialog.scrollTop = 0;
+    } catch (err) {
+      if (request !== previewRequest) return;
+      showError(request.signal.aborted ? '预览超时，请重试。' : err instanceof TypeError ? '网络连接失败，请重试。' : err.message);
+    } finally {
+      clearTimeout(timer);
+      if (request === previewRequest) {
+        previewRequest = null;
+        preview.removeAttribute('aria-busy');
+      }
+    }
+  });
+  root.querySelector('[data-preview-close]').addEventListener('click', () => previewDialog.close());
+
+  form.addEventListener('submit', async event => {
     event.preventDefault();
+    if (saving || !entries.length) return;
     const button = saveButtons.includes(event.submitter) ? event.submitter : saveButtons[0];
     if (button.dataset.reviewConfirm && !confirm(button.dataset.reviewConfirm)) return;
     showError('');
-    const data = new FormData(form);
+    const data = formData();
     data.set('intent', button.value);
     const savedDraft = JSON.stringify(snapshot());
     const label = button.textContent;
