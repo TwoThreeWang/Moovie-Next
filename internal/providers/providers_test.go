@@ -288,7 +288,7 @@ func TestDoubanSubjectUsesKnownTypeAndReturnedType(t *testing.T) {
 	}))
 	defer server.Close()
 	douban := providers.NewDouban(server.Client())
-	douban.MobileBase, douban.Pace = server.URL, nil
+	douban.MobileBase, douban.MoviePace, douban.TVPace = server.URL, nil, nil
 
 	subject, err := douban.Subject(context.Background(), "26302614", "tv")
 	if err != nil || subject.Kind != "tv" || len(paths) != 1 {
@@ -300,20 +300,234 @@ func TestDoubanSubjectUsesKnownTypeAndReturnedType(t *testing.T) {
 	}
 }
 
-// 豆瓣有时用 400 + subject_ip_rate_limit 表示限流，也要按限流处理。
-func TestDoubanRateLimitIn400(t *testing.T) {
+// 豆瓣用 400 + subject_ip_rate_limit（code 1309）表示这个 IP 被标记了。它按接口算：电影详情被标记时，
+// 剧集详情、标记列表照样能打开（2026-11 实测）。所以只有电影详情立刻停几个小时，不等连续几次；
+// 停着的时候电影详情不再发请求，剧集详情和别的接口照常。错误里带着接口、豆瓣的错误名和说明。
+func TestDoubanFlaggedPausesOnlyThatEndpoint(t *testing.T) {
+	var mu sync.Mutex
+	var paths []string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusBadRequest)
-		w.Write([]byte(`{"request": "GET \/v2\/movie\/36877245", "msg": "subject_ip_rate_limit", "code": 1309}`))
+		mu.Lock()
+		paths = append(paths, r.URL.Path)
+		mu.Unlock()
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/rexxar/api/v2/movie/"):
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte(`{"request": "GET \/v2\/movie\/1889152", "msg": "subject_ip_rate_limit", "code": 1309, "localized_message": "您所在的网络存在异常，请登录后重试。"}`))
+		case strings.HasPrefix(r.URL.Path, "/rexxar/api/v2/tv/"):
+			w.Write([]byte(`{"id": "37516033", "title": "掌舵少女 第一季", "type": "tv"}`))
+		default:
+			w.Write([]byte(`{"total": 0, "interests": []}`))
+		}
 	}))
 	defer server.Close()
 	douban := providers.NewDouban(server.Client())
-	douban.MobileBase, douban.Pace = server.URL, providers.NewPacer(10*time.Millisecond)
-	if _, err := douban.Subject(context.Background(), "36877245", "movie"); !errors.Is(err, providers.ErrThrottled) {
-		t.Fatalf("400 + rate_limit 应该识别为限流: %v", err)
+	douban.MobileBase = server.URL
+	douban.Pace, douban.MoviePace, douban.TVPace = providers.NewPacer(time.Millisecond), providers.NewPacer(time.Millisecond), providers.NewPacer(time.Millisecond)
+	douban.MoviePace.Name = "豆瓣电影详情"
+	ctx := context.Background()
+
+	_, err := douban.Subject(ctx, "1889152", "movie")
+	if !errors.Is(err, providers.ErrThrottled) {
+		t.Fatalf("subject_ip_rate_limit 应该算限流: %v", err)
 	}
-	if interval, _ := douban.Pace.Status(); interval <= 10*time.Millisecond {
+	var paused *providers.PausedError
+	if !errors.As(err, &paused) || paused.RetryAfter() < 110*time.Minute {
+		t.Fatalf("第一次被标记就应该暂停 2 小时左右: %v", err)
+	}
+	for _, want := range []string{"/rexxar/api/v2/movie/1889152", "HTTP 400", "subject_ip_rate_limit", "code 1309", "您所在的网络存在异常", "豆瓣电影详情暂停到"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("错误信息里应该有 %q: %s", want, err)
+		}
+	}
+	if _, until := douban.MoviePace.Status(); until.IsZero() {
+		t.Error("电影详情应该暂停了")
+	}
+	if _, err := douban.Subject(ctx, "26909790", "movie"); !errors.Is(err, providers.ErrThrottled) {
+		t.Fatalf("电影详情暂停期间应该直接算限流: %v", err)
+	}
+	if subject, err := douban.Subject(ctx, "37516033", "tv"); err != nil || subject.Title != "掌舵少女 第一季" {
+		t.Fatalf("电影详情暂停时剧集详情应该照样能打开: %+v %v", subject, err)
+	}
+	if _, _, err := douban.Interests(ctx, "u1", "done", 0, 50); err != nil {
+		t.Fatalf("电影详情暂停时标记列表应该照样能打开: %v", err)
+	}
+	if _, until := douban.TVPace.Status(); !until.IsZero() {
+		t.Error("剧集详情不该跟着暂停")
+	}
+	if _, until := douban.Pace.Status(); !until.IsZero() {
+		t.Error("其余接口不该跟着暂停")
+	}
+	mu.Lock()
+	movieRequests := 0
+	for _, path := range paths {
+		if strings.HasPrefix(path, "/rexxar/api/v2/movie/") {
+			movieRequests++
+		}
+	}
+	mu.Unlock()
+	if movieRequests != 1 {
+		t.Errorf("被标记之后电影详情不该再发请求，被限流后也不该改试剧集接口，电影详情一共请求了 %d 次: %v", movieRequests, paths)
+	}
+
+	if wait := douban.Paused(); wait != 0 {
+		t.Errorf("还有接口能用时整条豆瓣通道不该停: %s", wait)
+	}
+	douban.TVPace.Flagged()
+	douban.Pace.Throttled()
+	douban.Pace.Throttled()
+	douban.Pace.Throttled()
+	if wait := douban.Paused(); wait < 9*time.Minute || wait > 10*time.Minute {
+		t.Errorf("接口全停了时，整条通道停到最早恢复的那个（其余接口的 10 分钟）: %s", wait)
+	}
+}
+
+// 个别条目的 403 错误里也带着接口和豆瓣的错误名；用电影接口查剧集时跟着跳转，错误里是跳转之后的接口。
+func TestDoubanRefusalNamesEndpointAndReason(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/rexxar/api/v2/movie/4067152": // 真实的豆瓣在这里跳到剧集接口
+			http.Redirect(w, r, "/rexxar/api/v2/tv/4067152", http.StatusMovedPermanently)
+		default:
+			w.WriteHeader(http.StatusForbidden)
+			w.Write([]byte(`{"msg": "need_permission", "code": 1000, "localized_message": ""}`))
+		}
+	}))
+	defer server.Close()
+	douban := providers.NewDouban(server.Client())
+	douban.MobileBase, douban.MoviePace, douban.TVPace = server.URL, nil, nil
+	_, err := douban.Subject(context.Background(), "4067152", "movie")
+	if !errors.Is(err, providers.ErrRefused) || errors.Is(err, providers.ErrThrottled) {
+		t.Fatalf("个别条目的 403 只算它自己失败: %v", err)
+	}
+	if want := "豆瓣 /rexxar/api/v2/tv/4067152 返回 HTTP 403 need_permission（code 1000）"; !strings.Contains(err.Error(), want) {
+		t.Errorf("错误信息里应该有 %q: %s", want, err)
+	}
+}
+
+// 用电影接口查剧集时豆瓣跳到剧集接口。跳过去要按剧集接口自己的节奏：剧集接口暂停着就不发请求；
+// 剧集接口说 IP 被标记了，停的是剧集接口，不是电影接口。
+func TestDoubanRedirectToTVUsesTVPace(t *testing.T) {
+	var mu sync.Mutex
+	tvRequests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/rexxar/api/v2/movie/") {
+			http.Redirect(w, r, strings.Replace(r.URL.Path, "/movie/", "/tv/", 1), http.StatusMovedPermanently)
+			return
+		}
+		mu.Lock()
+		tvRequests++
+		mu.Unlock()
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte(`{"msg": "subject_ip_rate_limit", "code": 1309}`))
+	}))
+	defer server.Close()
+	douban := providers.NewDouban(server.Client())
+	douban.MobileBase = server.URL
+	douban.MoviePace, douban.TVPace = providers.NewPacer(time.Millisecond), providers.NewPacer(time.Millisecond)
+	ctx := context.Background()
+	if _, err := douban.Subject(ctx, "37516033", "movie"); !errors.Is(err, providers.ErrThrottled) {
+		t.Fatalf("剧集接口被标记应该算限流: %v", err)
+	}
+	if _, until := douban.TVPace.Status(); until.IsZero() {
+		t.Error("被标记的是剧集接口，应该停剧集接口")
+	}
+	if _, until := douban.MoviePace.Status(); !until.IsZero() {
+		t.Error("电影接口只是跳转，不该被停")
+	}
+	if _, err := douban.Subject(ctx, "35095038", "movie"); !errors.Is(err, providers.ErrThrottled) {
+		t.Fatalf("剧集接口暂停时，从电影接口跳过去也应该算限流: %v", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if tvRequests != 1 {
+		t.Errorf("剧集接口暂停后不该再收到请求，一共收到 %d 次", tvRequests)
+	}
+}
+
+// 不知道类型的条目：电影详情暂停着时接着试剧集详情；剧集详情也没有，就等电影详情恢复（不能说没有这个条目）。
+// 知道是电影的不试剧集详情，免得每部电影都白白多一次请求。
+func TestDoubanUnknownTypeTriesTVWhenMoviePaused(t *testing.T) {
+	var mu sync.Mutex
+	tvRequests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		if r.URL.Path == "/rexxar/api/v2/tv/37516033" {
+			tvRequests++
+			w.Write([]byte(`{"id": "37516033", "title": "掌舵少女 第一季", "type": "tv"}`))
+			return
+		}
+		if strings.HasPrefix(r.URL.Path, "/rexxar/api/v2/tv/") {
+			tvRequests++
+		}
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+	douban := providers.NewDouban(server.Client())
+	douban.MobileBase = server.URL
+	douban.MoviePace, douban.TVPace = providers.NewPacer(time.Millisecond), providers.NewPacer(time.Millisecond)
+	douban.MoviePace.Flagged()
+	ctx := context.Background()
+	if subject, err := douban.Subject(ctx, "37516033", ""); err != nil || subject.Kind != "tv" {
+		t.Fatalf("电影详情暂停时，不知道类型的剧集应该从剧集详情读到: %+v %v", subject, err)
+	}
+	if _, err := douban.Subject(ctx, "1889152", ""); !errors.Is(err, providers.ErrThrottled) {
+		t.Fatalf("剧集详情说没有时，可能是电影，应该等电影详情恢复: %v", err)
+	}
+	if _, err := douban.Subject(ctx, "26909790", "movie"); !errors.Is(err, providers.ErrThrottled) {
+		t.Fatalf("知道是电影时应该直接算限流: %v", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if tvRequests != 2 {
+		t.Errorf("只有不知道类型的两次该去试剧集详情，实际 %d 次", tvRequests)
+	}
+}
+
+// 两种明说了限流的回答：只带错误码 1309 的 400 也是 IP 被标记；403 里写着 rate_limit 直接算限流，不当成个别条目。
+func TestDoubanRecognizesExplicitRateLimits(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/rexxar/api/v2/movie/1":
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte(`{"code": 1309}`))
+		default:
+			w.WriteHeader(http.StatusForbidden)
+			w.Write([]byte(`{"msg": "rate_limit_exceeded", "code": 1004}`))
+		}
+	}))
+	defer server.Close()
+	douban := providers.NewDouban(server.Client())
+	douban.MobileBase, douban.MoviePace = server.URL, providers.NewPacer(time.Millisecond)
+	ctx := context.Background()
+	_, err := douban.Subject(ctx, "1", "movie")
+	var paused *providers.PausedError
+	if !errors.As(err, &paused) || paused.RetryAfter() < time.Hour {
+		t.Fatalf("只带 code 1309 也该停几个小时: %v", err)
+	}
+	douban.MoviePace = providers.NewPacer(time.Millisecond)
+	_, err = douban.Subject(ctx, "2", "movie")
+	if !errors.Is(err, providers.ErrThrottled) || errors.Is(err, providers.ErrRefused) {
+		t.Fatalf("写着 rate_limit 的 403 应该直接算限流: %v", err)
+	}
+	if interval, _ := douban.MoviePace.Status(); interval <= time.Millisecond {
 		t.Errorf("被限流后应该放慢: %s", interval)
+	}
+}
+
+// 排着队等的时候前面的请求让通道暂停了，醒来后不再发出去。
+func TestPacerWaitRechecksPauseAfterSleeping(t *testing.T) {
+	p := providers.NewPacer(200 * time.Millisecond)
+	if err := p.Wait(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	result := make(chan error, 1)
+	go func() { result <- p.Wait(context.Background()) }()
+	time.Sleep(50 * time.Millisecond)
+	p.Flagged()
+	if err := <-result; !errors.Is(err, providers.ErrThrottled) {
+		t.Errorf("排队时通道被暂停了，醒来后应该算限流而不是发出请求: %v", err)
 	}
 }
 
@@ -325,6 +539,10 @@ func TestDouban403OnlyThrottlesWhenManySubjectsAreRefused(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
 		defer mu.Unlock()
+		if strings.Contains(r.URL.Path, "/tv/") {
+			http.NotFound(w, r) // 这些都是电影，真实的豆瓣用剧集接口查电影返回 404
+			return
+		}
 		for id := range refused {
 			if strings.HasSuffix(r.URL.Path, "/"+id) {
 				http.Error(w, "forbidden", http.StatusForbidden)
@@ -343,10 +561,10 @@ func TestDouban403OnlyThrottlesWhenManySubjectsAreRefused(t *testing.T) {
 		}
 	}
 	douban := providers.NewDouban(server.Client())
-	douban.MobileBase, douban.Pace = server.URL, providers.NewPacer(10*time.Millisecond)
+	douban.MobileBase, douban.MoviePace, douban.TVPace = server.URL, providers.NewPacer(10*time.Millisecond), nil
 	ctx := context.Background()
 
-	// 一个坏条目夹在正常条目中间：电影、剧集两个接口都 403 也只算一个条目，不算限流
+	// 一个坏条目夹在正常条目中间：只算这一个条目失败，不算限流
 	refuse("36000001", "36000002")
 	for _, id := range []string{"36000001", "1292052", "36000002", "1292052"} {
 		_, err := douban.Subject(ctx, id, "movie")
@@ -354,7 +572,7 @@ func TestDouban403OnlyThrottlesWhenManySubjectsAreRefused(t *testing.T) {
 			t.Fatalf("个别条目的 403 不应该算限流: %s %v", id, err)
 		}
 	}
-	if interval, paused := douban.Pace.Status(); interval != 10*time.Millisecond || !paused.IsZero() {
+	if interval, paused := douban.MoviePace.Status(); interval != 10*time.Millisecond || !paused.IsZero() {
 		t.Errorf("个别条目的 403 不应该让请求放慢: %s %v", interval, paused)
 	}
 
@@ -367,7 +585,7 @@ func TestDouban403OnlyThrottlesWhenManySubjectsAreRefused(t *testing.T) {
 	if _, err := douban.Subject(ctx, "36000005", "movie"); !errors.Is(err, providers.ErrThrottled) {
 		t.Fatalf("接连 3 个不同条目被拒绝应该算限流: %v", err)
 	}
-	if interval, _ := douban.Pace.Status(); interval <= 10*time.Millisecond {
+	if interval, _ := douban.MoviePace.Status(); interval <= 10*time.Millisecond {
 		t.Errorf("被限流后应该放慢: %s", interval)
 	}
 	// 在恢复成功之前，再被拒绝的也都算限流，不会白白用掉任务的重试次数
@@ -375,7 +593,7 @@ func TestDouban403OnlyThrottlesWhenManySubjectsAreRefused(t *testing.T) {
 		t.Fatalf("还没恢复时的 403 应该算限流: %v", err)
 	}
 	// 成功一次就清零
-	douban.Pace = providers.NewPacer(10 * time.Millisecond)
+	douban.MoviePace = providers.NewPacer(10 * time.Millisecond)
 	if _, err := douban.Subject(ctx, "1292052", "movie"); err != nil {
 		t.Fatal(err)
 	}
@@ -399,7 +617,8 @@ func TestDoubanRefusalsAreCountedPerEndpoint(t *testing.T) {
 	}))
 	defer server.Close()
 	douban := providers.NewDouban(server.Client())
-	douban.MobileBase, douban.WebBase, douban.Pace = server.URL, server.URL, providers.NewPacer(time.Millisecond)
+	douban.MobileBase, douban.WebBase = server.URL, server.URL
+	douban.Pace, douban.MoviePace, douban.TVPace = providers.NewPacer(time.Millisecond), providers.NewPacer(time.Millisecond), providers.NewPacer(time.Millisecond)
 	ctx := context.Background()
 	for index, id := range []string{"36000001", "36000002", "36000003"} {
 		if _, _, err := douban.Interests(ctx, "u1", "done", 0, 50); err != nil {
@@ -422,11 +641,11 @@ func TestDoubanThrottleSlowsDown(t *testing.T) {
 	defer server.Close()
 	douban := providers.NewDouban(server.Client())
 	douban.MobileBase, douban.WebBase = server.URL, server.URL
-	douban.Pace = providers.NewPacer(10 * time.Millisecond)
+	douban.MoviePace = providers.NewPacer(10 * time.Millisecond)
 	if _, err := douban.Subject(context.Background(), "1292052", ""); !errors.Is(err, providers.ErrThrottled) {
 		t.Fatalf("429 应该识别为限流: %v", err)
 	}
-	if interval, _ := douban.Pace.Status(); interval <= 10*time.Millisecond {
+	if interval, _ := douban.MoviePace.Status(); interval <= 10*time.Millisecond {
 		t.Errorf("被限流后应该放慢: %s", interval)
 	}
 }
@@ -538,11 +757,11 @@ func TestDoubanVerificationPageCountsAsThrottle(t *testing.T) {
 	douban.MobileBase, douban.FeedBase = server.URL, server.URL
 	ctx := context.Background()
 	for _, id := range []string{"36000001", "36000002"} {
-		douban.Pace = providers.NewPacer(10 * time.Millisecond)
+		douban.MoviePace = providers.NewPacer(10 * time.Millisecond)
 		if _, err := douban.Subject(ctx, id, "movie"); !errors.Is(err, providers.ErrThrottled) {
 			t.Fatalf("%s：验证页应该按限流算: %v", id, err)
 		}
-		if interval, _ := douban.Pace.Status(); interval <= 10*time.Millisecond {
+		if interval, _ := douban.MoviePace.Status(); interval <= 10*time.Millisecond {
 			t.Errorf("%s：被拦下后应该放慢: %s", id, interval)
 		}
 	}
@@ -618,11 +837,10 @@ func TestDoubanSubjectPageHasItsOwnPace(t *testing.T) {
 	fake.Pages["35588177"] = string(page)
 	fake.Pages["36000009"] = `<html><head><title>豆瓣</title></head><body>检测到有异常请求</body></html>`
 	douban := fake.Douban()
-	douban.Pace, douban.PagePace = providers.NewPacer(time.Millisecond), providers.NewPacer(time.Millisecond)
-	for range 3 {
-		douban.Pace.Throttled()
-	}
-	if _, paused := douban.Pace.Status(); paused.IsZero() {
+	douban.MoviePace, douban.TVPace, douban.PagePace = providers.NewPacer(time.Millisecond), providers.NewPacer(time.Millisecond), providers.NewPacer(time.Millisecond)
+	douban.MoviePace.Flagged()
+	douban.TVPace.Flagged()
+	if _, paused := douban.MoviePace.Status(); paused.IsZero() {
 		t.Fatal("详情接口应该已经暂停了")
 	}
 	ctx := context.Background()

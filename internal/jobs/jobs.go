@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"slices"
 	"sync"
 	"time"
@@ -74,8 +75,9 @@ type Options struct {
 // Enqueue 把任务放进队列，返回是否新建了一个。
 //
 //   - 同一个 kind + subject 已经在排队或运行时不重复入队。如果排着的那个优先级更低，
-//     就把它提到这次的优先级（并换成这次的参数）：比如一部作品本来排在批量导入的队尾，
-//     这时有人打开了它的页面，它应该马上被处理。
+//     就把它提到这次的优先级（并换成这次的参数），推迟到以后的也提前到这次要求的时间：
+//     比如一部作品本来排在批量导入的队尾，或者被限流推迟到了两小时后，这时有人打开了它的页面，
+//     它应该马上被处理（处理函数对有人在等的任务可能有别的路可走，比如豆瓣的详情网页）。
 //   - 冷却期：同一个对象的这种任务重试用完失败了，失败记录保留的 14 天里不再入队
 //     （周期任务、Force 除外）。这样一个一直出错的对象不会被各个入口反复送去请求对方；
 //     成功一次就会清掉失败记录。
@@ -98,7 +100,7 @@ func (q *Queue) Enqueue(ctx context.Context, kind, subject string, options Optio
 SELECT $1, $2, $3, $4, now() + make_interval(secs => $5)
 WHERE $2 = '' OR NOT EXISTS (SELECT 1 FROM jobs WHERE kind = $1 AND subject = $2 AND status = 'failed')
 ON CONFLICT (kind, subject) WHERE status IN ('queued', 'running')
-DO UPDATE SET priority = EXCLUDED.priority, payload = EXCLUDED.payload
+DO UPDATE SET priority = EXCLUDED.priority, payload = EXCLUDED.payload, run_at = least(jobs.run_at, EXCLUDED.run_at)
 WHERE jobs.status = 'queued' AND jobs.priority < EXCLUDED.priority
 RETURNING xmax = 0`,
 		kind, subject, payload, options.Priority, options.Delay.Seconds()).Scan(&inserted)
@@ -118,18 +120,21 @@ func scanJob(row pgx.Row) (Job, error) {
 }
 
 // claim 取出一个到期的任务并标记为运行中。没有任务时返回 pgx.ErrNoRows。
-// only 为 true 时只取 kinds 里的类型，为 false 时只取 kinds 以外的类型。
-func (q *Queue) claim(ctx context.Context, lease time.Duration, kinds []string, only bool) (Job, error) {
+// only 为 true 时只取 kinds 里的类型，为 false 时只取 kinds 以外的类型。只取优先级不低于 least 的。
+func (q *Queue) claim(ctx context.Context, lease time.Duration, kinds []string, only bool, least int) (Job, error) {
 	if kinds == nil {
 		kinds = []string{}
 	}
 	return scanJob(q.pool.QueryRow(ctx, `UPDATE jobs SET status = 'running', attempts = attempts + 1, attempted_at = now(),
 locked_until = now() + make_interval(secs => $1)
 WHERE id = (
-  SELECT id FROM jobs WHERE status = 'queued' AND run_at <= now() AND (kind = ANY($2)) = $3
+  SELECT id FROM jobs WHERE status = 'queued' AND run_at <= now() AND (kind = ANY($2)) = $3 AND priority >= $4
   ORDER BY priority DESC, run_at, id LIMIT 1 FOR UPDATE SKIP LOCKED
-) RETURNING `+jobColumns, lease.Seconds(), kinds, only))
+) RETURNING `+jobColumns, lease.Seconds(), kinds, only, least))
 }
+
+// anyPriority 是不限优先级时给 claim 的 least。
+const anyPriority = math.MinInt32
 
 // postpone 把任务放回队列，过一会儿再做，这一次不算失败。
 func (q *Queue) postpone(ctx context.Context, job Job, reason error, wait time.Duration) error {
@@ -341,8 +346,13 @@ type Lane struct {
 	// Hold 返回大于 0 表示这条通道现在先别取任务（比如对方让我们暂停），过这么久再看。
 	// 任务留在队列里原样不动，不会被白白取出来失败一次。
 	Hold func() time.Duration
+	// Urgent 大于 0 时，Hold 期间照样取优先级不低于它的任务：有人在等，处理函数可能有别的路可走
+	// （豆瓣的接口都停着时，有人开着的作品还能读详情网页）。走不通的照样按 Postpone 推迟。
+	Urgent int
 	// Postpone 判断一次失败是不是"对方让我们慢一点"。是的话任务放回队列稍后再做，不算一次失败
 	// （从第一次被推迟算起超过 3 天后不再这样处理，按普通失败算）。
+	// 推迟一分钟；Hold 更长时推迟到 Hold 结束；错误自己带着 RetryAfter() time.Duration 时（比如豆瓣某一个接口
+	// 暂停到几点），推迟到那时。只停了一部分接口时通道照常取任务，碰上停着的接口的任务不用每分钟取出来再失败一次。
 	Postpone func(error) bool
 }
 
@@ -407,25 +417,29 @@ func (w *Worker) Run(ctx context.Context) {
 			if index < reserved {
 				kinds = short
 			}
-			start(func() { w.loop(ctx, kinds, true, lane.Hold) })
+			start(func() { w.loop(ctx, kinds, true, lane.Hold, lane.Urgent) })
 		}
 	}
 	for range w.concurrency {
-		start(func() { w.loop(ctx, taken, false, nil) })
+		start(func() { w.loop(ctx, taken, false, nil, 0) })
 	}
 	start(func() { w.scheduler(ctx) })
 	wg.Wait()
 }
 
-func (w *Worker) loop(ctx context.Context, kinds []string, only bool, hold func() time.Duration) {
+func (w *Worker) loop(ctx context.Context, kinds []string, only bool, hold func() time.Duration, urgent int) {
 	for ctx.Err() == nil {
+		least := anyPriority
 		if hold != nil {
 			if wait := hold(); wait > 0 {
-				sleep(ctx, min(wait, time.Minute))
-				continue
+				if urgent <= 0 {
+					sleep(ctx, min(wait, time.Minute))
+					continue
+				}
+				least = urgent // 通道暂停着，只取有人在等的任务
 			}
 		}
-		worked, err := w.runOne(ctx, kinds, only)
+		worked, err := w.runOne(ctx, kinds, only, least)
 		if err != nil && ctx.Err() == nil {
 			w.log.Error("任务队列出错", "error", err)
 		}
@@ -455,10 +469,12 @@ func (w *Worker) laneOf(kind string) *Lane {
 }
 
 // RunOne 执行一个到期的任务，不分通道。没有任务时返回 false。
-func (w *Worker) RunOne(ctx context.Context) (bool, error) { return w.runOne(ctx, nil, false) }
+func (w *Worker) RunOne(ctx context.Context) (bool, error) {
+	return w.runOne(ctx, nil, false, anyPriority)
+}
 
-func (w *Worker) runOne(ctx context.Context, kinds []string, only bool) (bool, error) {
-	job, err := w.queue.claim(ctx, w.lease, kinds, only)
+func (w *Worker) runOne(ctx context.Context, kinds []string, only bool, least int) (bool, error) {
+	job, err := w.queue.claim(ctx, w.lease, kinds, only, least)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return false, nil
 	}
@@ -479,6 +495,10 @@ func (w *Worker) runOne(ctx context.Context, kinds []string, only bool) (bool, e
 		wait := time.Minute
 		if lane.Hold != nil {
 			wait = max(wait, lane.Hold())
+		}
+		var later interface{ RetryAfter() time.Duration }
+		if errors.As(runErr, &later) {
+			wait = max(wait, later.RetryAfter())
 		}
 		w.log.Info("任务推迟", "kind", job.Kind, "subject", job.Subject, "wait", wait.Round(time.Second), "reason", runErr)
 		return true, w.queue.postpone(context.WithoutCancel(ctx), job, runErr, wait)

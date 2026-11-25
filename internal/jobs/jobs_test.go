@@ -192,6 +192,48 @@ func TestHeldLaneKeepsJobsAndDoesNotBlockOthers(t *testing.T) {
 	}
 }
 
+// 通道暂停时，有人在等的任务（优先级不低于 Urgent）照样取出来，处理函数可能有别的路可走；别的原样留着。
+func TestHeldLaneStillRunsUrgentJobs(t *testing.T) {
+	queue, worker := newWorker(t)
+	ctx := context.Background()
+	var mu sync.Mutex
+	ran := map[string]bool{}
+	worker.Handle("douban", func(_ context.Context, job jobs.Job) error {
+		mu.Lock()
+		ran[job.Subject] = true
+		mu.Unlock()
+		return nil
+	})
+	worker.Lane(jobs.Lane{Kinds: []string{"douban"}, Hold: func() time.Duration { return time.Hour }, Urgent: 10})
+	queue.Enqueue(ctx, "douban", "viewing", jobs.Options{Priority: 20})
+	queue.Enqueue(ctx, "douban", "background", jobs.Options{Priority: 0})
+	runCtx, cancel := context.WithTimeout(ctx, 800*time.Millisecond)
+	defer cancel()
+	worker.Run(runCtx)
+	mu.Lock()
+	defer mu.Unlock()
+	if !ran["viewing"] || ran["background"] {
+		t.Errorf("暂停时只该做有人在等的任务: %v", ran)
+	}
+}
+
+// 推迟到以后的任务（比如被限流推迟了两小时），有人打开页面、以更高的优先级入队时提前到现在；优先级没变高的不动。
+func TestEnqueueWithHigherPriorityBringsJobForward(t *testing.T) {
+	queue, _ := newWorker(t)
+	pool := testdb.Pool(t)
+	ctx := context.Background()
+	queue.Enqueue(ctx, "douban", "x", jobs.Options{Priority: 5})
+	pool.Exec(ctx, `UPDATE jobs SET run_at = now() + interval '2 hours'`)
+	queue.Enqueue(ctx, "douban", "x", jobs.Options{Priority: 1})
+	if job, _, _ := queue.Latest(ctx, "douban", "x"); job.Priority != 5 || job.RunAt.Before(time.Now().Add(time.Hour)) {
+		t.Errorf("优先级没变高的不该提前: %+v", job)
+	}
+	queue.Enqueue(ctx, "douban", "x", jobs.Options{Priority: 20})
+	if job, _, _ := queue.Latest(ctx, "douban", "x"); job.Priority != 20 || job.RunAt.After(time.Now().Add(time.Second)) {
+		t.Errorf("有人在等时应该提前到现在: %+v", job)
+	}
+}
+
 // 长任务优先级再高，也占不满一条通道：留出的执行位照样做短任务。
 func TestLongJobsLeaveReservedLoops(t *testing.T) {
 	queue, worker := newWorker(t)
@@ -282,6 +324,33 @@ func TestPostponedFailureDoesNotCountAsAttempt(t *testing.T) {
 	job, _, _ := queue.Latest(ctx, "douban", "x")
 	if job.Status != "queued" || job.Attempts != 0 || job.LastError != "被限流了" || !job.RunAt.After(time.Now().Add(30*time.Second)) {
 		t.Errorf("被限流 5 次后任务应该还在排队、重试次数为 0、推迟到一分钟后: %+v", job)
+	}
+}
+
+// retryLater 是自己知道要等多久的限流错误，比如豆瓣某一个接口暂停到几点。
+type retryLater struct{ wait time.Duration }
+
+func (e retryLater) Error() string             { return "电影详情暂停中" }
+func (e retryLater) RetryAfter() time.Duration { return e.wait }
+
+// 错误自己带着要等多久时，任务推迟到那时：通道没停（别的接口还能用），这个任务也不用每分钟取出来再失败一次。
+func TestPostponeUntilRetryAfter(t *testing.T) {
+	queue, worker := newWorker(t)
+	ctx := context.Background()
+	worker.Handle("douban", func(context.Context, jobs.Job) error {
+		return fmt.Errorf("豆瓣详情: %w", retryLater{2 * time.Hour})
+	})
+	worker.Lane(jobs.Lane{Kinds: []string{"douban"}, Postpone: func(err error) bool {
+		var later retryLater
+		return errors.As(err, &later)
+	}})
+	queue.Enqueue(ctx, "douban", "x", jobs.Options{})
+	if worked, err := worker.RunOne(ctx); err != nil || !worked {
+		t.Fatalf("应该执行: %v %v", worked, err)
+	}
+	job, _, _ := queue.Latest(ctx, "douban", "x")
+	if job.Status != "queued" || job.Attempts != 0 || job.RunAt.Before(time.Now().Add(110*time.Minute)) {
+		t.Errorf("应该推迟到两小时后、不算失败: %+v", job)
 	}
 }
 

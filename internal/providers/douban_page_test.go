@@ -1,6 +1,8 @@
 package providers
 
 import (
+	"context"
+	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -54,6 +56,68 @@ func TestParseSubjectPage(t *testing.T) {
 		if !pageBlocked([]byte(blocked)) {
 			t.Errorf("应该认出验证页: %s", blocked)
 		}
+	}
+}
+
+// IP 被标记时立刻停 2 小时；恢复后又被标记就翻倍，最多 12 小时；成功一次后回到 2 小时。
+// 同一轮暂停里先后回来的几个被标记的请求不再翻倍，连续被限流的 10 分钟暂停也不会把它缩短。
+func TestPacerFlaggedPausesForHours(t *testing.T) {
+	near := func(until time.Time, want time.Duration) bool {
+		left := time.Until(until)
+		return left > want-time.Minute && left <= want
+	}
+	p := NewPacer(time.Second)
+	until := p.Flagged()
+	if !near(until, 2*time.Hour) {
+		t.Fatalf("第一次被标记应该停 2 小时: %s", time.Until(until))
+	}
+	if again := p.Flagged(); !again.Equal(until) {
+		t.Errorf("同一轮暂停里不该再翻倍: %s", time.Until(again))
+	}
+	for range 3 {
+		p.Throttled()
+	}
+	if _, paused := p.Status(); !paused.Equal(until) {
+		t.Errorf("连续被限流不该把暂停缩短: %s", time.Until(paused))
+	}
+	for _, want := range []time.Duration{4 * time.Hour, 8 * time.Hour, 12 * time.Hour, 12 * time.Hour} {
+		p.paused = time.Now().Add(-time.Second) // 这一轮暂停结束了，恢复后的第一个请求又被标记
+		if until := p.Flagged(); !near(until, want) {
+			t.Errorf("再被标记应该停 %s: %s", want, time.Until(until))
+		}
+	}
+	p.paused = time.Time{}
+	p.Succeeded()
+	if until := p.Flagged(); !near(until, 2*time.Hour) {
+		t.Errorf("成功一次之后应该回到 2 小时: %s", time.Until(until))
+	}
+}
+
+// 等不到轮到自己的请求（搜索页只等几秒）马上返回、不占时段；等到一半取消的，把时段还回去。
+// 否则一个没发出去的请求也会把后面的请求往后推一个间隔。
+func TestPacerDoesNotHoldSlotsForAbandonedWaits(t *testing.T) {
+	p := NewPacer(time.Second)
+	slot := time.Now().Add(300 * time.Millisecond)
+	p.next = slot
+	short, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	if err := p.Wait(short); !errors.Is(err, context.DeadlineExceeded) || time.Since(start) > 30*time.Millisecond {
+		t.Fatalf("等不到轮到自己时应该马上返回: %v，等了 %s", err, time.Since(start))
+	}
+	if !p.next.Equal(slot) {
+		t.Errorf("等不到的请求不该占时段: 下一个时段变成了 %s 之后", time.Until(p.next))
+	}
+	ctx, cancelWait := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		cancelWait()
+	}()
+	if err := p.Wait(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("取消后应该返回: %v", err)
+	}
+	if !p.next.Equal(slot) {
+		t.Errorf("取消的请求应该把时段还回去: 下一个时段变成了 %s 之后", time.Until(p.next))
 	}
 }
 

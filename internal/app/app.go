@@ -257,15 +257,14 @@ func (a *App) common(c *gin.Context) gin.H {
 // 等豆瓣的时候不占别的任务的位置，豆瓣让我们暂停的时候也只停这一条。
 var doubanKinds = []string{ingest.KindRefresh, ingest.KindCharts, doubansync.KindSync}
 
-// doubanPause 返回豆瓣还要暂停多久，没有暂停时为 0。
+// doubanPause 返回豆瓣的接口还要全部暂停多久，有一个接口能用就是 0。
+// 豆瓣分接口限流：只停了电影详情时，剧集的刷新、标记同步、榜单照常做，
+// 电影的刷新任务碰上暂停按 RetryAfter 推迟到恢复的时候（见 jobs.Lane.Postpone）。
 func (a *App) doubanPause() time.Duration {
-	if a.Ingest.Douban == nil || a.Ingest.Douban.Pace == nil {
+	if a.Ingest.Douban == nil {
 		return 0
 	}
-	if _, until := a.Ingest.Douban.Pace.Status(); !until.IsZero() {
-		return time.Until(until)
-	}
-	return 0
+	return a.Ingest.Douban.Paused()
 }
 
 // hongguoPause 返回红果还要暂停多久，没有暂停时为 0。
@@ -289,7 +288,8 @@ func (a *App) RegisterJobs(worker *jobs.Worker) {
 		// 用户同步一次要读很多页，最多占两个位置，留一个给单部作品和榜单，有人开着作品页时不用干等。
 		Kinds: doubanKinds, Loops: 3,
 		Long: []string{doubansync.KindSync}, Reserved: 1,
-		Hold:     a.doubanPause,
+		// 豆瓣的接口全停着时，有人在等的作品照样取出来：它们会改读详情网页，网页有自己的节奏。
+		Hold: a.doubanPause, Urgent: ingest.PriorityManual,
 		Postpone: func(err error) bool { return errors.Is(err, providers.ErrThrottled) },
 	})
 	// 红果单独一条通道：它限流、暂停时只停短剧，不影响豆瓣和别的任务。请求快慢由红果的限速统一控制。

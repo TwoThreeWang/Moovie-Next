@@ -256,7 +256,12 @@ func (s *Service) Refresh(ctx context.Context, id int64, job jobs.Job) error {
 	}
 	if m.DoubanID != "" {
 		first := "tv"
-		if m.Type == media.TypeMovie {
+		switch {
+		case m.Title == "":
+			// 只凭豆瓣 ID 收进来的（老链接、DiscoverDoubanID），类型是表里的默认值 movie，其实不知道。
+			// 告诉 Subject 不知道：电影详情被限流时还能试剧集详情。
+			first = ""
+		case m.Type == media.TypeMovie:
 			first = "movie"
 		}
 		subject, err := s.Douban.Subject(ctx, m.DoubanID, first)
@@ -665,11 +670,11 @@ func (s *Service) RefreshCharts(ctx context.Context) error {
 		siteWeight = 0
 	}
 
-	var failures []string
+	var failures []error
 	for _, kind := range ChartKinds {
 		items, err := s.Douban.Popular(ctx, kind)
 		if err != nil {
-			failures = append(failures, kind+": "+err.Error())
+			failures = append(failures, fmt.Errorf("%s: %w", kind, err))
 			continue
 		}
 		douban := make([]int64, 0, len(items))
@@ -695,7 +700,14 @@ func (s *Service) RefreshCharts(ctx context.Context) error {
 		}
 	}
 	if len(failures) == len(ChartKinds) {
-		return fmt.Errorf("所有榜单都刷新失败: %s", strings.Join(failures, "; "))
+		// 每个错误都包住，不只留文字：都是被限流时，任务队列要靠它们认出限流（ErrThrottled），
+		// 推迟到豆瓣恢复的时候（RetryAfter），而不是算一次失败、一分钟后再去打扰。
+		verbs := strings.TrimSuffix(strings.Repeat("%w; ", len(failures)), "; ")
+		args := make([]any, len(failures))
+		for index, failure := range failures {
+			args[index] = failure
+		}
+		return fmt.Errorf("所有榜单都刷新失败: "+verbs, args...)
 	}
 	return nil
 }

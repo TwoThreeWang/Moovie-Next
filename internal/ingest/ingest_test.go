@@ -2,6 +2,7 @@ package ingest_test
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"os"
@@ -166,6 +167,40 @@ func TestEnsureDoubanQueuesRefreshOnce(t *testing.T) {
 	m, _ := service.Media.Get(ctx, first)
 	if m.Title != "回声" || m.Year != 2024 || m.Type != media.TypeMovie {
 		t.Errorf("新建时应该先填入已知的基本信息: %+v", m)
+	}
+}
+
+// 榜单全都因为豆瓣暂停而失败时，错误里还认得出限流和要等多久：任务队列推迟到恢复，不算一次失败。
+func TestRefreshChartsKeepsThrottleErrors(t *testing.T) {
+	service, _ := newService(t)
+	service.Douban.Pace = providers.NewPacer(time.Millisecond)
+	service.Douban.Pace.Flagged()
+	err := service.RefreshCharts(context.Background())
+	var paused *providers.PausedError
+	if !errors.Is(err, providers.ErrThrottled) || !errors.As(err, &paused) || paused.RetryAfter() < time.Hour {
+		t.Fatalf("榜单的错误里应该还认得出限流和要等多久: %v", err)
+	}
+	if !strings.HasPrefix(err.Error(), "所有榜单都刷新失败: movie: ") {
+		t.Errorf("错误文字应该和原来一样: %s", err)
+	}
+}
+
+// 只凭豆瓣 ID 收进来的条目不知道是电影还是剧集：电影详情暂停着时，是剧集的照样能从剧集详情读到。
+func TestRefreshUnknownTypeDoesNotWaitForMovies(t *testing.T) {
+	service, fake := newService(t)
+	seedShow(fake)
+	service.Douban.MoviePace, service.Douban.TVPace = providers.NewPacer(time.Millisecond), providers.NewPacer(time.Millisecond)
+	service.Douban.MoviePace.Flagged()
+	ctx := context.Background()
+	id, err := service.EnsureDouban(ctx, providers.DoubanItem{ID: "36000001"}, "", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Refresh(ctx, id, jobs.Job{}); err != nil {
+		t.Fatalf("电影详情暂停时，不知道类型的剧集应该照样能刷新: %v", err)
+	}
+	if m, _ := service.Media.Get(ctx, id); m.Title != "雾港 第二季" || m.Type != media.TypeTV {
+		t.Errorf("应该读到剧集的资料: %+v", m)
 	}
 }
 
