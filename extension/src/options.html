@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>影牛插件设置</title>
+<link rel="stylesheet" href="ui.css">
+</head>
+<body class="options">
+<header class="head"><img src="icons/icon-32.png" width="28" height="28" alt=""><h1>影牛插件设置</h1></header>
+
+<section class="box">
+  <h2>功能</h2>
+  <form id="settings">
+    <label class="setting"><input type="checkbox" name="autoSync"><span><b>每天自动同步豆瓣标记</b><small>浏览器开着时，每天把豆瓣上新的想看、看过导入影牛一次。</small></span></label>
+    <label class="setting"><input type="checkbox" name="card"><span><b>豆瓣电影页显示影牛卡片</b><small>右侧栏顶部显示你在影牛的标记、看到第几集、收录它的片单和相似推荐。</small></span></label>
+    <label class="setting"><input type="checkbox" name="badges"><span><b>海报角标</b><small>在豆瓣的榜单、搜索、豆列和收藏页上，标出你在影牛的想看、看过。</small></span></label>
+    <label class="setting"><input type="checkbox" name="pageUpload"><span><b>打开豆瓣电影页时顺手更新影牛的资料</b><small>影牛上这部作品的资料缺了或者过期了，就把页面上的片名、海报、信息栏、简介交给影牛。不会多访问豆瓣，也不带你的豆瓣账号信息。</small></span></label>
+    <label class="setting"><input type="checkbox" name="contribute"><span><b>补全我标记过的作品资料</b><small>你同步过来的作品，影牛还没有资料的，由插件在后台慢慢去豆瓣取（不带 Cookie，7 秒以上一次，每天最多 300 部）。豆瓣一拒绝就停。</small></span></label>
+    <label class="setting"><input type="checkbox" name="helpOthers"><span><b>也帮影牛补全别的作品</b><small>你自己的补完以后，继续帮影牛取别人在等的作品资料，同样受上面的速度和数量限制。补得越多，主页上的称号越高。</small></span></label>
+    <label class="setting"><input type="checkbox" name="airing"><span><b>追剧更新提醒</b><small>你想看的、或者看过几集的剧有新一集时，弹出提醒。</small></span></label>
+    <label class="setting"><input type="checkbox" name="writeBack"><span><b>把在影牛上的标记写回豆瓣<span class="tag">实验</span></b><small>打开以后，你在影牛上新标记的想看、看过（带评分）会写到你的豆瓣账号上；以前的标记不会写回去，也不会写短评或删除豆瓣上的标记。用的是豆瓣网页按钮的接口，豆瓣改版后可能失效，失效时插件弹窗里会显示原因。</small></span></label>
+  </form>
+  <p class="dim" id="saved" hidden>已保存</p>
+</section>
+
+<section class="box">
+  <h2>备份我的豆瓣标记</h2>
+  <p>把你在豆瓣上的全部影视标记（看过、在看、想看，含评分、短评、标签和时间）下载到电脑上。需要这个浏览器登录着豆瓣。</p>
+  <p class="row"><button class="btn primary" id="backup-json" type="button">下载 JSON</button><button class="btn" id="backup-csv" type="button">下载 CSV（Excel 能打开）</button></p>
+  <p class="dim" id="backup-status"></p>
+</section>
+
+<section class="box">
+  <h2>连接</h2>
+  <p id="connection"></p>
+  <p class="row"><button class="btn danger" id="disconnect" type="button">断开连接</button></p>
+</section>
+
+<section class="box">
+  <h2>版本</h2>
+  <p id="version-line"></p>
+  <p class="row"><button class="btn" id="check-update" type="button">检查更新</button><a class="btn" id="guide" target="_blank">使用说明和更新方法</a></p>
+</section>
+<script type="module" src="options.js"></script>
+</body>
+</html>

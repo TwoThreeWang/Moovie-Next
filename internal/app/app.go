@@ -28,6 +28,7 @@ import (
 	"moovie/internal/danmaku"
 	"moovie/internal/db"
 	"moovie/internal/doubansync"
+	"moovie/internal/extapi"
 	"moovie/internal/feedback"
 	"moovie/internal/httpx"
 	"moovie/internal/imageproxy"
@@ -74,6 +75,7 @@ type App struct {
 	Trends      *trends.Store
 	Mail        *mail.Mailer
 	DoubanSync  *doubansync.Service
+	Ext         *extapi.Store
 	Queue       *jobs.Queue
 
 	render          *ui.Renderer
@@ -90,6 +92,9 @@ type App struct {
 	charts          chartCache
 	pow             *pow.Issuer
 	accounts        *auth.Handler
+	extZip          extensionState
+	extCalls        *httpx.Limiter // 插件每分钟的接口调用
+	extUploads      *httpx.Limiter // 插件每天交的作品资料
 }
 
 // Options 让测试可以替换外部依赖。
@@ -129,10 +134,13 @@ func New(cfg config.Config, pool *db.Pool, log *slog.Logger, options Options) (*
 		Social: social.NewStore(pool), Collections: collections.NewStore(pool), Feedback: feedback.NewStore(pool),
 		Positions: playback.NewStore(pool), Vault: vault.NewStore(pool), AdSkip: adskip.NewStore(pool),
 		Reports: report.NewService(pool), Queue: jobs.NewQueue(pool), Trends: trends.NewStore(pool), Ads: ads.NewStore(pool),
-		assetV:   strconv.FormatInt(time.Now().Unix(), 36),
-		resolve:  httpx.NewLimiter(120, time.Minute),
-		discover: httpx.NewLimiter(20, time.Minute),
-		searched: newRecentSet(10 * time.Minute), searchLog: httpx.NewLimiter(30, time.Minute),
+		Ext:        extapi.NewStore(pool),
+		extCalls:   httpx.NewLimiter(300, time.Minute),
+		extUploads: httpx.NewLimiter(1500, 24*time.Hour),
+		assetV:     strconv.FormatInt(time.Now().Unix(), 36),
+		resolve:    httpx.NewLimiter(120, time.Minute),
+		discover:   httpx.NewLimiter(20, time.Minute),
+		searched:   newRecentSet(10 * time.Minute), searchLog: httpx.NewLimiter(30, time.Minute),
 		collectionViews: httpx.NewLimiter(120, time.Minute),
 		images:          imageproxy.New(client, cfg.AppSecret),
 		pow:             options.PoW,
@@ -300,6 +308,8 @@ func (a *App) RegisterJobs(worker *jobs.Worker) {
 	worker.Every("collections.prune-views", 24*time.Hour, 0)
 	worker.Handle("mail.prune", func(ctx context.Context, _ jobs.Job) error { return a.Mail.Prune(ctx) })
 	worker.Every("mail.prune", 24*time.Hour, 0)
+	worker.Handle("extension.prune", func(ctx context.Context, _ jobs.Job) error { return a.Ext.Prune(ctx) })
+	worker.Every("extension.prune", 24*time.Hour, 0)
 }
 
 // Router 创建路由。HEAD 请求按 GET 处理，见 httpx.HeadAsGet。
@@ -353,6 +363,7 @@ func (a *App) Router() http.Handler {
 	// 登录墙：下面的所有页面和接口都需要登录。
 	member := site.Group("", auth.Require())
 	a.memberRoutes(member)
+	a.extensionRoutes(router, site, member)
 	playback.NewHandler(a.Positions).Register(site)
 	vaultHandler := vault.NewHandler(a.Vault)
 	vaultHandler.Register(site)

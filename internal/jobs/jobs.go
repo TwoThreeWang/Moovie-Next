@@ -177,6 +177,45 @@ func (q *Queue) SetProgress(ctx context.Context, jobID int64, progress any) erro
 	return err
 }
 
+// Drop 删掉某个对象还在排队（没有开始运行）的某种任务。正在运行的不动。
+func (q *Queue) Drop(ctx context.Context, kind, subject string) error {
+	_, err := q.pool.Exec(ctx, `DELETE FROM jobs WHERE kind = $1 AND subject = $2 AND status = 'queued'`, kind, subject)
+	return err
+}
+
+// Lend 把优先级低于 below 的几个到期任务借给别处去做（浏览器插件），最该先做的在前。
+// 借出的任务只是推迟 hold 再执行：别处做完了会用 Drop 删掉它；没做完，到时间 Worker 照常执行，不会丢。
+// 同一个任务在 hold 之内不会再借给第二个人。有人在等的任务（优先级不低于 below）不借：借出去万一没做完，那个人要多等 hold。
+func (q *Queue) Lend(ctx context.Context, kind string, below, limit int, hold time.Duration) ([]Job, error) {
+	rows, err := q.pool.Query(ctx, `UPDATE jobs SET run_at = now() + make_interval(secs => $3)
+WHERE id IN (SELECT id FROM jobs WHERE kind = $1 AND status = 'queued' AND run_at <= now() AND priority < $4
+  ORDER BY priority DESC, run_at, id LIMIT $2 FOR UPDATE SKIP LOCKED)
+RETURNING `+jobColumns, kind, limit, hold.Seconds(), below)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var lent []Job
+	for rows.Next() {
+		job, err := scanJob(rows)
+		if err != nil {
+			return nil, err
+		}
+		lent = append(lent, job)
+	}
+	return lent, rows.Err()
+}
+
+// Hold 把这几个对象排着的某种任务推迟到至少 hold 以后，用于别处正要去做的时候（见 Lend）。
+func (q *Queue) Hold(ctx context.Context, kind string, subjects []string, hold time.Duration) error {
+	if len(subjects) == 0 {
+		return nil
+	}
+	_, err := q.pool.Exec(ctx, `UPDATE jobs SET run_at = greatest(run_at, now() + make_interval(secs => $3))
+WHERE kind = $1 AND subject = ANY($2) AND status = 'queued'`, kind, subjects, hold.Seconds())
+	return err
+}
+
 // Latest 返回某个对象最近一次的某种任务。
 func (q *Queue) Latest(ctx context.Context, kind, subject string) (Job, bool, error) {
 	job, err := scanJob(q.pool.QueryRow(ctx, `SELECT `+jobColumns+` FROM jobs WHERE kind = $1 AND subject = $2 ORDER BY id DESC LIMIT 1`, kind, subject))

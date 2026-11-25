@@ -280,26 +280,7 @@ func (s *Service) Refresh(ctx context.Context, id int64, job jobs.Job) error {
 		if err != nil {
 			return fmt.Errorf("豆瓣详情: %w", err)
 		}
-		patch := media.Patch{}
-		patch.Set("media_type", doubanType(subject))
-		patch.Set("title", subject.Title)
-		patch.Set("original_title", subject.OriginalTitle)
-		patch.Set("year", subject.Year)
-		_, season := media.SplitSeason(subject.Title)
-		patch.Set("season", season)
-		patch.Set("episode_count", subject.EpisodesCount)
-		patch.Set("poster", subject.Poster)
-		patch.Set("summary", subject.Intro)
-		patch.Set("genres", subject.Genres)
-		patch.Set("countries", subject.Countries)
-		patch.Set("directors", subject.Directors)
-		patch.Set("actors", limit(subject.Actors, 12))
-		patch.Set("duration_minutes", subject.DurationMinutes)
-		patch.Set("rating_douban", subject.Rating)
-		if err := s.Media.ApplyPatch(ctx, id, media.ProviderDouban, patch); err != nil {
-			return err
-		}
-		if err := s.Media.AddAliases(ctx, id, subject.AKA...); err != nil {
+		if err := s.saveDouban(ctx, id, subject); err != nil {
 			return err
 		}
 	}
@@ -310,6 +291,51 @@ func (s *Service) Refresh(ctx context.Context, id int64, job jobs.Job) error {
 		return err
 	}
 	return s.next(ctx, KindEnrich, id, job)
+}
+
+// ApplyContributed 写入浏览器插件在用户的浏览器里取回的豆瓣详情（见 internal/app/extension.go），
+// 之后的步骤和服务器自己抓到时一样，按 priority 排补充资料。
+// 还排着的豆瓣任务随之取消：资料已经有了，不用服务器再去请求一次。
+func (s *Service) ApplyContributed(ctx context.Context, id int64, subject *providers.DoubanSubject, priority int) error {
+	if err := s.saveDouban(ctx, id, subject); err != nil {
+		return err
+	}
+	if err := s.Media.MarkSynced(ctx, id, "complete"); err != nil {
+		return err
+	}
+	if err := s.Media.ApplyBlockedKeywords(ctx, id); err != nil {
+		return err
+	}
+	subjectID := strconv.FormatInt(id, 10)
+	if err := s.Queue.Drop(ctx, KindRefresh, subjectID); err != nil {
+		return err
+	}
+	_, err := s.Queue.Enqueue(ctx, KindEnrich, subjectID, jobs.Options{Payload: Step{}, Priority: priority})
+	return err
+}
+
+// saveDouban 把豆瓣的详情写进作品库。豆瓣给的值总是写入。
+func (s *Service) saveDouban(ctx context.Context, id int64, subject *providers.DoubanSubject) error {
+	patch := media.Patch{}
+	patch.Set("media_type", doubanType(subject))
+	patch.Set("title", subject.Title)
+	patch.Set("original_title", subject.OriginalTitle)
+	patch.Set("year", subject.Year)
+	_, season := media.SplitSeason(subject.Title)
+	patch.Set("season", season)
+	patch.Set("episode_count", subject.EpisodesCount)
+	patch.Set("poster", subject.Poster)
+	patch.Set("summary", subject.Intro)
+	patch.Set("genres", subject.Genres)
+	patch.Set("countries", subject.Countries)
+	patch.Set("directors", subject.Directors)
+	patch.Set("actors", limit(subject.Actors, 12))
+	patch.Set("duration_minutes", subject.DurationMinutes)
+	patch.Set("rating_douban", subject.Rating)
+	if err := s.Media.ApplyPatch(ctx, id, media.ProviderDouban, patch); err != nil {
+		return err
+	}
+	return s.Media.AddAliases(ctx, id, subject.AKA...)
 }
 
 // Enrich 是第二步：从 Wikidata 拿外部 ID 和各语言片名，从 TMDB 拿剧照、分集和连载状态。

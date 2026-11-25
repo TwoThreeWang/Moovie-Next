@@ -1,7 +1,7 @@
 {{define "content"}}<main>
 <header class="page-head me-head user-head">
 <span class="avatar avatar-emoji lg">{{.Profile.Avatar}}</span>
-<div><h1 class="page-title">{{.Profile.Username}}</h1>{{if not .CollectionsOnly}}<p class="me-stats"><span><b>{{.WatchedCount}}</b>看过</span><span><b>{{.WishCount}}</b>想看</span><span><b>{{.Profile.Followers}}</b>关注者</span></p>{{end}}</div>
+<div><h1 class="page-title">{{.Profile.Username}}</h1>{{if not .CollectionsOnly}}<p class="me-stats"><span><b>{{.WatchedCount}}</b>看过</span><span><b>{{.WishCount}}</b>想看</span><span><b>{{.Profile.Followers}}</b>关注者</span>{{if .Tier.Level}}<a class="honor honor-{{.Tier.Level}}" href="/contributors" title="用浏览器插件帮影牛补全了 {{.Contributions}} 部作品的资料，看看贡献榜">{{.Tier.Title}}</a>{{end}}</p>{{end}}</div>
 {{if not .CollectionsOnly}}{{if .Self}}<a class="btn btn-glass" href="/settings#privacy">{{if .Profile.IsPublic}}已公开{{else}}未公开{{end}}</a>{{if .Profile.IsPublic}}<button class="btn btn-glass btn-icon" type="button" data-share data-url="{{.ShareURL}}" aria-label="分享主页"><svg class="i"><use href="#i-share"/></svg></button>{{end}}{{else if .User}}{{template "follow_button" dict "Profile" .Profile}}{{end}}{{end}}
 </header>
 {{if .Collections}}<section class="row" id="author-collections">

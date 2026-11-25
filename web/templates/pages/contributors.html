@@ -1,0 +1,10 @@
+{{define "content"}}<main class="narrow">
+<header class="page-head"><h1 class="page-title">贡献榜</h1><p class="hint">用<a href="/extension">浏览器插件</a>帮影牛补全作品资料最多的人。点名字可以进主页看看。只列出公开了主页的人。</p></header>
+{{if .Mine}}<p class="hint pad board-mine">你补全了 {{.Mine}} 部，称号「{{.MyTier.Title}}」。{{if not .MyPublic}}<a href="/settings#privacy">公开主页</a>以后就能上榜。{{end}}</p>{{end}}
+{{if .List}}<ol class="trends board pad">{{range $i, $p := .List}}<li><a href="/user/{{$p.UserID}}">
+<b class="rank{{if lt $i 3}} top{{end}}">{{add $i 1}}</b><span class="board-who"><span class="avatar avatar-emoji sm">{{$p.Avatar}}</span><span class="word">{{$p.Username}}</span><span class="honor honor-{{$p.Tier.Level}}">{{$p.Tier.Title}}</span></span>
+<span class="dim">{{$p.Count}} 部</span></a></li>{{end}}</ol>
+{{else}}<p class="empty">还没有人上榜。<a href="/extension">装上插件</a>帮影牛补全资料，第一个上榜的就是你。</p>{{end}}
+<p class="hint pad">称号按补全数量：1 部拾片人，50 部场记，200 部资料员，1000 部档案官，5000 部片库守护者，20000 部影史编修。</p>
+{{template "footer" .}}
+</main>{{end}}

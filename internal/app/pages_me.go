@@ -13,6 +13,7 @@ import (
 
 	"moovie/internal/auth"
 	"moovie/internal/doubansync"
+	"moovie/internal/extapi"
 	"moovie/internal/httpx"
 	"moovie/internal/library"
 	"moovie/internal/mail"
@@ -236,6 +237,14 @@ func (a *App) settingsPage(c *gin.Context) {
 	if user := auth.Current(c); user != nil && !slices.Contains(auth.Avatars, user.Avatar) {
 		data["CustomAvatar"] = user.Avatar
 	}
+	if user := auth.Current(c); user != nil {
+		count, last, err := a.Ext.Connected(c.Request.Context(), user.ID)
+		if err != nil {
+			a.fail(c, err)
+			return
+		}
+		data["ExtConnected"], data["ExtLastUsed"] = count, last
+	}
 	if message, ok := settingsMessages[c.Query("error")]; ok {
 		data["Error"] = message
 	}
@@ -404,6 +413,12 @@ func (a *App) userPage(c *gin.Context) {
 	}
 	data["SEO"] = SEO{Description: profile.Username + " 看过 " + strconv.Itoa(watchedCount) + " 部、想看 " + strconv.Itoa(wishCount) + " 部。", Canonical: a.absolute(path), Type: "profile", NoIndex: true}
 	data["WishCount"], data["WatchedCount"] = wishCount, watchedCount
+	contributions, err := a.Ext.Contributions(ctx, profile.ID)
+	if err != nil {
+		a.fail(c, err)
+		return
+	}
+	data["Contributions"], data["Tier"] = contributions, extapi.TierFor(contributions)
 	data["Watched"], data["Wish"], data["Comments"], data["Months"] = entryViews(watched), entryViews(wish), comments, months
 	a.render.Page(c, http.StatusOK, "user.html", data)
 }

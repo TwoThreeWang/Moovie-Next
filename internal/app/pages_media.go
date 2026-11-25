@@ -415,7 +415,9 @@ func (a *App) toggleWish(c *gin.Context) {
 	}
 	switch {
 	case !hasEntry:
-		_, err = a.Library.Save(ctx, user.ID, m.ID, library.StatusWish, 0, "")
+		if _, err = a.Library.Save(ctx, user.ID, m.ID, library.StatusWish, 0, ""); err == nil {
+			a.queueOutbox(c, m, library.StatusWish, 0)
+		}
 	case entry.Status == library.StatusWish:
 		err = a.Library.Remove(ctx, user.ID, m.ID)
 	}
@@ -462,6 +464,7 @@ func (a *App) markWatched(c *gin.Context) {
 		a.fail(c, err)
 		return
 	}
+	a.queueOutbox(c, m, library.StatusWatched, rating)
 	a.libraryActions(c, m.ID)
 }
 

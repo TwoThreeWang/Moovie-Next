@@ -46,7 +46,7 @@
 {{if $.User}}<form class="reply-form" hx-post="/api/comments/{{.CommentID}}/replies" hx-target="#r-{{.CommentID}}" hx-swap="innerHTML">
 <input name="content" maxlength="300" placeholder="回复…" autocomplete="off" required><button class="btn btn-primary">发送</button></form>{{else}}<p class="hint"><a href="/auth/login">登录</a>后可以回复。</p>{{end}}{{end}}
 
-{{define "fetching"}}<div class="fetching" id="fetching"{{if not .GiveUp}} hx-get="/api/htmx/m/{{.ID}}/ready?n={{.Attempt}}" hx-trigger="load delay:3s" hx-swap="outerHTML"{{end}}>
+{{define "fetching"}}<div class="fetching" id="fetching"{{with .Douban}} data-douban="{{.}}"{{end}}{{with .Type}} data-type="{{.}}"{{end}}{{if not .GiveUp}} hx-get="/api/htmx/m/{{.ID}}/ready?n={{.Attempt}}" hx-trigger="load delay:3s" hx-swap="outerHTML"{{end}}>
 {{if .GiveUp}}<span>资料还没获取到，可能是豆瓣暂时访问不了。稍后再来看看。</span>
 {{else}}<span class="spinner" aria-hidden="true"></span><span>正在从豆瓣获取完整资料，好了会自动刷新…</span>{{end}}</div>{{end}}
 

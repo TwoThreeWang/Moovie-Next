@@ -1,0 +1,21 @@
+{{define "content"}}<main class="narrow ext-connect">
+<header class="page-head"><h1 class="page-title">连接浏览器插件</h1></header>
+{{if .Token}}
+<div id="moovie-ext-token" data-token="{{.Token}}" hidden></div>
+<p class="flash" id="ext-connect-status" role="status">正在把连接交给插件…</p>
+<p class="hint pad" id="ext-missing" hidden>没检测到插件。请先<a href="/extension">安装插件</a>，装好后在插件弹窗里点「连接影牛账号」，重新打开这一页。</p>
+{{else}}
+<section class="card-panel"><h2>允许影牛豆瓣助手访问你的账号</h2>
+<p>连接以后，插件可以：</p>
+<ul class="doc-list">
+<li>把你的豆瓣想看、看过导入这个账号；</li>
+<li>读取你在影牛的标记和播放进度，显示在豆瓣页面上；</li>
+<li>在豆瓣页面上替你在影牛标记想看、看过，把豆列导入成片单；</li>
+<li>帮影牛补全作品资料，补得越多，主页上的称号越高。</li>
+</ul>
+<p class="hint">插件拿到的是一个单独的凭证，不是你的密码。改密码会让它失效；也可以随时在「设置 → 浏览器插件」断开。</p>
+<form method="post" action="/extension/connect" class="form"><input type="hidden" name="_csrf" value="{{.CSRF}}"><div class="form-actions"><button class="btn btn-primary">允许连接</button><a class="btn btn-glass" href="/extension">插件说明</a></div></form>
+<p class="notice" id="ext-not-installed" hidden>这个浏览器好像还没有装插件，请先<a href="/extension">下载安装</a>，再回到这一页。</p>
+</section>
+{{end}}
+</main>{{end}}

@@ -1,0 +1,61 @@
+/* 影牛插件在豆瓣页面上加的东西，类名都以 moovie- 开头，不碰豆瓣自己的样式。 */
+.moovie-card {
+  margin: 0 0 24px;
+  padding: 12px 14px;
+  border: 1px solid #e3e3e3;
+  border-radius: 6px;
+  background: #fbfaf7;
+  font-size: 13px;
+  line-height: 1.6;
+  color: #333;
+}
+.moovie-card-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+  font-size: 14px;
+}
+.moovie-card-head img { border-radius: 4px; }
+.moovie-card p { margin: 0 0 8px; }
+.moovie-card h4 { margin: 10px 0 4px; font-size: 13px; color: #666; font-weight: normal; }
+.moovie-card ul { margin: 0; padding: 0 0 0 16px; }
+.moovie-card li { margin: 2px 0; }
+.moovie-dim { color: #888; }
+.moovie-progress { color: #c06a00; }
+.moovie-actions { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0; }
+.moovie-btn {
+  display: inline-block;
+  padding: 3px 10px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  background: #fff;
+  color: #333 !important;
+  font-size: 13px;
+  line-height: 20px;
+  cursor: pointer;
+  text-decoration: none !important;
+}
+.moovie-btn:hover { border-color: #999; background: #f4f4f4 !important; }
+.moovie-btn:disabled { opacity: 0.6; cursor: default; }
+.moovie-primary { border-color: #e0a030; background: #f5b335; color: #222 !important; }
+.moovie-primary:hover { background: #eaa520 !important; border-color: #c88a10; }
+.moovie-on { border-color: #e0a030; background: #fff4dc; }
+.moovie-block { margin-top: 6px; }
+.moovie-badge {
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  z-index: 2;
+  padding: 0 6px;
+  border-radius: 3px;
+  background: rgba(20, 20, 20, 0.78);
+  color: #ffd27a;
+  font-size: 12px;
+  line-height: 18px;
+  pointer-events: none;
+  white-space: nowrap;
+}
+.moovie-badge-wish { color: #9fd3ff; }
+.moovie-doulist-btn { margin-left: 12px; vertical-align: middle; font-size: 13px; }
+.moovie-doulist-status { margin-left: 8px; font-size: 13px; font-weight: normal; color: #888; vertical-align: middle; }

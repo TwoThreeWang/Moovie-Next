@@ -14,5 +14,10 @@ web/**
 !web/templates/**
 !web/static/
 !web/static/**
+!extension/
+!extension/embed.go
+!extension/releases.json
+!extension/src/
+!extension/src/**
 **/*_test.go
 **/.DS_Store

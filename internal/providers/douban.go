@@ -325,33 +325,61 @@ func (d *Douban) Subject(ctx context.Context, id, first string) (*DoubanSubject,
 			notFound++
 			continue
 		}
-		if response.Type == "movie" || response.Type == "tv" {
-			kind = response.Type
-		}
-		subject := &DoubanSubject{
-			ID: response.ID, Kind: kind, Title: response.Title, OriginalTitle: response.OriginalTitle, AKA: response.AKA,
-			Intro: strings.TrimSpace(response.Intro), Poster: response.Pic.Large, Genres: response.Genres, Countries: response.Countries,
-			Rating: response.Rating.Value, EpisodesCount: response.EpisodesCount, IsShow: response.IsShow,
-		}
-		if subject.Poster == "" {
-			subject.Poster = response.CoverURL
-		}
-		subject.Year, _ = strconv.Atoi(leadingNumber.FindString(response.Year))
-		if len(response.Durations) > 0 {
-			subject.DurationMinutes, _ = strconv.Atoi(leadingNumber.FindString(response.Durations[0]))
-		}
-		for _, person := range response.Directors {
-			subject.Directors = append(subject.Directors, person.Name)
-		}
-		for _, person := range response.Actors {
-			subject.Actors = append(subject.Actors, person.Name)
-		}
-		return subject, nil
+		return response.subject(kind), nil
 	}
 	if notFound == 2 {
 		return nil, ErrNotFound
 	}
 	return nil, lastErr
+}
+
+// subject 把详情接口的回答整理成 DoubanSubject。kind 是请求的哪个接口；回答里写了类型时以回答为准。
+func (r rexxarSubject) subject(kind string) *DoubanSubject {
+	if r.Type == "movie" || r.Type == "tv" {
+		kind = r.Type
+	}
+	subject := &DoubanSubject{
+		ID: r.ID, Kind: kind, Title: r.Title, OriginalTitle: r.OriginalTitle, AKA: r.AKA,
+		Intro: strings.TrimSpace(r.Intro), Poster: r.Pic.Large, Genres: r.Genres, Countries: r.Countries,
+		Rating: r.Rating.Value, EpisodesCount: r.EpisodesCount, IsShow: r.IsShow,
+	}
+	if subject.Poster == "" {
+		subject.Poster = r.CoverURL
+	}
+	subject.Year, _ = strconv.Atoi(leadingNumber.FindString(r.Year))
+	if len(r.Durations) > 0 {
+		subject.DurationMinutes, _ = strconv.Atoi(leadingNumber.FindString(r.Durations[0]))
+	}
+	for _, person := range r.Directors {
+		subject.Directors = append(subject.Directors, person.Name)
+	}
+	for _, person := range r.Actors {
+		subject.Actors = append(subject.Actors, person.Name)
+	}
+	return subject
+}
+
+// DecodeSubject 解析详情接口（/rexxar/api/v2/movie/<id> 或 /tv/<id>）的原始回答。
+// 浏览器插件在用户的浏览器里请求这个接口，把回答原样交给服务器，解析和服务器自己请求时完全一样。
+// 回答里没有 ID 或片名时返回 ErrNotFound。
+func DecodeSubject(body []byte, kind string) (*DoubanSubject, error) {
+	var response rexxarSubject
+	if err := json.Unmarshal(body, &response); err != nil {
+		return nil, fmt.Errorf("解析豆瓣详情: %w", err)
+	}
+	if response.ID == "" || response.Title == "" {
+		return nil, ErrNotFound
+	}
+	return response.subject(kind), nil
+}
+
+// ParseSubjectPage 从详情网页（movie.douban.com/subject/<id>/）的 HTML 里取出资料，和 SubjectPage 的解析一样。
+// 浏览器插件在用户打开的详情页上摘出资料所在的几块交给服务器。
+func ParseSubjectPage(id string, page []byte) (*DoubanSubject, error) {
+	if pageBlocked(page) {
+		return nil, errors.New("不是豆瓣的详情网页")
+	}
+	return parseSubjectPage(id, page)
 }
 
 // DoubanItem 是榜单或联想里的一条结果。
@@ -547,36 +575,53 @@ type DoubanInterest struct {
 	CreatedAt time.Time
 }
 
-// Interests 读取某个豆瓣用户的标记。status 取 mark（想看）或 done（看过）。返回这一页的标记和总数。
-func (d *Douban) Interests(ctx context.Context, userID, status string, start, count int) ([]DoubanInterest, int, error) {
-	var response struct {
-		Total     int `json:"total"`
-		Interests []struct {
-			Comment    string `json:"comment"`
-			CreateTime string `json:"create_time"`
-			Rating     *struct {
+// rexxarInterests 是标记列表接口（/rexxar/api/v2/user/<id>/interests）的回答。
+type rexxarInterests struct {
+	Total     int `json:"total"`
+	Interests []struct {
+		Comment    string `json:"comment"`
+		CreateTime string `json:"create_time"`
+		Rating     *struct {
+			Value float64 `json:"value"`
+		} `json:"rating"`
+		Subject struct {
+			ID    json.Number `json:"id"`
+			Title string      `json:"title"`
+			Type  string      `json:"type"`
+			Year  string      `json:"year"`
+			Cover string      `json:"cover_url"`
+			Pic   struct {
+				Large string `json:"large"`
+			} `json:"pic"`
+			Rating *struct {
 				Value float64 `json:"value"`
 			} `json:"rating"`
-			Subject struct {
-				ID    json.Number `json:"id"`
-				Title string      `json:"title"`
-				Type  string      `json:"type"`
-				Year  string      `json:"year"`
-				Cover string      `json:"cover_url"`
-				Pic   struct {
-					Large string `json:"large"`
-				} `json:"pic"`
-				Rating *struct {
-					Value float64 `json:"value"`
-				} `json:"rating"`
-			} `json:"subject"`
-		} `json:"interests"`
-	}
+		} `json:"subject"`
+	} `json:"interests"`
+}
+
+// Interests 读取某个豆瓣用户的标记。status 取 mark（想看）或 done（看过）。返回这一页的标记和总数。
+func (d *Douban) Interests(ctx context.Context, userID, status string, start, count int) ([]DoubanInterest, int, error) {
+	var response rexxarInterests
 	endpoint := fmt.Sprintf("%s/rexxar/api/v2/user/%s/interests?type=movie&status=%s&start=%d&count=%d&ck=&for_mobile=1",
 		d.MobileBase, url.PathEscape(userID), url.QueryEscape(status), start, count)
 	if err := d.getJSON(ctx, endpoint, "https://m.douban.com/", &response); err != nil {
 		return nil, 0, err
 	}
+	return response.interests(), response.Total, nil
+}
+
+// DecodeInterests 解析标记列表接口的原始回答，返回这一页的标记和总数。
+// 浏览器插件用用户自己的登录状态读这个接口（标记不公开的账号也能读），把回答原样交给服务器。
+func DecodeInterests(body []byte) ([]DoubanInterest, int, error) {
+	var response rexxarInterests
+	if err := json.Unmarshal(body, &response); err != nil {
+		return nil, 0, fmt.Errorf("解析豆瓣标记: %w", err)
+	}
+	return response.interests(), response.Total, nil
+}
+
+func (response rexxarInterests) interests() []DoubanInterest {
 	interests := make([]DoubanInterest, 0, len(response.Interests))
 	for _, entry := range response.Interests {
 		poster := entry.Subject.Pic.Large
@@ -597,7 +642,7 @@ func (d *Douban) Interests(ctx context.Context, userID, status string, start, co
 		interest.CreatedAt, _ = time.ParseInLocation("2006-01-02 15:04:05", entry.CreateTime, time.Local)
 		interests = append(interests, interest)
 	}
-	return interests, response.Total, nil
+	return interests
 }
 
 // DoubanRecent 是用户 RSS 里的一条最近动态。

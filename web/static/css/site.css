@@ -29,6 +29,19 @@
 .btn.is-on { background: rgba(255, 255, 255, .9); color: var(--on-accent); }
 .lib { display: contents; }
 .me-stats a b { color: var(--text); }
+/* 用插件补全资料得到的称号：等级越高颜色越亮，铜、银、金、翠、蓝、紫 */
+.honor { display: inline-flex; align-items: center; padding: 2px 10px; border-radius: 99px; font-size: 12px; font-weight: 650; white-space: nowrap; color: var(--tier); background: color-mix(in srgb, var(--tier) 16%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--tier) 45%, transparent); }
+.me-stats .honor { align-self: center; }
+/* 贡献榜：沿用热搜榜的行，换成头像、名字、称号 */
+.board a { grid-template-rows: auto; }
+.board-who { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.board-mine { margin-bottom: 8px; }
+.honor-1 { --tier: #d08b5b; }
+.honor-2 { --tier: #c7d0da; }
+.honor-3 { --tier: var(--gold); }
+.honor-4 { --tier: #4fd1a5; }
+.honor-5 { --tier: #6aa8ff; }
+.honor-6 { --tier: #c58cff; }
 .card-art-local { background: linear-gradient(140deg, #2b2b36, #17171c); }
 .card-art-local img { width: 100%; height: 100%; object-fit: cover; position: relative; }
 /* 没有海报或海报加载失败时：显示片名的第一个字 */
@@ -344,6 +357,16 @@ body.bare .doc { margin: 0 auto; }
 .benefits li { padding: 14px; border-radius: 12px; background: var(--bg-2); display: grid; gap: 4px; font-size: 14px; }
 .benefits li span { color: var(--text-3); font-size: 13px; }
 .notice { padding: 12px 14px; border-radius: 12px; background: rgba(255, 204, 77, .1); color: #ffd67a; font-size: 14px; line-height: 1.6; }
+/* 浏览器插件的说明页、连接页，设置页里的安装提醒 */
+.doc-list { margin: 0; padding-left: 20px; display: grid; gap: 6px; color: var(--text-2); font-size: 14px; line-height: 1.7; }
+.faq { list-style: none; margin: 0; padding: 0; display: grid; gap: 14px; }
+.faq b { display: block; margin-bottom: 2px; }
+.faq p { color: var(--text-2); font-size: 14px; }
+.ext-release + .ext-release { margin-top: 14px; }
+.ext-release p { margin-bottom: 4px; }
+.ext-download .btn { margin: 4px 0 8px; }
+.ext-notice { margin: 0 0 14px; display: grid; gap: 8px; }
+.ext-notice a:not(.btn) { text-decoration: underline; text-underline-offset: 3px; }
 .install-done { display: none; }
 @media (display-mode: standalone) { .install-done { display: block; } .install-todo { display: none; } }
 .paste-row { display: flex; gap: 8px; width: 100%; }

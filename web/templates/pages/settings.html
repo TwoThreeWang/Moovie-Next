@@ -47,16 +47,24 @@
 
 <section class="card-panel" id="douban">
 <h2>豆瓣同步</h2>
-{{if .User.DoubanUserID}}<p>已绑定豆瓣账号 <b>{{.User.DoubanUserID}}</b>。同步会把豆瓣上的想看和看过导入本站，不会覆盖你在本站已有的标记。</p>
+{{if .ExtConnected}}<p class="hint">已连接<a href="/extension">浏览器插件</a>：同步在你自己的浏览器里完成，不受服务器那边豆瓣限流的影响，标记不公开的账号也能同步。插件每天自动同步一次，也可以在插件弹窗里点「立即同步」。</p>
+{{else}}<div class="notice ext-notice"><p><b>推荐安装浏览器插件来同步。</b>不装插件时由服务器替你去豆瓣读取，豆瓣经常限流，同步可能不及时，甚至失败；标记不公开的账号也只能用插件同步。</p><p><a class="btn btn-primary" href="/extension">安装插件</a> <span class="hint" data-ext-installed hidden>检测到这个浏览器已经装了插件，打开插件连接一下账号就行。</span></p></div>
+{{end}}{{if .User.DoubanUserID}}<p>已绑定豆瓣账号 <b>{{.User.DoubanUserID}}</b>。同步会把豆瓣上的想看和看过导入本站，不会覆盖你在本站已有的标记。</p>
 <div hx-get="/api/htmx/douban-status" hx-trigger="load" hx-swap="outerHTML"></div>
 <form class="form" method="post" action="/settings/douban/unbind"><input type="hidden" name="_csrf" value="{{.CSRF}}"><div class="form-actions"><button class="btn btn-glass danger">解除绑定</button></div></form>
 {{else}}<form class="form" method="post" action="/settings/douban/bind"><input type="hidden" name="_csrf" value="{{.CSRF}}">
 <label>豆瓣 ID<input name="douban_user_id" maxlength="40" placeholder="个人主页地址 douban.com/people/ 后面的那一段" required></label>
-<p class="hint">需要你的豆瓣标记是公开的。</p>
+<p class="hint">不装插件时，需要你的豆瓣标记是公开的。装了插件不用填，连接后会自动绑定这个浏览器登录的豆瓣账号。</p>
 <div class="form-actions"><button class="btn btn-primary">绑定</button></div></form>{{end}}
 </section>
 
-<section class="card-panel" id="account">
+{{if .ExtConnected}}<section class="card-panel" id="extension">
+<h2>浏览器插件</h2>
+<p>有 {{.ExtConnected}} 个浏览器连着插件{{with .ExtLastUsed}}，最近一次使用是{{timeago .}}{{end}}。不再用的电脑上，可以在这里全部断开。</p>
+<form class="form" method="post" action="/settings/extension/revoke"><input type="hidden" name="_csrf" value="{{.CSRF}}"><div class="form-actions"><button class="btn btn-glass danger">断开全部插件</button><a class="btn btn-glass" href="/extension">插件说明</a></div></form>
+</section>
+
+{{end}}<section class="card-panel" id="account">
 <h2>账号</h2>
 <form class="form" method="post" action="/settings/avatar"><input type="hidden" name="_csrf" value="{{.CSRF}}">
 <fieldset class="avatars"><legend>头像</legend>{{range .Avatars}}<label><input type="radio" name="avatar" value="{{.}}"{{if eq $.User.Avatar .}} checked{{end}}><span class="avatar avatar-emoji">{{.}}</span></label>{{end}}<label class="avatar-custom"><input type="radio" name="avatar" value="{{.CustomAvatar}}" id="avatar-custom-radio"{{if .CustomAvatar}} checked{{end}}><input class="avatar avatar-emoji" id="avatar-custom" value="{{.CustomAvatar}}" placeholder="+" maxlength="16" autocomplete="off" aria-label="自定义头像：输入一个 emoji"></label></fieldset>

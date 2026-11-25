@@ -337,7 +337,7 @@ func (a *App) mediaReady(c *gin.Context) {
 		c.Status(http.StatusOK)
 		return
 	}
-	a.render.Partial(c, "fetching", gin.H{"ID": m.ID, "Attempt": attempt + 1, "GiveUp": attempt >= 20})
+	a.render.Partial(c, "fetching", gin.H{"ID": m.ID, "Attempt": attempt + 1, "GiveUp": attempt >= 20, "Douban": m.DoubanID, "Type": m.Type})
 }
 
 // ---------- robots.txt 和站点地图 ----------

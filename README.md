@@ -85,6 +85,10 @@ go test ./...
 cd web && npm test
 ```
 
+```bash
+node --test extension/test/
+```
+
 Go 测试需要数据库：每个包在自己的临时 schema 里运行，不碰 `public`；用 `TEST_DATABASE_URL` 可以指定单独的测试库。前端测试用 Node 自带的测试框架，覆盖 `web/static/js/lib` 和 `core` 里的逻辑。测试留下的临时 schema 可以这样清理：
 
 ```bash
@@ -138,6 +142,7 @@ go run ./cmd/testclean
 | `web/static/js/core`、`pages` | 查源引擎、同步、本地存储；各页面的脚本 |
 | `web/jstest` | 前端测试 |
 | `docs` | 设计决策和各模块的详细设计 |
+| `extension` | 浏览器插件（`src/` 是插件本身，网站打包提供下载；`releases.json` 是插件的发布记录） |
 | `前端设计demo` | 早期的静态界面原型，只作参考，不参与构建 |
 
 ## 文档
@@ -155,6 +160,7 @@ go run ./cmd/testclean
 | [数据库](docs/database.md) | 迁移、每张表的用途、schema |
 | [从已有数据初始化](docs/bootstrap.md) | 导入已有的影视资料、临时示例订阅 |
 | [部署](docs/deploy.md) | Docker Compose、反向代理、CDN、资源和构建缓存 |
+| [浏览器插件](docs/extension.md) | 豆瓣同步、补全资料、豆瓣页面上的卡片和角标；连接、打包和更新 |
 
 ## 版本与更新记录
 
@@ -170,6 +176,7 @@ go run ./cmd/testclean
 
 - 豆瓣的抓取、TMDB 和 Wikidata 的同步只用假服务器测过，没有对真实接口跑过完整流程。
 - 第三方弹幕库（dandanplay 协议）只用假服务器测过。
+- 浏览器插件里需要豆瓣登录的部分（同步标记、备份、写回豆瓣）没有用真实的豆瓣账号跑过；写回豆瓣用的是豆瓣网页按钮的接口，没有验证过。
 - 没有在真机上测过 iPhone 的系统播放器、触屏手势、长按三倍速和锁定按钮，也没有测过 AirPlay。
 - 没有用真实的 SMTP 服务器发过信；正式上线前要配好 SPF、DKIM、DMARC 再实测各家邮箱（QQ、163、Gmail、Outlook）能否收到。
 - 分享卡片只在 Chromium 里看过效果，没有在 iPhone Safari 和微信内置浏览器里实测；TMDB 的海报跨域加载失败时卡片上会是占位色块。

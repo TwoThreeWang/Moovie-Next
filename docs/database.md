@@ -9,12 +9,13 @@ PostgreSQL，需要 `vector` 和 `pg_trgm` 两个扩展。启动时自动执行 
 | `0003_collection_submissions.sql` | 片单的投稿状态、收藏、去重浏览，以及片单通知 |
 | `0004_collection_revisions.sql` | 已发布片单的修改稿 |
 | `0005_example_subscription_users.sql` | 临时：从旧版迁移过来、第一次登录时要填入示例订阅的账号（见 [从已有数据初始化](bootstrap.md#临时示例订阅)） |
+| `0011_extension.sql` | 浏览器插件：连接凭证、插件同步时间、贡献记录、写回豆瓣的待办（见 [浏览器插件](extension.md)） |
 
 新增表结构时加一个新的迁移文件，不修改已经上线的文件。
 
 ## 有哪些表
 
-一共 28 张业务表（另有一张迁移记录表 `schema_migrations`）。留下来的标准是：**别处推不出来、又确实有人读**。能算出来的现算，只写不读的不存。
+一共 32 张业务表（另有一张迁移记录表 `schema_migrations`）。留下来的标准是：**别处推不出来、又确实有人读**。能算出来的现算，只写不读的不存。
 
 | 用途 | 表 | 为什么需要 |
 | --- | --- | --- |
@@ -23,7 +24,8 @@ PostgreSQL，需要 `vector` 和 `pg_trgm` 两个扩展。启动时自动执行 
 | 标记和社区 | `user_movies`、`comment_likes`、`comment_replies`、`danmakus`、`feedbacks`、`feedback_messages`、`notifications` | 都是用户产生的内容，没法从别处得到 |
 | 片单 | `collections`、`collection_items`、`collection_favorites`、`collection_views` | 片单和其中的作品；收藏（取消后保留一行，再收藏时重新计时）；按天去重的浏览，只留最近 7 天，用于热门排序 |
 | 播放 | `playback_positions`、`watch_days`、`private_history`、`ad_fingerprints` | 进度；哪些天看过（进度表只留最后一次，算不出连续天数）；加密历史；广告指纹的票数 |
-| 运营 | `blocked_keywords`、`search_counts`、`mail_log`、`image_mirrors`、`jobs` | 屏蔽词；每天每个词的搜索次数；发信限流；图片在 Telegram 的文件编号；后台任务队列 |
+| 运营 | `blocked_keywords`、`search_counts`、`mail_log`、`image_mirrors`、`jobs`、`ads` | 屏蔽词；每天每个词的搜索次数；发信限流；图片在 Telegram 的文件编号；后台任务队列；站内广告位 |
+| 浏览器插件 | `extension_tokens`、`media_contributions`、`douban_outbox` | 插件的连接凭证（只存哈希）；谁用插件补全过哪部作品（主页称号、追查假资料）；等插件写回豆瓣的标记，保留 30 天 |
 
 `media` 上和采集有关的列：`metadata_synced_at`（豆瓣或红果同步时间）、`enriched_at`（Wikidata / TMDB 补充时间）、`semantic_text` 和 `semantic_hash`（AI 写的描述和所用资料的哈希）、`embedding`（向量）。失败次数、冷却期这些不另外存，看 `jobs` 表里的失败记录就够了。
 

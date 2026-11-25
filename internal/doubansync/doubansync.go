@@ -112,8 +112,10 @@ func (s *Service) Start(ctx context.Context, userID int64) (bool, error) {
 
 // StartAll 给所有绑定了豆瓣的用户各排一次增量同步。豆瓣的标记按时间倒序排列，
 // 没有新标记的用户只要读第一页就结束，每人每天两次请求（看过、想看各一次）。
+// 最近由浏览器插件同步过的用户跳过（见 extSyncFresh）。
 func (s *Service) StartAll(ctx context.Context) error {
-	rows, err := s.Pool.Query(ctx, `SELECT id FROM users WHERE douban_user_id <> '' AND restriction <> 'ban' ORDER BY id`)
+	rows, err := s.Pool.Query(ctx, `SELECT id FROM users WHERE douban_user_id <> '' AND restriction <> 'ban'
+AND (douban_ext_synced_at IS NULL OR douban_ext_synced_at < now() - make_interval(secs => $1)) ORDER BY id`, extSyncFresh.Seconds())
 	if err != nil {
 		return err
 	}
@@ -203,27 +205,13 @@ func (s *Service) Sync(ctx context.Context, userID int64, full bool, report func
 			if start == 0 {
 				progress.Total += total
 			}
-			changed := 0
-			for _, interest := range interests {
-				progress.Processed++
-				if !media.ValidDoubanID(interest.Item.ID) {
-					continue // 不是合法的条目 ID，再试多少次也收不进来，不算失败
-				}
-				mediaID, err := s.Catalog.EnsureDouban(ctx, interest.Item, "", importPriority)
-				if err != nil {
-					progress.Failed++
-					changed++ // 没能处理的也算"这一页还没读完整"，不能据此提前结束
-					continue
-				}
-				imported, err := s.importOne(ctx, userID, mediaID, pass.status, interest)
-				if err != nil {
-					return err
-				}
-				if imported {
-					progress.Imported++
-					changed++
-				}
+			page, changed, err := s.importPage(ctx, userID, pass.status, interests)
+			if err != nil {
+				return err
 			}
+			progress.Processed += page.Processed
+			progress.Imported += page.Imported
+			progress.Failed += page.Failed
 			if report != nil {
 				report(progress)
 			}
@@ -233,6 +221,85 @@ func (s *Service) Sync(ctx context.Context, userID int64, full bool, report func
 		}
 	}
 	return nil
+}
+
+// importPage 导入一页标记。changed 是这一页里新导入的加上没能处理的：为 0 说明这一页都已经导入过，增量同步可以停了。
+func (s *Service) importPage(ctx context.Context, userID int64, status string, interests []providers.DoubanInterest) (progress Progress, changed int, err error) {
+	for _, interest := range interests {
+		progress.Processed++
+		if !media.ValidDoubanID(interest.Item.ID) {
+			continue // 不是合法的条目 ID，再试多少次也收不进来，不算失败
+		}
+		mediaID, err := s.Catalog.EnsureDouban(ctx, interest.Item, "", importPriority)
+		if err != nil {
+			progress.Failed++
+			changed++ // 没能处理的也算"这一页还没读完整"，不能据此提前结束
+			continue
+		}
+		imported, err := s.importOne(ctx, userID, mediaID, status, interest)
+		if err != nil {
+			return progress, changed, err
+		}
+		if imported {
+			progress.Imported++
+			changed++
+		}
+	}
+	return progress, changed, nil
+}
+
+// ---------- 浏览器插件 ----------
+//
+// 装了插件的用户，标记由插件在他自己的浏览器里、用他自己的豆瓣登录状态去读，一页一页交给服务器导入（ImportPage），
+// 不占服务器的豆瓣通道，标记不公开的账号也能同步。上面服务器自己读的那一套保持不变，没装插件的用户照常用。
+
+// extSyncFresh 是插件同步过之后，服务器每天的自动同步跳过这个用户多久。插件每天会自己同步一次，
+// 留三天余量给"这几天没开电脑"；插件卸载了，过三天服务器自动接手。
+const extSyncFresh = 3 * 24 * time.Hour
+
+// BindFromExtension 绑定插件读到的豆瓣账号（插件所在浏览器登录着的那个）。不用像 Bind 那样先去豆瓣确认账号公开：
+// 插件用登录状态读，不公开的也能读。换了账号时和 Bind 一样清掉旧账号的同步记录。
+func (s *Service) BindFromExtension(ctx context.Context, userID int64, doubanUserID string) error {
+	if !userIDPattern.MatchString(doubanUserID) {
+		return ErrInvalidUser
+	}
+	user, err := s.Users.ByID(ctx, userID)
+	if err != nil {
+		return err
+	}
+	if user.DoubanUserID == doubanUserID {
+		return nil
+	}
+	if err := s.Users.Update(ctx, userID, "douban_user_id", doubanUserID); err != nil {
+		return err
+	}
+	if _, err := s.Pool.Exec(ctx, `UPDATE users SET douban_ext_synced_at = NULL WHERE id = $1`, userID); err != nil {
+		return err
+	}
+	return s.forgetSyncs(ctx, userID)
+}
+
+// ImportPage 导入插件交来的一页标记。status 是豆瓣的 done（看过）或 mark（想看）。
+// 返回值里 changed 为 0 表示这一页都已经导入过，插件做增量同步时读到这里就可以停。
+func (s *Service) ImportPage(ctx context.Context, userID int64, status string, interests []providers.DoubanInterest) (progress Progress, changed int, err error) {
+	local := map[string]string{"done": library.StatusWatched, "mark": library.StatusWish}[status]
+	if local == "" {
+		return progress, 0, ErrInvalidUser
+	}
+	return s.importPage(ctx, userID, local, interests)
+}
+
+// ExtensionSynced 记下插件完整同步了一次（没有失败的条目），之后三天服务器不再替这个用户去豆瓣读。
+func (s *Service) ExtensionSynced(ctx context.Context, userID int64) error {
+	_, err := s.Pool.Exec(ctx, `UPDATE users SET douban_ext_synced_at = now() WHERE id = $1`, userID)
+	return err
+}
+
+// ExtensionSyncedAt 返回插件最近一次完整同步的时间，没有时为 nil。
+func (s *Service) ExtensionSyncedAt(ctx context.Context, userID int64) (*time.Time, error) {
+	var at *time.Time
+	err := s.Pool.QueryRow(ctx, `SELECT douban_ext_synced_at FROM users WHERE id = $1`, userID).Scan(&at)
+	return at, err
 }
 
 // feedSlack 是对照 RSS 时间时留的余量，抵消豆瓣和本机的时钟差。

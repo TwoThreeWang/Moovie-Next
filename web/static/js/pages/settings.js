@@ -218,3 +218,8 @@ customAvatar?.addEventListener('input', () => {
   customRadio.checked = !!last;
 });
 customAvatar?.addEventListener('focus', () => { if (customAvatar.value) customRadio.checked = true; });
+
+// 装了浏览器插件（插件在本站页面上会写 <html data-moovie-ext>）但还没连接账号时，提示去插件里连接。
+if (document.documentElement?.dataset?.moovieExt) {
+  for (const hint of document.querySelectorAll('[data-ext-installed]')) hint.hidden = false;
+}

@@ -1,0 +1,41 @@
+:root {
+  --bg: #ffffff;
+  --fg: #222222;
+  --dim: #777777;
+  --line: #e5e5e5;
+  --box: #f7f6f3;
+  --accent: #f5b335;
+  --accent-line: #e0a030;
+  --error: #c03a3a;
+  color-scheme: light dark;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #16161a; --fg: #eeeeee; --dim: #9a9aa0; --line: #2c2c33; --box: #1f1f25; --error: #ff7a7a; }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 13px/1.6 -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif; }
+body.popup { width: 340px; padding: 12px; }
+body.options { max-width: 720px; margin: 0 auto; padding: 24px 16px 48px; }
+h1 { font-size: 20px; margin: 0 0 16px; }
+h2 { font-size: 14px; margin: 0 0 6px; }
+p { margin: 0 0 6px; }
+a { color: inherit; }
+.head { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; font-size: 15px; }
+.head img { border-radius: 5px; }
+.dim { color: var(--dim); }
+.error { color: var(--error); }
+.box { padding: 10px 12px; margin-bottom: 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--box); }
+.notice { padding: 10px 12px; margin-bottom: 10px; border-radius: 8px; background: #fff3d6; color: #4a3500; }
+.row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.foot { justify-content: space-between; margin-top: 4px; }
+.btn { display: inline-block; padding: 4px 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg); font: inherit; cursor: pointer; text-decoration: none; }
+.btn:hover { border-color: var(--dim); }
+.btn:disabled { opacity: 0.5; cursor: default; }
+.btn.primary { background: var(--accent); border-color: var(--accent-line); color: #222; }
+.btn.danger { color: var(--error); }
+.setting { display: flex; gap: 10px; align-items: flex-start; padding: 10px 0; border-top: 1px solid var(--line); }
+.setting:first-of-type { border-top: 0; }
+.setting input { margin-top: 4px; }
+.setting b { display: block; }
+.setting small { color: var(--dim); font-size: 12px; }
+.tag { display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 4px; background: #e8e1ff; color: #4a3a9a; font-size: 11px; font-weight: normal; }

@@ -6,7 +6,7 @@
 <section class="d-hero">
 <div class="d-media"><picture>{{if .M.Poster}}<source media="(max-width:719px)" srcset="{{img .M.Poster "hero" .M.Title "poster"}}">{{end}}{{if .M.Backdrops}}<source media="(min-width:720px)" srcset="{{img .M.Backdrop "display" .M.Title "still"}}">{{end}}<img class="fade" src="{{img .M.Poster "display" .M.Title "poster"}}" width="720" height="900" fetchpriority="high" decoding="async" alt="《{{.M.Title}}》海报"></picture></div>
 <div class="d-body">
-{{if .Fetching}}{{template "fetching" dict "ID" .M.ID "Attempt" 1}}{{end}}
+{{if .Fetching}}{{template "fetching" dict "ID" .M.ID "Attempt" 1 "Douban" .M.DoubanID "Type" .M.Type}}{{end}}
 <p class="kicker">{{.M.TypeLabel}}{{with .M.Form}} · {{.}}{{end}}{{if .Status}} · {{.Status}}{{end}}{{if .M.Hidden}} · 已隐藏{{end}}</p>
 <h1 class="d-title">{{.M.Title}}</h1>
 {{if and .M.OriginalTitle (ne .M.OriginalTitle .M.Title)}}<p class="d-orig">{{.M.OriginalTitle}}</p>{{end}}

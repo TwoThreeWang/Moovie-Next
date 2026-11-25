@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>影牛</title>
+<link rel="stylesheet" href="ui.css">
+</head>
+<body class="popup">
+<header class="head"><img src="icons/icon-32.png" width="24" height="24" alt=""><b>影牛豆瓣助手</b><span class="dim" id="version"></span></header>
+
+<section class="notice" id="update" hidden>
+  <p>有新版本 <b id="update-version"></b>。</p>
+  <p class="row"><a class="btn primary" id="update-download" target="_blank">下载新版本</a><a class="btn" id="update-guide" target="_blank">怎么更新</a></p>
+</section>
+
+<section class="box" id="account">
+  <h2>影牛账号</h2>
+  <div id="account-off" hidden>
+    <p class="dim" id="account-lost" hidden>连接已经失效（可能改过密码），请重新连接。</p>
+    <p>连接以后，插件才能把豆瓣标记同步到你的影牛账号。</p>
+    <p class="row"><button class="btn primary" id="connect" type="button">连接影牛账号</button></p>
+  </div>
+  <div id="account-on" hidden>
+    <p>已连接：<b id="username"></b></p>
+    <p class="dim"><span id="contributions"></span> <a id="board" target="_blank" hidden>贡献榜</a></p>
+  </div>
+</section>
+
+<section class="box">
+  <h2>豆瓣同步</h2>
+  <p id="douban"></p>
+  <p class="dim" id="sync-status"></p>
+  <p class="row"><button class="btn primary" id="sync" type="button">立即同步</button><button class="btn" id="sync-full" type="button" title="从头到尾读一遍全部标记">完整同步</button></p>
+</section>
+
+<section class="box">
+  <h2>帮影牛补全资料</h2>
+  <p class="dim" id="tasks"></p>
+  <p class="dim error" id="write-back" hidden></p>
+</section>
+
+<footer class="row foot"><a href="options.html" target="_blank">设置和备份</a><a id="guide" target="_blank">使用说明</a></footer>
+<script type="module" src="popup.js"></script>
+</body>
+</html>
