@@ -168,9 +168,13 @@ func New(cfg config.Config, pool *db.Pool, log *slog.Logger, options Options) (*
 			}
 			transport := http.DefaultTransport.(*http.Transport).Clone()
 			transport.Proxy = http.ProxyURL(proxy)
+			// 每个请求新开一条连接：负载均衡的代理（mihomo 的 round-robin）按连接换节点，
+			// 复用连接的话所有请求一直从同一个出口出去，请求也全压在这一个 IP 上。
+			transport.DisableKeepAlives = true
 			doubanClient = &http.Client{Timeout: client.Timeout, Transport: transport}
 		}
 		douban = providers.NewDouban(doubanClient)
+		douban.Rotating = cfg.DoubanProxy != ""
 	}
 	tmdb := options.TMDB
 	if tmdb == nil {

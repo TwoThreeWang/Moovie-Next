@@ -882,3 +882,117 @@ func TestDoubanInterestsCarrySubjectRating(t *testing.T) {
 		t.Fatalf("条目的豆瓣评分和用户自己打的分要分开: %+v err=%v", interests, err)
 	}
 }
+
+// exits 模拟一个会轮换出口的代理：每个请求按顺序拿下一个出口的结果。
+// "ok" 是正常的详情，"flagged" 是 IP 被标记，"denied" 是 403 need_permission，"down" 是连不上（不发到豆瓣）。
+type exits struct {
+	mu       sync.Mutex
+	plan     []string
+	sent     int // 真的发到豆瓣的请求数
+	attempts int
+	next     http.RoundTripper
+}
+
+func (e *exits) RoundTrip(r *http.Request) (*http.Response, error) {
+	e.mu.Lock()
+	exit := e.plan[e.attempts%len(e.plan)]
+	e.attempts++
+	if exit != "down" {
+		e.sent++
+	}
+	e.mu.Unlock()
+	if exit == "down" {
+		return nil, errors.New("TLS connect error")
+	}
+	r.Header.Set("X-Exit", exit)
+	return e.next.RoundTrip(r)
+}
+
+func newRotatingDouban(t *testing.T, plan ...string) (*providers.Douban, *exits) {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Header.Get("X-Exit") {
+		case "flagged":
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte(`{"msg": "subject_ip_rate_limit", "code": 1309, "localized_message": "您所在的网络存在异常，请登录后重试。"}`))
+		case "denied":
+			w.WriteHeader(http.StatusForbidden)
+			w.Write([]byte(`{"msg": "need_permission", "code": 1000, "localized_message": ""}`))
+		default:
+			if strings.Contains(r.URL.Path, "/tv/") {
+				http.NotFound(w, r)
+				return
+			}
+			id := r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:]
+			w.Write([]byte(`{"id": "` + id + `", "title": "片名", "type": "movie"}`))
+		}
+	}))
+	t.Cleanup(server.Close)
+	transport := &exits{plan: plan, next: server.Client().Transport}
+	douban := providers.NewDouban(&http.Client{Transport: transport})
+	douban.MobileBase, douban.Rotating = server.URL, true
+	douban.Pace, douban.MoviePace, douban.TVPace = providers.NewPacer(time.Millisecond), providers.NewPacer(time.Millisecond), providers.NewPacer(time.Millisecond)
+	douban.MoviePace.Name = "豆瓣电影详情"
+	return douban, transport
+}
+
+// 出口会轮换时（DOUBAN_PROXY），一个出口被标记、拒绝或者连不上，换一个出口再试；碰上好的出口就算成功，不放慢也不暂停。
+// 2026-11-26 实测一个机场订阅，四个节点分别是：能打开、403 need_permission、连不上、subject_ip_rate_limit。
+func TestDoubanRotatingProxyTriesAnotherExit(t *testing.T) {
+	douban, transport := newRotatingDouban(t, "flagged", "denied", "ok")
+	subject, err := douban.Subject(context.Background(), "1292052", "movie")
+	if err != nil || subject.Title != "片名" {
+		t.Fatalf("换到好的出口应该成功: %+v %v", subject, err)
+	}
+	if transport.attempts != 3 {
+		t.Errorf("应该试了 3 个出口，实际 %d 个", transport.attempts)
+	}
+	if interval, paused := douban.MoviePace.Status(); interval != time.Millisecond || !paused.IsZero() {
+		t.Errorf("最后成功了，不该放慢或暂停: %s %v", interval, paused)
+	}
+
+	douban, transport = newRotatingDouban(t, "down", "ok")
+	if _, err := douban.Subject(context.Background(), "1292052", "movie"); err != nil {
+		t.Fatalf("连不上的出口应该换一个再试: %v", err)
+	}
+	if transport.attempts != 2 {
+		t.Errorf("应该试了 2 个出口，实际 %d 个", transport.attempts)
+	}
+
+	// 404 和出口无关，不换出口重试：电影接口、剧集接口各一次
+	douban, transport = newRotatingDouban(t, "ok")
+	if _, err := douban.Subject(context.Background(), "404", "tv"); !errors.Is(err, providers.ErrNotFound) && err != nil {
+		t.Fatalf("剧集接口 404、电影接口能打开: %v", err)
+	}
+	if transport.attempts != 2 {
+		t.Errorf("404 不该换出口重试，应该一共请求 2 次，实际 %d 次", transport.attempts)
+	}
+}
+
+// 换了几个出口都被标记，才记一次限流、放慢；接连 3 次这样（中间没有成功）说明出口大多被标记了，才停几个小时。
+// 最后一个出口连不上时，按前面豆瓣的回答算。
+func TestDoubanRotatingProxyPausesOnlyWhenExitsKeepBeingFlagged(t *testing.T) {
+	douban, transport := newRotatingDouban(t, "flagged", "flagged", "down")
+	ctx := context.Background()
+	for round := 1; round <= 2; round++ {
+		_, err := douban.Subject(ctx, "1292052", "movie")
+		var paused *providers.PausedError
+		if !errors.Is(err, providers.ErrThrottled) || errors.As(err, &paused) {
+			t.Fatalf("第 %d 次：换了几个出口都被标记应该算限流，但还不该暂停: %v", round, err)
+		}
+	}
+	if interval, _ := douban.MoviePace.Status(); interval <= time.Millisecond {
+		t.Errorf("被标记后应该放慢: %s", interval)
+	}
+	_, err := douban.Subject(ctx, "1292052", "movie")
+	var paused *providers.PausedError
+	if !errors.As(err, &paused) || paused.RetryAfter() < 110*time.Minute || !strings.Contains(err.Error(), "subject_ip_rate_limit") {
+		t.Fatalf("接连 3 次都被标记应该停 2 小时左右: %v", err)
+	}
+	if transport.attempts != 9 || transport.sent != 6 {
+		t.Errorf("每次请求试 3 个出口：一共 9 次，其中 6 次发到了豆瓣；实际 %d 次、%d 次", transport.attempts, transport.sent)
+	}
+	if _, err := douban.Subject(ctx, "26909790", "movie"); !errors.Is(err, providers.ErrThrottled) || transport.attempts != 9 {
+		t.Fatalf("暂停期间不该再发请求: %v，一共请求了 %d 次", err, transport.attempts)
+	}
+}

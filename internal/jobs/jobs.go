@@ -143,6 +143,16 @@ last_error = $2, run_at = now() + make_interval(secs => $3), postponed_at = COAL
 	return err
 }
 
+// ResumePostponed 把这几种因为被对方限流推迟到以后的任务提前到现在，返回提前了多少个。
+// 暂停记在各个进程的内存里（providers.Pacer），进程重启就没了；推迟却写在任务表里，
+// 不提前的话，换了代理重启之后这些任务还要干等几个小时，后台概览也一直显示重启前的限流。
+// 提前了也不会请求得更快：请求的快慢由节奏控制，对方还在限流的话会重新推迟。
+func (q *Queue) ResumePostponed(ctx context.Context, kinds ...string) (int64, error) {
+	tag, err := q.pool.Exec(ctx, `UPDATE jobs SET run_at = now()
+WHERE status = 'queued' AND postponed_at IS NOT NULL AND run_at > now() AND kind = ANY($1)`, kinds)
+	return tag.RowsAffected(), err
+}
+
 func clip(message string) string {
 	if len(message) > 1000 {
 		return message[:1000]
@@ -403,7 +413,20 @@ func (w *Worker) Run(ctx context.Context) {
 			run()
 		}()
 	}
-	var taken []string
+	var taken, postponing []string
+	for _, lane := range w.lanes {
+		if lane.Postpone != nil {
+			postponing = append(postponing, lane.Kinds...)
+		}
+	}
+	if len(postponing) > 0 {
+		// 重启前因为限流推迟的任务提前到现在：那时的暂停已经随着进程没了，见 ResumePostponed。
+		if resumed, err := w.queue.ResumePostponed(ctx, postponing...); err != nil {
+			w.log.Error("提前限流推迟的任务失败", "error", err)
+		} else if resumed > 0 {
+			w.log.Info("重启前因为限流推迟的任务提前到现在", "count", resumed)
+		}
+	}
 	for _, lane := range w.lanes {
 		taken = append(taken, lane.Kinds...)
 		loops := max(1, lane.Loops)

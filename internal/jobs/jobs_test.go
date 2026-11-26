@@ -419,3 +419,37 @@ func TestPostponeHasALimit(t *testing.T) {
 		t.Errorf("重新计时后被限流应该又只是推迟: %+v", job)
 	}
 }
+
+// 暂停记在进程的内存里，重启就没了；重启前因为限流推迟到以后的任务，启动时提前到现在，换了代理不用干等几个小时。
+// 因为普通失败等着重试的、不会推迟的通道里的任务不动。
+func TestRunResumesPostponedJobs(t *testing.T) {
+	queue, worker := newWorker(t)
+	pool := testdb.Pool(t)
+	ctx := context.Background()
+	var mu sync.Mutex
+	ran := map[string]bool{}
+	record := func(_ context.Context, job jobs.Job) error {
+		mu.Lock()
+		ran[job.Kind+"/"+job.Subject] = true
+		mu.Unlock()
+		return nil
+	}
+	worker.Handle("douban", record)
+	worker.Handle("embed", record)
+	worker.Lane(jobs.Lane{Kinds: []string{"douban"}, Postpone: func(error) bool { return true }})
+	for _, subject := range []string{"postponed", "retrying"} {
+		queue.Enqueue(ctx, "douban", subject, jobs.Options{})
+	}
+	queue.Enqueue(ctx, "embed", "postponed", jobs.Options{})
+	pool.Exec(ctx, `UPDATE jobs SET run_at = now() + interval '2 hours'`)
+	pool.Exec(ctx, `UPDATE jobs SET postponed_at = now() WHERE subject = 'postponed'`)
+
+	runCtx, cancel := context.WithTimeout(ctx, 800*time.Millisecond)
+	defer cancel()
+	worker.Run(runCtx)
+	mu.Lock()
+	defer mu.Unlock()
+	if !ran["douban/postponed"] || ran["douban/retrying"] || ran["embed/postponed"] {
+		t.Errorf("只有限流推迟的任务该提前: %v", ran)
+	}
+}

@@ -197,6 +197,26 @@ func (p *Pacer) Throttled() time.Time {
 func (p *Pacer) Flagged() time.Time {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	return p.flag()
+}
+
+// FlaggedExits 记一次"换了几个出口都说 IP 被标记了"（出口会轮换的代理，见 Douban.Rotating）。
+// 一个出口被标记不代表别的出口也是，所以先和普通的限流一样放慢、记一次；
+// 接连 pauseAfter 次（中间没有成功）说明出口大多被标记了，才和 Flagged 一样停几个小时。
+// 停了时返回暂停到什么时候，否则返回零值。
+func (p *Pacer) FlaggedExits() time.Time {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.strikes+1 < pauseAfter {
+		p.strikes++
+		p.interval = min(p.interval*2, maxPaceInterval)
+		return time.Time{}
+	}
+	return p.flag()
+}
+
+// flag 让通道停几个小时，见 Flagged。调用时要持有锁。
+func (p *Pacer) flag() time.Time {
 	now := time.Now()
 	if p.flagged > 0 && p.paused.After(now) {
 		return p.paused
@@ -249,9 +269,16 @@ type Douban struct {
 	// PagePace 是详情网页（SubjectPage）的节奏。它是详情接口的兜底，豆瓣分接口限流，
 	// 所以单独控制：详情接口被限流、放慢甚至暂停的时候，网页还能按自己的节奏打开。
 	PagePace *Pacer
+	// Rotating 表示请求经过会轮换出口的代理（配了 DOUBAN_PROXY，比如 mihomo 的轮询负载均衡），
+	// HTTP 不复用连接，每个请求都可能从另一个 IP 出去。这时一个出口被拒绝、被标记或者连不上，
+	// 不代表别的出口也不行：换一个出口再试，最多 exitTries 次，都不行才记限流，见 get。
+	Rotating bool
 
 	refusals refusalState
 }
+
+// exitTries 是出口会轮换时，一个请求最多换几个出口去试。每次都按节奏排队，不会因此请求得更快。
+const exitTries = 3
 
 // paceFor 是这次请求走哪条节奏：详情网页、电影详情、剧集详情各走各的，其余接口共用 Pace。
 // class 是 refusalKey 分出来的接口类别。
@@ -873,19 +900,53 @@ func (d *Douban) getJSON(ctx context.Context, endpoint, referer string, destinat
 
 // get 是所有豆瓣请求的出口：等节奏放行、发请求、按结果调节奏。
 // 让通道暂停了的错误是 *PausedError，带着暂停到什么时候。
+//
+// 出口会轮换时（Rotating），被拒绝、被标记、连不上都先换个出口再试，最多 exitTries 次。
+// 2026-11-26 实测一个机场订阅：同一时刻四个节点里，一个能打开电影详情，一个 403 need_permission，
+// 一个 subject_ip_rate_limit，一个连不上。以前第一个出口被标记就整条停 2 小时，好的出口也用不上。
 func (d *Douban) get(ctx context.Context, call doubanCall, destination any) error {
 	class, object := refusalKey(call.endpoint)
 	pace := d.paceFor(call, class)
-	if pace != nil {
-		if err := pace.Wait(ctx); err != nil {
-			return err
+	var err, answer error // answer 是最近一次豆瓣真的回答了的拒绝，连不上的出口不算
+	for try := 0; ; try++ {
+		if pace != nil {
+			if waitErr := pace.Wait(ctx); waitErr != nil {
+				if err == nil {
+					return waitErr
+				}
+				break // 换出口再试时轮不上了（通道刚被别的请求停下，或者等不到）：按上一次的结果算
+			}
+		}
+		request, requestErr := d.newRequest(ctx, call)
+		if requestErr != nil {
+			return requestErr
+		}
+		err = d.do(request, call, destination)
+		if errors.Is(err, ErrThrottled) {
+			answer = err
+		}
+		if !d.Rotating || try+1 >= exitTries || !exitFailed(ctx, err) {
+			break
 		}
 	}
-	request, err := d.newRequest(ctx, call)
-	if err != nil {
-		return err
+	if answer != nil && !errors.Is(err, ErrThrottled) && exitFailed(ctx, err) {
+		err = answer // 最后一个出口连不上：按前面豆瓣的回答算
 	}
-	err = d.do(request, call, destination)
+	return d.settle(class, object, pace, err)
+}
+
+// exitFailed 表示这次失败可能只是这个出口的问题：豆瓣拒绝了（限流、标记、403），或者连不上。
+// 404、跳到另一个接口、解析失败这些和出口无关。
+func exitFailed(ctx context.Context, err error) bool {
+	if err == nil || ctx.Err() != nil {
+		return false
+	}
+	var transport *url.Error // http.Client 连接、TLS、代理出错都是 *url.Error；跳到验证页、跳到别的接口在前面已经认出来了
+	return errors.Is(err, ErrThrottled) || errors.As(err, &transport)
+}
+
+// settle 按请求的结果调节奏，返回给调用方的错误。让通道暂停了的是 *PausedError。
+func (d *Douban) settle(class, object string, pace *Pacer, err error) error {
 	var moved *movedError
 	if err == nil || errors.Is(err, ErrNotFound) || errors.As(err, &moved) { // 跳到另一类接口也是这个接口正常回答了
 		d.refusals.succeed(class)
@@ -904,6 +965,13 @@ func (d *Douban) get(ctx context.Context, call doubanCall, destination any) erro
 	if refusal != nil && refusal.flagged() {
 		// IP 被标记了：再试多少次都一样，这一类接口直接停几个小时。不记进 refusals，那是给分辨不清的 403 用的。
 		if pace == nil {
+			return err
+		}
+		if d.Rotating {
+			// 出口会轮换：换了几个出口都被标记才记一次，接连几次这样才停几个小时。
+			if until := pace.FlaggedExits(); !until.IsZero() {
+				return &PausedError{Name: pace.Name, Until: until, Cause: err}
+			}
 			return err
 		}
 		return &PausedError{Name: pace.Name, Until: pace.Flagged(), Cause: err}
