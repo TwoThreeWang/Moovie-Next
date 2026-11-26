@@ -186,9 +186,10 @@ func TimeAgo(value any) string {
 
 // Funcs 是所有模板可用的函数。
 var Funcs = template.FuncMap{
-	"timeago": TimeAgo,
-	"join":    strings.Join,
-	"ratings": func() []int { return []int{5, 4, 3, 2, 1} },
+	"timeago":   TimeAgo,
+	"join":      strings.Join,
+	"hasPrefix": strings.HasPrefix,
+	"ratings":   func() []int { return []int{5, 4, 3, 2, 1} },
 	"date": func(value any) string {
 		switch typed := value.(type) {
 		case time.Time:

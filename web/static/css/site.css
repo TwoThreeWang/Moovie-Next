@@ -138,6 +138,11 @@ body:not(.bare) .message { min-height: 60svh; }
 body.bare .doc { margin: 0 auto; }
 .doc h2 { font-size: var(--fs-h2); margin-bottom: 8px; }
 .doc p { color: var(--text-2); margin-bottom: 8px; }
+.doc-items { list-style: none; display: grid; gap: 10px; color: var(--text-2); }
+.doc-items li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
+.doc-items b { color: var(--text); min-width: 5.5em; }
+.doc-items .hint { flex-basis: 100%; padding-left: calc(5.5em + 10px); }
+@media (max-width: 520px) { .doc-items .hint { padding-left: 0; } }
 .doc .footer { padding-left: 0; }
 
 /* 介绍页 */

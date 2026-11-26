@@ -107,7 +107,7 @@ input.addEventListener('input', () => status.classList.remove('error'));
 
 // 临时：示例订阅（见 internal/app/example_subscription.go）。填进输入框，照常保存并检查。
 $('sub-example')?.addEventListener('click', (ev) => {
-  input.value = location.origin + ev.currentTarget.dataset.url;
+  input.value = new URL(ev.currentTarget.dataset.url, location.href).href;
   form.requestSubmit();
 });
 

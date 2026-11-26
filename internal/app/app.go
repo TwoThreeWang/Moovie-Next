@@ -87,7 +87,6 @@ type App struct {
 	searchLog       *httpx.Limiter
 	collectionViews *httpx.Limiter
 	images          *imageproxy.Handler
-	exampleSub      []byte // 临时：示例订阅，见 example_subscription.go
 	topics          shortTopics
 	charts          chartCache
 	pow             *pow.Issuer
@@ -223,7 +222,6 @@ func New(cfg config.Config, pool *db.Pool, log *slog.Logger, options Options) (*
 		return nil, fmt.Errorf("整理前端模块: %w", err)
 	}
 	app.modules = modules
-	app.exampleSub = app.loadExampleSubscription()
 	renderer, err := ui.New(templates, reload, app.common, app.images.URL)
 	if err != nil {
 		return nil, fmt.Errorf("加载模板: %w", err)

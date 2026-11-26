@@ -69,8 +69,6 @@ type Config struct {
 	DanmuBase        string
 	// 只信任这些地址发来的 X-Forwarded-For / X-Forwarded-Proto（反向代理所在的地址或网段）
 	TrustedProxies []string
-	// 临时：示例订阅文件的路径（cmd/migrate-legacy -sources 导出），网站在 /sub/example.json 提供。为空表示关闭
-	ExampleSubscription string
 }
 
 // Dev 表示是否是开发环境。
@@ -113,9 +111,8 @@ func Load() (Config, error) {
 		EmbeddingBaseURL:  strings.TrimRight(get("EMBEDDING_BASE_URL", ""), "/"),
 		EmbeddingKey:      get("EMBEDDING_API_KEY", ""),
 		// 迁移过来的向量是这个模型算的。换模型就得把所有作品的向量重算一遍，否则新旧向量不能放在一起比较。
-		EmbeddingModel:      get("EMBEDDING_MODEL", "quentinz/bge-base-zh-v1.5"),
-		DanmuBase:           strings.TrimRight(get("DANMU_API_BASE", ""), "/"),
-		ExampleSubscription: get("EXAMPLE_SUBSCRIPTION_FILE", ""),
+		EmbeddingModel: get("EMBEDDING_MODEL", "quentinz/bge-base-zh-v1.5"),
+		DanmuBase:      strings.TrimRight(get("DANMU_API_BASE", ""), "/"),
 		// 默认只信任本机和内网：反向代理一般就在这些地址；外面直接连进来的请求，伪造的转发头不算数。
 		TrustedProxies: strings.Split(get("TRUSTED_PROXIES", "127.0.0.1,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,fc00::/7"), ","),
 	}

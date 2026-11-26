@@ -15,8 +15,6 @@ import (
 	"net/http/cookiejar"
 	"net/http/httptest"
 	"net/url"
-	"os"
-	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -1446,15 +1444,20 @@ func TestKeyringSync(t *testing.T) {
 func TestCopyrightContact(t *testing.T) {
 	s := newSite(t)
 	mustContain(t, s.get("/dmca"), "版权投诉", `href="/feedback?kind=dmca"`, `mailto:hello@moovie.test`, "不需要注册账号")
-	// 关于页：广告说明和联系方式（反馈不预选类型，邮件主题是合作与联系）
+	// 关于页：广告说明、广告合作和联系方式（邮箱是能直接复制的文字，外链在新标签页打开）
 	about := s.get("/about")
-	mustContain(t, about, "关于广告", "每一条都标有“广告”", "不加载第三方广告脚本", "核实后会立刻下架", "联系方式",
-		`href="/feedback"`, `mailto:hello@moovie.test?subject=%E5%90%88%E4%BD%9C%E4%B8%8E%E8%81%94%E7%B3%BB`, "广告合作和其他事务")
+	mustContain(t, about, "关于广告", "每一条都标有“广告”", "不加载第三方广告脚本", "核实后会立刻下架",
+		"广告合作", "USDT 和 Stripe", "联系我们", "support[at]c2v2.com", `<a href="/feedback">`,
+		`<a href="https://github.com/TwoThreeWang/Moovie-Next" target="_blank" rel="noopener">`, "t.me/&#43;gkAu28AMZS1lOGY1", "https://x.com/0xEvanDev",
+		"我的其他项目", `href="https://zhulink.vip/"`, "去算法推荐社区")
+	if strings.Contains(about.body, "mailto:") {
+		t.Error("关于页的邮箱是纯文字，不该是 mailto 链接")
+	}
 	mustContain(t, s.get("/privacy"), "站内广告", "看不到你在看哪个页面")
 	if strings.Contains(s.get("/terms").body, "联系方式") {
 		t.Error("没有设置联系方式的页面不应该显示联系方式")
 	}
-	mustContain(t, s.get("/changelog"), "v5.3.1", "电影和剧集互不影响", "安卓上片单预览打不开", "v5.3.0", "浏览器插件", "v5.2.4", "每天的豆瓣同步更省", "v5.2.3", "反馈改成对话", "安卓投屏", "v5.2.2", "综艺按期选集", "v5.2.1", "弹幕加载不出来", "v5.2.0", "2026-11-22", "发现页的新排序", "v5.1.1", "兼容 TVBox 配置", "v5.1.0", "2026-11-20", "v5.0.0", "2026-11-16", "💥 破坏性变更 (Breaking Changes)", "✨ 新增 (Added)", "登录即同步")
+	mustContain(t, s.get("/changelog"), "v5.3.2", "关于页更完整", "示例订阅换了地址", "v5.3.1", "电影和剧集互不影响", "安卓上片单预览打不开", "v5.3.0", "浏览器插件", "v5.2.4", "每天的豆瓣同步更省", "v5.2.3", "反馈改成对话", "安卓投屏", "v5.2.2", "综艺按期选集", "v5.2.1", "弹幕加载不出来", "v5.2.0", "2026-11-22", "发现页的新排序", "v5.1.1", "兼容 TVBox 配置", "v5.1.0", "2026-11-20", "v5.0.0", "2026-11-16", "💥 破坏性变更 (Breaking Changes)", "✨ 新增 (Added)", "登录即同步")
 }
 
 // ---------- 后台：内容审核、禁言封禁、广告指纹、趋势 ----------
@@ -1536,26 +1539,17 @@ func TestModerationTools(t *testing.T) {
 	}
 }
 
-// 临时功能：示例订阅。配了文件就在 /sub/example.json 提供，设置页出现"使用示例订阅"；没配就没有。
+// 临时功能：示例订阅。设置页的"使用示例订阅"和迁移账号自动填入的都是外部地址；
+// 本站以前的 /sub/example.json 跳到外部地址。
 func TestExampleSubscription(t *testing.T) {
-	plain := newSite(t)
-	plain.register("evan")
-	if r := plain.get("/sub/example.json"); r.status != http.StatusNotFound {
-		t.Errorf("没配置时应该是 404，实际 %d", r.status)
-	}
-	if strings.Contains(plain.get("/settings").body, "sub-example") {
-		t.Error("没配置时设置页不应该有示例订阅按钮")
-	}
-
-	path := filepath.Join(t.TempDir(), "sources.json")
-	os.WriteFile(path, []byte(`{"version":1,"sources":[{"key":"a.example","name":"示例源","api":"https://a.example/api.php/provide/vod/"}]}`), 0o644)
-	s := newSiteWith(t, nil, func(cfg *config.Config) { cfg.ExampleSubscription = path })
-	s.register("lin") // 和上面的站点共用一个测试库，换个名字
+	const external = "https://static.error.workers.dev/moovie/examplesub.json"
+	s := newSite(t)
+	s.register("lin")
 	r := s.get("/sub/example.json")
-	if r.status != http.StatusOK || !strings.Contains(r.header.Get("Content-Type"), "json") || !strings.Contains(r.body, "示例源") {
-		t.Fatalf("应该提供示例订阅: %d %q", r.status, r.body)
+	if r.status != http.StatusFound || r.header.Get("Location") != external {
+		t.Fatalf("旧地址应该跳到外部地址: %d %q", r.status, r.header.Get("Location"))
 	}
-	mustContain(t, s.get("/settings"), `id="sub-example"`, `data-url="/sub/example.json"`)
+	mustContain(t, s.get("/settings"), `id="sub-example"`, `data-url="`+external+`"`)
 
 	// 从旧版迁移过来的账号：还没有钥匙圈（第一次登录）时，告诉浏览器填入示例订阅；钥匙圈建好后就不再提示。
 	if r := s.get("/api/example-subscription"); r.status != http.StatusNotFound {
@@ -1568,11 +1562,8 @@ func TestExampleSubscription(t *testing.T) {
 	if _, err := s.app.Pool.Exec(context.Background(), `INSERT INTO example_subscription_users (user_id) VALUES ($1)`, lin.ID); err != nil {
 		t.Fatal(err)
 	}
-	if r := s.get("/api/example-subscription"); r.status != http.StatusOK || !strings.Contains(r.body, `"url":"/sub/example.json"`) {
+	if r := s.get("/api/example-subscription"); r.status != http.StatusOK || !strings.Contains(r.body, `"url":"`+external+`"`) {
 		t.Fatalf("迁移过来的账号第一次登录应该填入示例订阅: %d %s", r.status, r.body)
-	}
-	if r := plain.get("/api/example-subscription"); r.status != http.StatusNotFound {
-		t.Errorf("没配置示例订阅时不应该提示，实际 %d", r.status)
 	}
 	salt := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{7}, 16))
 	blob := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{8}, 64))
@@ -1581,12 +1572,6 @@ func TestExampleSubscription(t *testing.T) {
 	}
 	if r := s.get("/api/example-subscription"); r.status != http.StatusNotFound {
 		t.Errorf("钥匙圈建好以后不应该再填入示例订阅，实际 %d", r.status)
-	}
-
-	broken := filepath.Join(t.TempDir(), "broken.json")
-	os.WriteFile(broken, []byte(`{"sources":[]}`), 0o644)
-	if r := newSiteWith(t, nil, func(cfg *config.Config) { cfg.ExampleSubscription = broken }).get("/sub/example.json"); r.status != http.StatusNotFound {
-		t.Errorf("文件里没有源时应该关闭，实际 %d", r.status)
 	}
 }
 

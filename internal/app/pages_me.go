@@ -232,7 +232,7 @@ func (a *App) settingsPage(c *gin.Context) {
 	data := gin.H{
 		"Title": "设置", "Nav": "me", "Avatars": auth.Avatars, "Welcome": c.Query("welcome") == "1",
 		"Saved": c.Query("saved") != "", "Scripts": []string{"pages/settings.js"}, "SiteURL": a.Config.SiteURL,
-		"ExampleSubscription": a.exampleSub != nil,
+		"ExampleSubscription": exampleSubscriptionURL,
 	}
 	if user := auth.Current(c); user != nil && !slices.Contains(auth.Avatars, user.Avatar) {
 		data["CustomAvatar"] = user.Avatar

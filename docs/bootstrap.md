@@ -40,7 +40,9 @@ docker compose run --rm --no-deps -e LEGACY_DB_NAME=moovie_v2 --entrypoint ./mig
 
 ## 临时：示例订阅
 
-为了让老用户切过来时有源可用，临时在 `/sub/example.json` 提供一份示例订阅，内容是旧版保存的播放源；设置页的播放源一栏会出现"使用示例订阅"，点一下就填好并读取。之后会删掉。
+为了让老用户切过来时有源可用，临时提供一份示例订阅，内容是旧版保存的播放源，地址是 `https://static.error.workers.dev/moovie/examplesub.json`（写在 `internal/app/example_subscription.go` 的 `exampleSubscriptionURL`，不在本站，读取时由本站转发）。设置页的播放源一栏有"使用示例订阅"，点一下就填好并读取。之后会删掉。
+
+本站以前的 `/sub/example.json` 现在 302 跳到这个外部地址，之前已经填了它的用户不用改也能继续用。浏览器读本站地址时不走转发，跟着跳过去就是跨域请求，所以外部地址的响应必须带 `Access-Control-Allow-Origin`（`*` 或本站域名）。
 
 从旧版迁移过来的账号（导入时记在 `example_subscription_users` 表里）第一次在新站登录时，浏览器会自动填入示例订阅，和账号里的其他配置一起加密保存，换设备登录也有。只在账号还没有钥匙圈时填一次，之后用户清除或换掉订阅都不会再填回来；本机已经有订阅的不覆盖。
 
@@ -55,11 +57,11 @@ mkdir -p data
 docker compose run --rm --no-deps -e LEGACY_DB_NAME=moovie_v2 -v "$PWD/data:/app/out" --entrypoint ./migrate-legacy web -sources /app/out/example-sources.json
 ```
 
-然后在 `.env` 里设置 `EXAMPLE_SUBSCRIPTION_FILE=data/example-sources.json` 并重启。同一个地址只留一个（HTTP 的也留着，查询由本站转发），key 用接口的域名。`data/` 已经加进 `.gitignore`。不配置这个变量时，接口返回 404，设置页也没有按钮。
+导出的文件上传到上面的外部地址。同一个地址只留一个（HTTP 的也留着，查询由本站转发），key 用接口的域名。`data/` 已经加进 `.gitignore`。
 
 实测（2026-11-17）：旧版 35 个源，设置页检测下来 31 个可用，4 个是对方关站或拦截。
 
-删掉这个功能时一起删：`internal/legacy/sources.go`、`cmd/migrate-legacy` 的 `-sources` 参数、`internal/app/example_subscription.go`（以及 `app.go` 里的两个路由和 `exampleSub` 字段）、设置页的"使用示例订阅"按钮和 `settings.js` 里对应的几行、`keyring.js` 里的 `pendingExampleSubscription`、`internal/legacy/users.go` 里的 `markExampleSubscription`、配置项 `EXAMPLE_SUBSCRIPTION_FILE`、相关测试，再加一个迁移删掉 `example_subscription_users` 表。
+删掉这个功能时一起删：`internal/legacy/sources.go`、`cmd/migrate-legacy` 的 `-sources` 参数、`internal/app/example_subscription.go`（以及 `app.go` 里的两个路由）、设置页的"使用示例订阅"按钮和 `settings.js` 里对应的几行、`keyring.js` 里的 `pendingExampleSubscription`、`internal/legacy/users.go` 里的 `markExampleSubscription`、相关测试，再加一个迁移删掉 `example_subscription_users` 表。
 
 ## 替换同一台服务器上的旧站
 

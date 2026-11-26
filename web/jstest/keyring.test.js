@@ -189,7 +189,7 @@ test('原设备保留旧包装密钥时能恢复密码重置后的配置，不�
 });
 
 test('旧版迁移过来的账号第一次登录时填入示例订阅并保存到账号，之后不再填', async () => {
-  example = '/first.json';
+  example = 'https://moovie.test/first.json'; // 服务器给的是完整地址
   assert.equal(await keyring.afterLogin(password), 'created');
   assert.equal((await sources.getSubscription()).url, 'https://moovie.test/first.json');
   assert.equal((await body()).sub, 'https://moovie.test/first.json', '示例订阅要加密保存到账号，其他设备登录也有');

@@ -1,7 +1,10 @@
 {{define "content"}}<main class="doc">
 {{if .Bare}}<a class="nav-brand" href="/"><img class="brand-icon" src="/static/img/apple-touch-icon.png" width="40" height="40" alt=""><span class="brand-t">{{.Site}}</span></a>{{end}}
 <h1 class="page-title">{{.Doc.Title}}</h1>
-{{range .Doc.Sections}}<section><h2>{{.Heading}}</h2>{{range .Body}}<p>{{.}}</p>{{end}}</section>{{end}}
+{{range .Doc.Sections}}<section><h2>{{.Heading}}</h2>{{range .Body}}<p>{{.}}</p>{{end}}
+{{with .Items}}<ul class="doc-items">{{range .}}<li><b>{{.Label}}</b>
+{{- if not .URL}}<span>{{.Text}}</span>{{else if hasPrefix .URL "http"}}<a href="{{.URL}}" target="_blank" rel="noopener">{{.Text}}</a>{{else}}<a href="{{.URL}}">{{.Text}}</a>{{end}}
+{{- with .Note}}<span class="hint">{{.}}</span>{{end}}</li>{{end}}</ul>{{end}}</section>{{end}}
 {{with .Doc.Contact}}<section class="contact-ways"><h2>联系方式</h2>
 <div class="contact-grid">
 <a class="card-panel contact-way" href="/feedback{{with .FeedbackKind}}?kind={{.}}{{end}}"><svg class="i"><use href="#i-chat"/></svg><b>在线提交</b><span class="hint">{{.FeedbackHint}}</span></a>

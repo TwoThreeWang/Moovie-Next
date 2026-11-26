@@ -75,7 +75,9 @@ async function pendingExampleSubscription() {
     const response = await api('/api/example-subscription', { cache: 'no-store' });
     if (!response.ok) return '';
     const { url } = await response.json();
-    return typeof url === 'string' && url.startsWith('/') ? location.origin + url : '';
+    if (typeof url !== 'string') return '';
+    if (url.startsWith('https://')) return url;
+    return url.startsWith('/') ? location.origin + url : '';
   } catch { return ''; }
 }
 

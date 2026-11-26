@@ -10,7 +10,7 @@
 // 旧库只读；新库的写入在一个事务里完成，可以反复运行。
 //
 // 临时：-sources 文件名 只把旧库里启用的播放源导出成订阅文件，不迁移任何数据。
-// 网站配置 EXAMPLE_SUBSCRIPTION_FILE 指向这个文件后，在 /sub/example.json 提供（之后会删掉）。
+// 导出的文件放到示例订阅的外部地址（见 internal/app/example_subscription.go），之后会删掉。
 package main
 
 import (
