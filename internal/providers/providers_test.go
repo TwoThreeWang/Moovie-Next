@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -678,7 +677,8 @@ func TestTMDBPopularityExport(t *testing.T) {
 }
 
 // 请求头扮成普通浏览器：手机版接口用 iPhone，网页版接口用电脑上的 Chrome；
-// bid 和豆瓣发的一样是 11 位大小写字母加数字，每次都不同，还带着城市 Cookie 和中文的 Accept-Language。
+// 所有请求带同一串配置好的 Cookie（同一个 bid，像同一个浏览器），还有中文的 Accept-Language。
+// 详情接口的 Referer 是条目自己的页面。
 func TestDoubanRequestHeaders(t *testing.T) {
 	var mu sync.Mutex
 	headers := map[string]http.Header{}
@@ -698,6 +698,7 @@ func TestDoubanRequestHeaders(t *testing.T) {
 	defer server.Close()
 	douban := providers.NewDouban(server.Client())
 	douban.MobileBase, douban.WebBase, douban.FeedBase, douban.Pace = server.URL, server.URL, server.URL, nil
+	douban.Cookie = `bid=2V9cvncls_k; ll="108288"`
 	ctx := context.Background()
 	if _, err := douban.Subject(ctx, "1292052", "movie"); err != nil {
 		t.Fatal(err)
@@ -708,8 +709,6 @@ func TestDoubanRequestHeaders(t *testing.T) {
 	if _, err := douban.RecentInterests(ctx, "u1"); err != nil {
 		t.Fatal(err)
 	}
-	bid := regexp.MustCompile(`^ll="108288"; bid=([A-Za-z0-9]{11})$`)
-	bids := map[string]bool{}
 	for path, wantUA := range map[string]string{"/rexxar/api/v2/movie/1292052": "iPhone", "/j/subject_suggest": "Macintosh", "/feed/people/u1/interests": "Macintosh"} {
 		header := headers[path]
 		if !strings.Contains(header.Get("User-Agent"), wantUA) {
@@ -718,15 +717,12 @@ func TestDoubanRequestHeaders(t *testing.T) {
 		if !strings.HasPrefix(header.Get("Accept-Language"), "zh-CN") {
 			t.Errorf("%s 应该带中文的 Accept-Language: %q", path, header.Get("Accept-Language"))
 		}
-		match := bid.FindStringSubmatch(header.Get("Cookie"))
-		if match == nil {
-			t.Errorf("%s 的 Cookie 不像浏览器的: %q", path, header.Get("Cookie"))
-			continue
+		if header.Get("Cookie") != douban.Cookie {
+			t.Errorf("%s 应该带配置好的 Cookie: %q", path, header.Get("Cookie"))
 		}
-		bids[match[1]] = true
 	}
-	if len(bids) != 3 {
-		t.Errorf("每次请求的 bid 应该都不同: %v", bids)
+	if referer := headers["/rexxar/api/v2/movie/1292052"].Get("Referer"); referer != "https://m.douban.com/movie/subject/1292052/" {
+		t.Errorf("详情接口的 Referer 应该是条目页: %q", referer)
 	}
 	if headers["/j/subject_suggest"].Get("X-Requested-With") != "XMLHttpRequest" {
 		t.Error("网页版的 /j/ 接口应该像页面里的 Ajax 请求")
@@ -994,5 +990,77 @@ func TestDoubanRotatingProxyPausesOnlyWhenExitsKeepBeingFlagged(t *testing.T) {
 	}
 	if _, err := douban.Subject(ctx, "26909790", "movie"); !errors.Is(err, providers.ErrThrottled) || transport.attempts != 9 {
 		t.Fatalf("暂停期间不该再发请求: %v，一共请求了 %d 次", err, transport.attempts)
+	}
+}
+
+// NeoDB：只认带着同一个豆瓣链接的条目；剧集的 TMDB 链接只认这一季的那一个；英文类型换成豆瓣的中文类型；评分不取。
+func TestNeoDBFind(t *testing.T) {
+	var queries []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		queries = append(queries, r.URL.Path+"?"+r.URL.RawQuery)
+		w.Write([]byte(`{"data": [
+  {"type": "TVSeason", "title": "Nirvana in Fire", "rating": 9.4, "localized_title": [{"lang": "zh-cn", "text": "琅琊榜"}],
+   "external_resources": [{"url": "https://movie.douban.com/subject/25754848/"}]},
+  {"type": "TVSeason", "title": "琅琊榜之风起长林", "orig_title": "", "rating": 8.0,
+   "localized_title": [{"lang": "zh-cn", "text": "琅琊榜之风起长林"}, {"lang": "zh-cn", "text": "琅琊榜2"}],
+   "localized_description": [{"lang": "zh-cn", "text": "梁帝萧元启年间的故事。"}],
+   "genre": ["Drama", "古装", "Unknown"], "director": ["孔笙"], "actor": [{"name": "黄晓明", "role": ""}, {"name": "刘昊然", "role": ""}],
+   "external_resources": [{"url": "https://movie.douban.com/subject/26665065/"}, {"url": "https://www.themoviedb.org/tv/64197/season/2"},
+     {"url": "https://www.themoviedb.org/tv/207076/season/1"}, {"url": "https://www.themoviedb.org/tv/99999"}, {"url": "https://www.imdb.com/title/tt7187044/"}]}
+]}`))
+	}))
+	defer server.Close()
+	neodb := &providers.NeoDB{HTTP: server.Client(), Base: server.URL, UserAgent: "test"}
+	ctx := context.Background()
+	item, err := neodb.Find(ctx, providers.NeoDBQuery{DoubanID: "26665065", Title: "琅琊榜之风起长林", TV: true, Season: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if item.Title != "琅琊榜之风起长林" || strings.Join(item.AKA, ",") != "琅琊榜2" || item.Summary != "梁帝萧元启年间的故事。" {
+		t.Errorf("片名、又名、简介不对: %+v", item)
+	}
+	if strings.Join(item.Genres, ",") != "剧情,古装" || strings.Join(item.Actors, ",") != "黄晓明,刘昊然" || item.IMDbID != "tt7187044" {
+		t.Errorf("类型、演员、IMDb 不对: %+v", item)
+	}
+	if item.TMDBID != "tv/207076" {
+		t.Errorf("只认第一季的 TMDB 链接: %q", item.TMDBID)
+	}
+	if len(queries) != 1 || !strings.HasPrefix(queries[0], "/api/catalog/search?") || !strings.Contains(queries[0], "category=tv") {
+		t.Errorf("应该只用搜索接口: %v", queries)
+	}
+	// 剧集只认豆瓣链接：IMDb 编号是整部剧的，分不出第几季
+	if _, err := neodb.Find(ctx, providers.NeoDBQuery{DoubanID: "30000000", IMDbID: "tt7187044", Title: "琅琊榜", TV: true}); !errors.Is(err, providers.ErrNotFound) {
+		t.Errorf("豆瓣链接对不上的剧集不应该采用: %v", err)
+	}
+	if _, err := neodb.Find(ctx, providers.NeoDBQuery{DoubanID: "30000000", Title: ""}); !errors.Is(err, providers.ErrNotFound) || len(queries) != 2 {
+		t.Errorf("没有片名时不搜索: %v", err)
+	}
+}
+
+func TestNeoDBSeasonOneWholeShowFallback(t *testing.T) {
+	fake := providerstest.New(t)
+	for _, tc := range []struct {
+		title  string
+		season int
+		links  []string
+		want   string
+	}{
+		{"第一季可用整剧", 1, []string{"tv/101", "tv/102/season/0"}, "tv/101"},
+		{"特别篇链接", 1, []string{"tv/102/season/0"}, ""},
+		{"整剧有歧义", 1, []string{"tv/101", "tv/103"}, ""},
+		{"明确的第一季有歧义", 1, []string{"tv/101", "tv/102/season/1", "tv/103/season/1"}, ""},
+		{"续季不能用整剧", 2, []string{"tv/101"}, ""},
+	} {
+		links := []map[string]string{{"url": "https://movie.douban.com/subject/26665065/"}}
+		for _, link := range tc.links {
+			links = append(links, map[string]string{"url": "https://www.themoviedb.org/" + link})
+		}
+		fake.NeoDB[tc.title] = []map[string]any{{"external_resources": links}}
+		item, err := fake.NeoDBClient().Find(context.Background(), providers.NeoDBQuery{
+			DoubanID: "26665065", Title: tc.title, TV: true, Season: tc.season,
+		})
+		if err != nil || item.TMDBID != tc.want {
+			t.Errorf("%s: %+v, %v; want %q", tc.title, item, err, tc.want)
+		}
 	}
 }

@@ -6,7 +6,6 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"crypto/rand"
 	"encoding/json"
 	"encoding/xml"
 	"errors"
@@ -26,11 +25,11 @@ import (
 var ErrNotFound = errors.New("来源里没有这个条目")
 
 // 请求豆瓣时扮成普通浏览器：手机版接口（m.douban.com）用 iPhone Safari，网页版（movie.douban.com、www.douban.com）用电脑上的 Chrome。
-// 域名和 UA 对不上（手机 UA 去请求电脑网页的接口）本身就是个特征。
+// 域名和 UA 对不上（手机 UA 去请求电脑网页的接口）本身就是个特征。这是没配 DOUBAN_MOBILE_UA、DOUBAN_DESKTOP_UA 时用的。
 const (
-	mobileUA       = "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1"
-	desktopUA      = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36"
-	acceptLanguage = "zh-CN,zh;q=0.9,en;q=0.8"
+	DefaultMobileUA  = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.5 Mobile/15E148 Safari/604.1"
+	DefaultDesktopUA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/158.0.0.0 Safari/537.36"
+	acceptLanguage   = "zh-CN,zh;q=0.9,en;q=0.8"
 )
 
 // Pacer 保证两次请求之间至少间隔一段时间，避免把对方打挂或触发风控。
@@ -273,6 +272,11 @@ type Douban struct {
 	// HTTP 不复用连接，每个请求都可能从另一个 IP 出去。这时一个出口被拒绝、被标记或者连不上，
 	// 不代表别的出口也不行：换一个出口再试，最多 exitTries 次，都不行才记限流，见 get。
 	Rotating bool
+	// Cookie 是每个豆瓣请求都带的 Cookie（DOUBAN_COOKIE）：用浏览器从服务器的出口打开过豆瓣、过了验证后拿到的那一整串，
+	// 所有请求共用同一个 bid，像同一个浏览器。为空时不带 Cookie。
+	Cookie string
+	// MobileUA、DesktopUA 是手机版接口和网页版用的 UA，NewDouban 填默认值。
+	MobileUA, DesktopUA string
 
 	refusals refusalState
 }
@@ -397,7 +401,7 @@ func NewDouban(client *http.Client) *Douban {
 	pagePace := NewPacer(doubanInterval)
 	pagePace.Name = "豆瓣网页"
 	return &Douban{HTTP: client, MobileBase: "https://m.douban.com", WebBase: "https://movie.douban.com", FeedBase: "https://www.douban.com",
-		Pace: pace, MoviePace: moviePace, TVPace: tvPace, PagePace: pagePace}
+		Pace: pace, MoviePace: moviePace, TVPace: tvPace, PagePace: pagePace, MobileUA: DefaultMobileUA, DesktopUA: DefaultDesktopUA}
 }
 
 // doubanInterval 是每条豆瓣节奏的基准间隔。加上随机抖动和偶尔歇一下，平均大约 7.5 秒一次（每分钟 8 次左右）。
@@ -473,7 +477,8 @@ func (d *Douban) Subject(ctx context.Context, id, first string) (*DoubanSubject,
 	for _, kind := range kinds {
 		var response rexxarSubject
 		endpoint := fmt.Sprintf("%s/rexxar/api/v2/%s/%s?ck=&for_mobile=1", d.MobileBase, kind, url.PathEscape(id))
-		err := d.getJSON(ctx, endpoint, "https://m.douban.com/", &response)
+		// 手机版的条目页里，页面脚本请求这个接口时 Referer 就是条目页本身。
+		err := d.getJSON(ctx, endpoint, "https://m.douban.com/movie/subject/"+url.PathEscape(id)+"/", &response)
 		var moved *movedError
 		if errors.Is(err, ErrNotFound) || errors.As(err, &moved) {
 			notFound++ // 跳到了另一个接口，也是这个接口下没有它
@@ -1000,39 +1005,27 @@ func (d *Douban) newRequest(ctx context.Context, call doubanCall) (*http.Request
 	}
 	switch {
 	case call.page:
-		request.Header.Set("User-Agent", desktopUA)
+		request.Header.Set("User-Agent", d.DesktopUA)
 		request.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8")
 		request.Header.Set("Upgrade-Insecure-Requests", "1")
 	case call.xml:
-		request.Header.Set("User-Agent", desktopUA)
+		request.Header.Set("User-Agent", d.DesktopUA)
 		request.Header.Set("Accept", "application/rss+xml,application/xml;q=0.9,*/*;q=0.8")
 	case call.desktop:
 		// 网页上的 /j/ 接口是页面里的脚本发的 Ajax 请求。
-		request.Header.Set("User-Agent", desktopUA)
+		request.Header.Set("User-Agent", d.DesktopUA)
 		request.Header.Set("Accept", "application/json, text/javascript, */*; q=0.01")
 		request.Header.Set("X-Requested-With", "XMLHttpRequest")
 	default:
-		request.Header.Set("User-Agent", mobileUA)
+		request.Header.Set("User-Agent", d.MobileUA)
 		request.Header.Set("Accept", "application/json")
 	}
 	request.Header.Set("Referer", call.referer)
 	request.Header.Set("Accept-Language", acceptLanguage)
-	// bid 是豆瓣给每个浏览器发的标识，ll 是选过的城市（108288 是北京），真实的浏览器两个都有。
-	request.Header.Set("Cookie", `ll="108288"; bid=`+randomBid())
-	return request, nil
-}
-
-// bidAlphabet 是豆瓣 bid 用的字符：大小写字母和数字，11 位，比如 KbVLyVSe9PI。
-const bidAlphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
-
-// randomBid 每次生成一个新的 bid。固定值容易被风控；只用十六进制字符的 bid 一眼就能认出来不是豆瓣发的。
-func randomBid() string {
-	buffer := make([]byte, 11)
-	rand.Read(buffer)
-	for index, value := range buffer {
-		buffer[index] = bidAlphabet[int(value)%len(bidAlphabet)]
+	if d.Cookie != "" {
+		request.Header.Set("Cookie", d.Cookie)
 	}
-	return string(buffer)
+	return request, nil
 }
 
 // errVerification 表示请求被重定向到了豆瓣的验证页。

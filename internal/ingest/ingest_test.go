@@ -74,8 +74,8 @@ func TestRefreshMergesAllSources(t *testing.T) {
 	if m.Summary != "豆瓣的简介" || m.Poster != "https://img9.doubanio.com/view/photo/l_ratio_poster/public/p1.jpg" {
 		t.Errorf("豆瓣的简介和海报不应该被 TMDB 覆盖: %q %q", m.Summary, m.Poster)
 	}
-	if m.EpisodeCount != 12 {
-		t.Errorf("集数应该保持豆瓣的 12，实际 %d", m.EpisodeCount)
+	if m.EpisodeCount != 10 {
+		t.Errorf("确认同一季后，集数应该使用 TMDB 的 10，实际 %d", m.EpisodeCount)
 	}
 	if m.OriginalTitle != "Fog Harbor" || len(m.Backdrops) != 1 || m.RatingTMDB < 8 || m.DurationMinutes != 45 || m.SeriesStatus != "ongoing" {
 		t.Errorf("TMDB 的补充信息没有写入: %+v", m)
@@ -121,9 +121,12 @@ func TestRefreshMarksMissingDoubanSubject(t *testing.T) {
 	if counts, _ := service.Queue.Counts(ctx); counts["queued"] != 0 {
 		t.Errorf("豆瓣确认没有的 ID 不应该再排队: %v", counts)
 	}
-	// 后来豆瓣上又有了（管理员手动刷新）：恢复显示。
+	// 后来豆瓣上又有了：自动的任务不会再去问，管理员手动刷新（Force）才会，问到了就恢复显示。
 	fake.Subjects["tv:36009999"] = map[string]any{"id": "36009999", "type": "tv", "title": "迟到的剧"}
-	if err := service.Refresh(ctx, id, jobs.Job{}); err != nil {
+	if err := service.Refresh(ctx, id, jobs.Job{}); !errors.Is(err, jobs.ErrSkip) {
+		t.Fatalf("确认没有的条目，自动的任务不应该再请求豆瓣: %v", err)
+	}
+	if err := service.Refresh(ctx, id, jobs.Job{Payload: []byte(`{"force":true}`)}); err != nil {
 		t.Fatal(err)
 	}
 	if m, _ := service.Media.Get(ctx, id); m.Hidden || m.MetadataStatus != "complete" || m.Title != "迟到的剧" {
@@ -161,8 +164,10 @@ func TestEnsureDoubanQueuesRefreshOnce(t *testing.T) {
 		t.Error("同一个豆瓣 ID 应该对应同一部作品")
 	}
 	counts, _ := service.Queue.Counts(ctx)
-	if counts["queued"] != 1 {
-		t.Errorf("只有新建时才排队同步，应该只有 1 个任务，实际 %v", counts)
+	_, refresh, _ := service.Queue.Latest(ctx, ingest.KindRefresh, strconv.FormatInt(first, 10))
+	_, enrich, _ := service.Queue.Latest(ctx, ingest.KindEnrich, strconv.FormatInt(first, 10))
+	if counts["queued"] != 2 || !refresh || !enrich {
+		t.Errorf("只有新建时才排队：建档和豆瓣详情各一个，实际 %v", counts)
 	}
 	m, _ := service.Media.Get(ctx, first)
 	if m.Title != "回声" || m.Year != 2024 || m.Type != media.TypeMovie {
@@ -204,6 +209,23 @@ func TestRefreshUnknownTypeDoesNotWaitForMovies(t *testing.T) {
 	}
 }
 
+func TestRefreshKnownMovieWaitsForMovies(t *testing.T) {
+	service, fake := newService(t)
+	service.Douban.MoviePace = providers.NewPacer(time.Millisecond)
+	service.Douban.MoviePace.Flagged()
+	ctx := context.Background()
+	id, err := service.EnsureDouban(ctx, providers.DoubanItem{ID: "36000003", Title: "新电影", Kind: "movie"}, "", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Refresh(ctx, id, jobs.Job{}); !errors.Is(err, providers.ErrThrottled) {
+		t.Fatalf("明确是电影时应等待电影接口恢复: %v", err)
+	}
+	if fake.Count("/rexxar/api/v2/tv/36000003") != 0 {
+		t.Fatalf("电影接口暂停时不应误查剧集接口: %v", fake.Requests)
+	}
+}
+
 func TestRefreshChartsAndDiscover(t *testing.T) {
 	service, fake := newService(t)
 	fake.Popular["hot_gaia"] = []map[string]any{{"id": "1000001", "title": "电影一", "year": "2026"}, {"id": "1000002", "title": "电影二"}}
@@ -233,7 +255,7 @@ func TestRefreshChartsAndDiscover(t *testing.T) {
 	}
 }
 
-// 只有资料还会变的作品才定期重新同步。
+// 只为豆瓣独有、还会变的资料定期重新读详情：近两年作品的评分和简介。连载剧的集数和状态交给 TMDB，不为它们去读豆瓣。
 func TestStaleOnlyPicksWorksThatStillChange(t *testing.T) {
 	service, _ := newService(t)
 	pool := testdb.Pool(t)
@@ -253,27 +275,27 @@ metadata_synced_at = now() - make_interval(secs => $6) WHERE id = $1`, id, media
 	never, _, _ := service.Media.EnsureDouban(ctx, "37000001", nil)
 	want := map[int64]string{
 		never: "从没同步过",
-		add("37000002", "tv", "ongoing", "complete", 1999, 2):     "连载中的老剧，每天一次",
-		add("37000003", "tv", "", "complete", thisYear, 2):        "状态未知的新剧，每天一次",
+		add("37000003", "tv", "ongoing", "complete", thisYear, 8): "今年的连载剧，每周一次",
 		add("37000004", "movie", "", "complete", thisYear, 8):     "今年的电影，每周一次",
 		add("37000005", "tv", "ended", "complete", thisYear-1, 8): "去年完结的剧，评分还在变，每周一次",
 	}
 	skip := map[int64]string{
-		add("37000011", "tv", "ongoing", "complete", 1999, 0.5):  "连载中但今天同步过",
-		add("37000012", "tv", "", "complete", 2015, 400):         "状态未知的老剧",
-		add("37000013", "tv", "ended", "complete", 2015, 400):    "完结多年的剧",
-		add("37000014", "movie", "", "complete", 1994, 400):      "老电影",
-		add("37000015", "movie", "", "complete", thisYear, 3):    "今年的电影但三天前才同步过",
-		add("37000017", "movie", "", "not_found", thisYear, 400): "豆瓣上没有的",
+		add("37000002", "tv", "ongoing", "complete", 1999, 2):     "连载中的老剧：集数交给 TMDB",
+		add("37000011", "tv", "ongoing", "complete", thisYear, 2): "今年的连载剧，两天前才同步过",
+		add("37000012", "tv", "", "complete", 2015, 400):          "状态未知的老剧",
+		add("37000013", "tv", "ended", "complete", 2015, 400):     "完结多年的剧",
+		add("37000014", "movie", "", "complete", 1994, 400):       "老电影",
+		add("37000015", "movie", "", "complete", thisYear, 3):     "今年的电影但三天前才同步过",
+		add("37000017", "movie", "", "not_found", thisYear, 400):  "豆瓣上没有的",
 	}
-	// 这一周已经从列表里拿到过评分的近期电影，详情放宽到 30 天；剧集不放宽（集数还在变）。
+	// 这一周已经从列表里拿到过评分的近期作品，详情放宽到 30 天：电影、剧集都一样。
 	listed := func(id int64) int64 {
 		pool.Exec(ctx, `UPDATE media SET douban_listed_at = now() - interval '1 day' WHERE id = $1`, id)
 		return id
 	}
 	skip[listed(add("37000019", "movie", "", "complete", thisYear, 8))] = "今年的电影，这周列表里拿到过评分"
 	want[listed(add("37000020", "movie", "", "complete", thisYear, 31))] = "列表里拿到过评分，但详情已经一个月没抓"
-	want[listed(add("37000021", "tv", "ended", "complete", thisYear-1, 8))] = "去年完结的剧，列表里拿到过评分也照常每周一次"
+	skip[listed(add("37000021", "tv", "ended", "complete", thisYear-1, 8))] = "去年完结的剧，这周列表里拿到过评分"
 	stalelisted := add("37000022", "movie", "", "complete", thisYear, 8)
 	pool.Exec(ctx, `UPDATE media SET douban_listed_at = now() - interval '8 days' WHERE id = $1`, stalelisted)
 	want[stalelisted] = "列表里拿到评分已经是一周多以前"
@@ -317,7 +339,7 @@ func runAll(t *testing.T, service *ingest.Service, limit int) {
 	}
 }
 
-// 四步链：豆瓣 → Wikidata/TMDB → AI 写描述 → 算向量。每一步成功就保存，下一步失败不会让上一步重来。
+// 整条链：建档（Wikidata/NeoDB/TMDB）和豆瓣详情 → AI 写描述 → 算向量。每一步成功就保存，下一步失败不会让上一步重来。
 func TestSemanticAndEmbeddingAreSavedSeparately(t *testing.T) {
 	service, fake := newService(t)
 	seedShow(fake)
@@ -397,7 +419,7 @@ func TestEnrichFailureRetriesWithoutDouban(t *testing.T) {
 	}
 }
 
-// 巡检把四步里漏掉的补上。
+// 巡检把每一步漏掉的补上。
 func TestSweepFillsGaps(t *testing.T) {
 	service, fake := newService(t)
 	seedShow(fake)
@@ -495,11 +517,12 @@ func TestEnrichRecordsSeasonReleaseDate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := service.Refresh(ctx, id, jobs.Job{}); err != nil {
-		t.Fatal(err)
-	}
 	if err := service.Enrich(ctx, id, jobs.Job{}); err != nil {
 		t.Fatal(err)
+	}
+	m, err := service.Media.Get(ctx, id)
+	if err != nil || m.Year != 2026 {
+		t.Fatalf("尚未同步豆瓣时，应按第二季首播时间补年份: %+v, %v", m, err)
 	}
 	var released string
 	var popularity float64
@@ -653,5 +676,131 @@ func TestRefreshFallsBackToPageWhenSomeoneWaits(t *testing.T) {
 	}
 	if m.Title != "漫长的季节" || m.EpisodeCount != 12 || m.RatingDouban < 9.39 || m.Year != 2023 {
 		t.Errorf("应该用详情网页的资料: %+v", m)
+	}
+}
+
+// 豆瓣详情一直拿不到（接口全拒绝）时，新作品照样建档：Wikidata 给片名和编号，NeoDB 给中文简介、类型和演职员，
+// TMDB 给剧照和其余空着的字段；几个来源按 豆瓣 > NeoDB > TMDB 取舍，NeoDB 的评分不入库。
+// 豆瓣详情后来到了，覆盖建档的资料，NeoDB 不再被请求。
+func TestBuildsWithoutDouban(t *testing.T) {
+	service, fake := newService(t)
+	service.NeoDB, service.AI = fake.NeoDBClient(), fake.AI()
+	ctx := context.Background()
+	fake.Refuse["36100001"] = true
+	fake.Wikidata["36100001"] = []map[string]string{
+		{"item": "http://www.wikidata.org/entity/Q900", "imdb": "tt9000001", "tmdbMovie": "9001", "label": "Silent Witness", "lang": "en"},
+		{"item": "http://www.wikidata.org/entity/Q900", "label": "无声的证词", "lang": "zh-cn"},
+	}
+	neodbEntry := func(doubanID, description string) map[string]any {
+		return map[string]any{
+			"type": "Movie", "title": "Silent Witness", "orig_title": "Silent Witness", "rating": 9.9, "description": "An English brief",
+			"localized_title":       []map[string]string{{"lang": "zh-cn", "text": "沉默的证人"}, {"lang": "zh-tw", "text": "沉默證人"}},
+			"localized_description": []map[string]string{{"lang": "en", "text": "An English brief"}, {"lang": "zh-cn", "text": description}},
+			"genre":                 []string{"drama", "犯罪", "unknown"}, "director": []string{"导演乙"}, "actor": []map[string]string{{"name": "演员丙", "role": ""}},
+			"external_resources": []map[string]string{{"url": "https://movie.douban.com/subject/" + doubanID + "/"},
+				{"url": "https://www.imdb.com/title/tt9000001/"}, {"url": "https://www.themoviedb.org/movie/9001"}},
+		}
+	}
+	// 同名的另一部（豆瓣链接不同）排在前面，不能认错。
+	fake.NeoDB["无声的证词"] = []map[string]any{neodbEntry("36199999", "同名的另一部"), neodbEntry("36100001", "NeoDB 的中文简介")}
+	fake.TMDB["/3/movie/9001"] = map[string]any{
+		"title": "无声的证词", "original_title": "Silent Witness", "overview": "TMDB 的简介", "poster_path": "/p.jpg",
+		"vote_average": 7.5, "vote_count": 100, "runtime": 101, "release_date": "2025-05-01",
+		"images": map[string]any{"backdrops": []map[string]any{{"file_path": "/b.jpg"}}},
+	}
+	// 只凭豆瓣 ID 收进来的老链接：什么资料都没有
+	id, err := service.EnsureDouban(ctx, providers.DoubanItem{ID: "36100001"}, "", ingest.PriorityDiscover)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runAll(t, service, 30)
+	m, _ := service.Media.Get(ctx, id)
+	if m.Title != "沉默的证人" || m.Summary != "NeoDB 的中文简介" || strings.Join(m.Genres, ",") != "剧情,犯罪" ||
+		strings.Join(m.Directors, ",") != "导演乙" || strings.Join(m.Actors, ",") != "演员丙" {
+		t.Errorf("Wikidata、NeoDB 的资料没有写对: %+v", m)
+	}
+	if len(m.Backdrops) != 1 || m.RatingTMDB < 7 || m.DurationMinutes != 101 || m.TMDBID != "movie/9001" || m.Type != media.TypeMovie {
+		t.Errorf("TMDB 的资料没有写入: %+v", m)
+	}
+	if m.RatingDouban != 0 || m.MetadataStatus != "partial" || m.EnrichedAt == nil || m.Fetching() || m.Hidden {
+		t.Errorf("豆瓣没同步也应该建好档、正常展示，NeoDB 的评分不入库: %+v", m)
+	}
+	if results, _ := service.Media.Resolve(ctx, []media.Candidate{{Title: "沉默證人"}}); results[0].Status != "matched" {
+		t.Error("NeoDB 的其他中文片名应该成为别名")
+	}
+	if len(fake.Prompts) != 0 {
+		t.Error("豆瓣没同步、建档又不久的作品先不写语义描述")
+	}
+	if fake.Count("/subject/36100001/") != 0 {
+		t.Error("没人在等的作品不应该去读豆瓣详情网页")
+	}
+	searches := fake.Count("/api/catalog/search")
+
+	// 豆瓣恢复了：管理员手动刷新，豆瓣的资料覆盖建档的资料，接着写描述。
+	delete(fake.Refuse, "36100001")
+	fake.Subjects["36100001"] = map[string]any{"id": "36100001", "type": "movie", "title": "无声的证词", "intro": "豆瓣的简介",
+		"genres": []string{"剧情", "悬疑"}, "year": "2025", "rating": map[string]any{"value": 8.1}}
+	if err := service.RefreshNow(ctx, id); err != nil {
+		t.Fatal(err)
+	}
+	runAll(t, service, 30)
+	m, _ = service.Media.Get(ctx, id)
+	if m.Summary != "豆瓣的简介" || strings.Join(m.Genres, ",") != "剧情,悬疑" || m.RatingDouban < 8 || m.MetadataStatus != "complete" {
+		t.Errorf("豆瓣的资料应该覆盖建档的资料: %+v", m)
+	}
+	if len(fake.Prompts) != 1 || m.SemanticText == "" {
+		t.Errorf("豆瓣同步以后应该写语义描述: %d", len(fake.Prompts))
+	}
+	if fake.Count("/api/catalog/search") != searches {
+		t.Error("豆瓣同步过以后不应该再去问 NeoDB")
+	}
+}
+
+// 打开作品页：访客和爬虫只排建档，不排豆瓣详情；登录用户打开没同步过豆瓣的，豆瓣详情提到最前面。
+func TestViewedOnlyQueuesDoubanForSignedInUsers(t *testing.T) {
+	service, _ := newService(t)
+	ctx := context.Background()
+	id, _, _ := service.Media.EnsureDouban(ctx, "36100002", media.Patch{"title": "没补的片子"})
+	m, _ := service.Media.Get(ctx, id)
+	subject := strconv.FormatInt(id, 10)
+	if err := service.Viewed(ctx, m, false); err != nil {
+		t.Fatal(err)
+	}
+	if job, found, _ := service.Queue.Latest(ctx, ingest.KindEnrich, subject); !found || job.Priority != ingest.PriorityViewing {
+		t.Errorf("访客打开没建档的作品应该马上排建档: %+v", job)
+	}
+	if _, found, _ := service.Queue.Latest(ctx, ingest.KindRefresh, subject); found {
+		t.Error("访客打开作品页不应该排豆瓣详情")
+	}
+	if err := service.Viewed(ctx, m, true); err != nil {
+		t.Fatal(err)
+	}
+	if job, found, _ := service.Queue.Latest(ctx, ingest.KindRefresh, subject); !found || job.Priority != ingest.PriorityViewing {
+		t.Errorf("登录用户打开应该优先去读豆瓣: %+v", job)
+	}
+	// 建过档、豆瓣也同步过的，谁打开都不再排任务。
+	testdb.Pool(t).Exec(ctx, `DELETE FROM jobs`)
+	service.Media.MarkSynced(ctx, id, "complete")
+	service.Media.MarkEnriched(ctx, id, time.Now())
+	m, _ = service.Media.Get(ctx, id)
+	service.Viewed(ctx, m, true)
+	if counts, _ := service.Queue.Counts(ctx); counts["queued"] != 0 {
+		t.Errorf("资料齐了不应该再排任务: %v", counts)
+	}
+}
+
+// 排了很久的豆瓣任务，真要请求之前再确认一次：已经不需要了（比如插件交来了资料）就不去请求。
+func TestRefreshSkipsWhenNoLongerDue(t *testing.T) {
+	service, fake := newService(t)
+	seedShow(fake)
+	ctx := context.Background()
+	id, _ := service.EnsureDouban(ctx, providers.DoubanItem{ID: "36000001", Title: "雾港 第二季", Kind: "tv"}, "", 0)
+	testdb.Pool(t).Exec(ctx, `UPDATE media SET year = 2015 WHERE id = $1`, id)
+	service.Media.MarkSynced(ctx, id, "complete")
+	if err := service.Refresh(ctx, id, jobs.Job{}); !errors.Is(err, jobs.ErrSkip) {
+		t.Errorf("已经同步过、不用再同步的作品应该跳过: %v", err)
+	}
+	if fake.Count("/rexxar/api/v2/tv/36000001") != 0 {
+		t.Error("跳过时不应该请求豆瓣")
 	}
 }

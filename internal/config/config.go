@@ -48,6 +48,12 @@ type Config struct {
 
 	// DoubanProxy 是访问豆瓣接口用的出站代理（http://、https:// 或 socks5://），留空时直连。
 	DoubanProxy string
+	// DoubanCookie 是所有豆瓣请求都带的 Cookie：用浏览器从服务器的出口打开豆瓣、过了验证后拿到的那一整串。
+	DoubanCookie string
+	// DoubanMobileUA、DoubanDesktopUA 是请求豆瓣手机版接口、网页版时的 UA，留空用 providers 里的默认值。
+	DoubanMobileUA, DoubanDesktopUA string
+	// NeoDBURL 是 NeoDB 的地址，留空时不用 NeoDB 补资料。
+	NeoDBURL string
 	// HongguoSync 为 true 时后台定期从红果短剧官网抓榜单、重点剧目、分类和新上架的短剧。
 	// 关掉以后，已有的短剧仍会在有人打开、资料还没抓到时去抓一次。
 	HongguoSync bool
@@ -98,6 +104,10 @@ func Load() (Config, error) {
 		TelegramChatID:    get("TELEGRAM_CHAT_ID", ""),
 		TelegramAPI:       get("TELEGRAM_API_BASE", ""),
 		DoubanProxy:       get("DOUBAN_PROXY", ""),
+		DoubanCookie:      get("DOUBAN_COOKIE", ""),
+		DoubanMobileUA:    get("DOUBAN_MOBILE_UA", ""),
+		DoubanDesktopUA:   get("DOUBAN_DESKTOP_UA", ""),
+		NeoDBURL:          get("NEODB_URL", "https://neodb.social"),
 		HongguoSync:       getBool("HONGGUO_SYNC", true),
 		MailHourlyLimit:   getInt("MAIL_HOURLY_LIMIT", 200),
 		JobsInWeb:         getBool("JOBS_IN_WEB", true),

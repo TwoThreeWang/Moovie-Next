@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -27,8 +28,13 @@ type WikidataEntity struct {
 	IMDbID      string
 	TMDBMovieID string
 	TMDBTVID    string
-	Labels      []string
+	// Title 是中文片名（简体优先，其次繁体），没有中文标签时是英文标签，都没有时为空。
+	Title  string
+	Labels []string
 }
+
+// titleLanguages 是 Wikidata 标签作为片名时的先后。
+var titleLanguages = []string{"zh-cn", "zh-hans", "zh", "zh-tw", "zh-hant", "zh-hk", "en"}
 
 // ByDoubanID 用豆瓣 ID 找到 Wikidata 条目。Wikidata 上没有这个豆瓣 ID 时返回 ErrNotFound。
 func (w *Wikidata) ByDoubanID(ctx context.Context, doubanID string) (*WikidataEntity, error) {
@@ -37,12 +43,12 @@ func (w *Wikidata) ByDoubanID(ctx context.Context, doubanID string) (*WikidataEn
 			return nil, fmt.Errorf("豆瓣 ID 不合法: %q", doubanID)
 		}
 	}
-	query := fmt.Sprintf(`SELECT ?item ?imdb ?tmdbMovie ?tmdbTV ?label WHERE {
+	query := fmt.Sprintf(`SELECT ?item ?imdb ?tmdbMovie ?tmdbTV ?label ?lang WHERE {
   ?item wdt:P4529 "%s".
   OPTIONAL { ?item wdt:P345 ?imdb. }
   OPTIONAL { ?item wdt:P4947 ?tmdbMovie. }
   OPTIONAL { ?item wdt:P4983 ?tmdbTV. }
-  OPTIONAL { ?item rdfs:label ?label. FILTER(LANG(?label) IN ("zh", "zh-cn", "zh-hans", "zh-hant", "zh-tw", "zh-hk", "en", "ja", "ko")) }
+  OPTIONAL { ?item rdfs:label ?label. FILTER(LANG(?label) IN ("zh", "zh-cn", "zh-hans", "zh-hant", "zh-tw", "zh-hk", "en", "ja", "ko")) BIND(LANG(?label) AS ?lang) }
 }`, doubanID)
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, w.Endpoint, strings.NewReader(url.Values{"query": {query}}.Encode()))
 	if err != nil {
@@ -66,6 +72,7 @@ func (w *Wikidata) ByDoubanID(ctx context.Context, doubanID string) (*WikidataEn
 	}
 	entity := &WikidataEntity{}
 	seen := map[string]bool{}
+	best := len(titleLanguages)
 	for _, binding := range response.Results.Bindings {
 		if item := binding["item"].Value; item != "" {
 			entity.QID = item[strings.LastIndexByte(item, '/')+1:]
@@ -79,7 +86,14 @@ func (w *Wikidata) ByDoubanID(ctx context.Context, doubanID string) (*WikidataEn
 		if value := binding["tmdbTV"].Value; value != "" {
 			entity.TMDBTVID = value
 		}
-		if label := binding["label"].Value; label != "" && !seen[label] {
+		label := binding["label"].Value
+		if label == "" {
+			continue
+		}
+		if rank := slices.Index(titleLanguages, binding["lang"].Value); rank >= 0 && rank < best {
+			best, entity.Title = rank, label
+		}
+		if !seen[label] {
 			seen[label] = true
 			entity.Labels = append(entity.Labels, label)
 		}

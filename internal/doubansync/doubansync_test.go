@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"strconv"
 	"testing"
 	"time"
 
@@ -299,5 +300,41 @@ func TestSyncAfterFailuresReadsEverything(t *testing.T) {
 	}
 	if _, found, _ := lib.Get(ctx, 1, missing); !found {
 		t.Error("重试的任务应该完整地读，把后面那一页里没导入的补上")
+	}
+}
+
+// 豆瓣的电影、剧集详情都停着（IP 被标记）时，想看、看过照样同步进来：标记列表走自己的节奏，
+// 新收进来的作品马上排建档（不用豆瓣），豆瓣详情排在后面慢慢补。
+func TestSyncWhileDoubanDetailsPaused(t *testing.T) {
+	pool := testdb.Pool(t)
+	testdb.User(t, pool, 1)
+	fake := providerstest.New(t)
+	queue := jobs.NewQueue(pool)
+	mediaStore := media.NewStore(pool)
+	douban := fake.Douban()
+	douban.MoviePace, douban.TVPace = providers.NewPacer(time.Millisecond), providers.NewPacer(time.Millisecond)
+	douban.MoviePace.Flagged()
+	douban.TVPace.Flagged()
+	catalog := &ingest.Service{Media: mediaStore, Queue: queue, Douban: douban, Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	service := &doubansync.Service{Pool: pool, Users: auth.NewStore(pool), Douban: douban, Catalog: catalog, Queue: queue}
+	ctx := context.Background()
+	fake.Interests["evan/done"] = []map[string]any{{"subject": map[string]any{"id": "31000001", "title": "看过一", "type": "movie", "year": "2020"}}}
+	fake.Interests["evan/mark"] = []map[string]any{{"subject": map[string]any{"id": "32000001", "title": "想看一", "type": "tv"}}}
+	if err := service.Bind(ctx, 1, "evan"); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Sync(ctx, 1, true, func(doubansync.Progress) {}); err != nil {
+		t.Fatal(err)
+	}
+	wish, watched, _ := library.NewStore(pool).Counts(ctx, 1)
+	if wish != 1 || watched != 1 {
+		t.Errorf("详情停着也应该同步标记: 想看 %d 看过 %d", wish, watched)
+	}
+	m, err := mediaStore.ByDoubanID(ctx, "31000001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, found, _ := queue.Latest(ctx, ingest.KindEnrich, strconv.FormatInt(m.ID, 10)); !found || m.Title != "看过一" {
+		t.Errorf("新收进来的作品应该带着列表里的片名、马上排建档: %+v", m)
 	}
 }

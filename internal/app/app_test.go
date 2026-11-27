@@ -184,7 +184,7 @@ func (s *site) seedMedia(doubanID, title, mediaType string, extra media.Patch) i
 	for key, value := range extra {
 		patch[key] = value
 	}
-	if err := s.app.Media.ApplyPatch(ctx, id, media.ProviderDouban, patch); err != nil {
+	if err := s.app.Media.ApplyPatch(ctx, id, patch); err != nil {
 		s.t.Fatal(err)
 	}
 	if err := s.app.Media.MarkSynced(ctx, id, "complete"); err != nil {
@@ -581,10 +581,18 @@ func TestResolveAPI(t *testing.T) {
 
 func TestSearchDiscoversFromDouban(t *testing.T) {
 	s := newSite(t)
-	s.register("evan")
 	s.fake.Suggest["雾港"] = []map[string]any{{"id": "36000001", "title": "雾港", "type": "tv", "year": "2026"}}
-	r := s.htmx(http.MethodGet, "/api/htmx/search?q="+url.QueryEscape("雾港"), nil)
-	if r.status != http.StatusOK || !strings.Contains(r.body, "雾港") || strings.Contains(r.body, "没有找到") {
+	s.seedMedia("36000002", "本地雾港", media.TypeTV, nil)
+	path := "/api/htmx/search?q=" + url.QueryEscape("雾港")
+	guest := s.htmx(http.MethodGet, path, nil)
+	if guest.status != http.StatusOK || !strings.Contains(guest.body, "本地雾港") || s.fake.Count("/j/subject_suggest") != 0 {
+		t.Fatalf("访客应能搜本地库且不请求豆瓣: %d %s", guest.status, guest.body)
+	}
+	s.register("evan")
+	r := s.htmx(http.MethodGet, path, nil)
+	discovered, err := s.app.Media.ByDoubanID(context.Background(), "36000001")
+	if r.status != http.StatusOK || err != nil || !strings.Contains(r.body, "/m/"+itoa(discovered.ID)) ||
+		s.fake.Count("/j/subject_suggest") != 1 {
 		t.Fatalf("作品库里没有时应该去豆瓣查联想并收录: %d %s", r.status, r.body)
 	}
 	if r := s.htmx(http.MethodGet, "/api/htmx/search?q="+url.QueryEscape("完全不存在的片子"), nil); !strings.Contains(r.body, "没有找到") {
@@ -974,20 +982,35 @@ func TestFetchingState(t *testing.T) {
 	s := newSite(t)
 	ctx := context.Background()
 	id, _, _ := s.app.Media.EnsureDouban(ctx, "36000099", media.Patch{"title": "刚收录的片子"})
-	detail := s.get("/m/" + itoa(id))
-	mustContain(t, detail, "正在从豆瓣获取完整资料", `/api/htmx/m/`+itoa(id)+`/ready?n=1`)
-	if job, found, _ := s.app.Queue.Latest(ctx, "media.refresh", itoa(id)); !found || job.Priority != 0 && job.Status != "queued" {
-		t.Errorf("打开没补全的作品应该排队去抓资料: %+v %v", job, found)
+	subject := itoa(id)
+	// 没登录的访客（包括爬虫）打开：只排建档，不去请求豆瓣
+	detail := s.get("/m/" + subject)
+	mustContain(t, detail, "正在获取作品资料", `/api/htmx/m/`+subject+`/ready?n=1`)
+	if job, found, _ := s.app.Queue.Latest(ctx, "media.enrich", subject); !found || job.Priority != 20 || job.Status != "queued" {
+		t.Errorf("打开没建档的作品应该马上排建档: %+v %v", job, found)
 	}
-	if r := s.htmx(http.MethodGet, "/api/htmx/m/"+itoa(id)+"/ready?n=3", nil); !strings.Contains(r.body, "ready?n=4") {
+	if _, found, _ := s.app.Queue.Latest(ctx, "media.refresh", subject); found {
+		t.Error("访客打开作品页不应该排豆瓣详情")
+	}
+	// 登录用户打开：豆瓣详情也提到最前面
+	s.register("viewer")
+	s.get("/m/" + subject)
+	if job, found, _ := s.app.Queue.Latest(ctx, "media.refresh", subject); !found || job.Priority != 20 || job.Status != "queued" {
+		t.Errorf("登录用户打开没同步过豆瓣的作品应该优先去读豆瓣: %+v %v", job, found)
+	}
+	if r := s.htmx(http.MethodGet, "/api/htmx/m/"+subject+"/ready?n=3", nil); !strings.Contains(r.body, "ready?n=4") {
 		t.Errorf("还没好时应该继续等: %s", r.body)
 	}
-	if r := s.htmx(http.MethodGet, "/api/htmx/m/"+itoa(id)+"/ready?n=20", nil); !strings.Contains(r.body, "稍后再来看看") || strings.Contains(r.body, "hx-get") {
+	if r := s.htmx(http.MethodGet, "/api/htmx/m/"+subject+"/ready?n=20", nil); !strings.Contains(r.body, "稍后再来看看") || strings.Contains(r.body, "hx-get") {
 		t.Errorf("等太久应该停止轮询: %s", r.body)
 	}
-	s.app.Media.MarkSynced(ctx, id, "complete")
-	if r := s.htmx(http.MethodGet, "/api/htmx/m/"+itoa(id)+"/ready?n=5", nil); r.header.Get("HX-Refresh") != "true" {
+	// 建档补完就能正常展示，不用等豆瓣
+	s.app.Media.MarkEnriched(ctx, id, time.Now())
+	if r := s.htmx(http.MethodGet, "/api/htmx/m/"+subject+"/ready?n=5", nil); r.header.Get("HX-Refresh") != "true" {
 		t.Error("资料好了应该让页面刷新")
+	}
+	if strings.Contains(s.get("/m/"+subject).body, "正在获取作品资料") {
+		t.Error("建档补完以后不应该再显示资料获取中")
 	}
 }
 
@@ -1013,14 +1036,24 @@ func TestLegacyURLs(t *testing.T) {
 		}
 	}
 
-	// 库里没有的豆瓣 ID：收录并排队抓资料，临时跳转，资料还没确认前不做永久跳转。
+	// 库里没有的豆瓣 ID：收录并排队建档，详情等登录访问或巡检。
 	r := s.get("/movie/36000077")
 	fresh, err := s.app.Media.ByDoubanID(ctx, "36000077")
 	if err != nil || r.status != http.StatusFound || r.header.Get("Location") != "/m/"+itoa(fresh.ID) {
 		t.Fatalf("没收录的应该收录后临时跳转: %d %q %v", r.status, r.header.Get("Location"), err)
 	}
-	if _, found, _ := s.app.Queue.Latest(ctx, "media.refresh", itoa(fresh.ID)); !found {
-		t.Error("新收录的作品应该排队抓资料")
+	subject := itoa(fresh.ID)
+	if job, found, err := s.app.Queue.Latest(ctx, "media.enrich", subject); err != nil || !found || job.Status != "queued" {
+		t.Fatalf("旧链接首次收录应排建档: %+v %v", job, err)
+	}
+	s.get("/m/" + subject)
+	if _, found, err := s.app.Queue.Latest(ctx, "media.refresh", subject); err != nil || found {
+		t.Fatalf("访客通过老链接打开作品不应排豆瓣详情: found=%v err=%v", found, err)
+	}
+	s.register("evan")
+	s.get("/m/" + subject)
+	if job, found, err := s.app.Queue.Latest(ctx, "media.refresh", subject); err != nil || !found || job.Status != "queued" {
+		t.Fatalf("登录用户打开作品仍应排豆瓣详情: %+v %v", job, err)
 	}
 }
 
@@ -1457,7 +1490,7 @@ func TestCopyrightContact(t *testing.T) {
 	if strings.Contains(s.get("/terms").body, "联系方式") {
 		t.Error("没有设置联系方式的页面不应该显示联系方式")
 	}
-	mustContain(t, s.get("/changelog"), "v5.3.3", "换了代理还是一直被限制", "v5.3.2", "关于页更完整", "示例订阅换了地址", "v5.3.1", "电影和剧集互不影响", "安卓上片单预览打不开", "v5.3.0", "浏览器插件", "v5.2.4", "每天的豆瓣同步更省", "v5.2.3", "反馈改成对话", "安卓投屏", "v5.2.2", "综艺按期选集", "v5.2.1", "弹幕加载不出来", "v5.2.0", "2026-11-22", "发现页的新排序", "v5.1.1", "兼容 TVBox 配置", "v5.1.0", "2026-11-20", "v5.0.0", "2026-11-16", "💥 破坏性变更 (Breaking Changes)", "✨ 新增 (Added)", "登录即同步")
+	mustContain(t, s.get("/changelog"), "v5.4.0", "新作品马上有资料", "v5.3.3", "换了代理还是一直被限制", "v5.3.2", "关于页更完整", "示例订阅换了地址", "v5.3.1", "电影和剧集互不影响", "安卓上片单预览打不开", "v5.3.0", "浏览器插件", "v5.2.4", "每天的豆瓣同步更省", "v5.2.3", "反馈改成对话", "安卓投屏", "v5.2.2", "综艺按期选集", "v5.2.1", "弹幕加载不出来", "v5.2.0", "2026-11-22", "发现页的新排序", "v5.1.1", "兼容 TVBox 配置", "v5.1.0", "2026-11-20", "v5.0.0", "2026-11-16", "💥 破坏性变更 (Breaking Changes)", "✨ 新增 (Added)", "登录即同步")
 }
 
 // ---------- 后台：内容审核、禁言封禁、广告指纹、趋势 ----------
@@ -1600,7 +1633,7 @@ func TestShortDramaPages(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s.app.Media.ApplyPatch(ctx, id, media.ProviderHongguo, media.Patch{"media_type": media.TypeShort, "title": "帐中香第二季", "series_key": "hg:1",
+	s.app.Media.ApplyPatch(ctx, id, media.Patch{"media_type": media.TypeShort, "title": "帐中香第二季", "series_key": "hg:1",
 		"genres": []string{"漫剧", "恋爱", "古代"}, "episode_count": 135, "series_status": "ended", "rating_hongguo": 9.0, "heat": int64(70974984),
 		"poster": "https://p6-novel.byteimg.com/novel-pic/abc~tplv-shrink:640:0.image"})
 	s.app.Media.MarkSynced(ctx, id, "complete")
@@ -1721,7 +1754,7 @@ func TestVarietyShowIssues(t *testing.T) {
 	ctx := context.Background()
 	s.register("evan")
 	show := s.seedMedia("36000009", "现在就出发 第四季", media.TypeShow, media.Patch{"season": 4})
-	s.app.Media.ApplyPatch(ctx, show, media.ProviderTMDB, media.Patch{"series_status": "ongoing", "episode_count": 6})
+	s.app.Media.ApplyPatch(ctx, show, media.Patch{"series_status": "ongoing", "episode_count": 6})
 	units := []media.Unit{}
 	for number := 1; number <= 6; number++ {
 		units = append(units, media.Unit{Season: 4, Episode: number})

@@ -13,7 +13,6 @@ import (
 	"moovie/internal/ads"
 	"moovie/internal/auth"
 	"moovie/internal/httpx"
-	"moovie/internal/ingest"
 	"moovie/internal/library"
 	"moovie/internal/media"
 	"moovie/internal/playback"
@@ -171,11 +170,9 @@ func (a *App) detailPage(c *gin.Context) {
 			return
 		}
 	}
-	// 有人打开了一部还没补全资料的作品：让后台优先去抓，页面上显示"资料获取中"。
-	if m.MetadataSyncedAt == nil {
-		if err := a.Ingest.EnqueueRefresh(ctx, m.ID, ingest.PriorityViewing); err != nil {
-			c.Error(err)
-		}
+	// 有人打开了一部还没补全资料的作品：让后台优先去补。只有登录用户打开才会去请求豆瓣，访客和爬虫只排建档。
+	if err := a.Ingest.Viewed(ctx, m, viewer != 0); err != nil {
+		c.Error(err)
 	}
 	units, err := a.Media.Units(ctx, m.ID)
 	if err != nil {
@@ -219,7 +216,7 @@ func (a *App) detailPage(c *gin.Context) {
 		"Episodes": episodes, "Status": episodeStatus(m, aired), "NextAir": nextAir, "Unit": media.EpisodeUnit(m.Type), "Series": cardViews(series),
 		"IsShow": m.Type == media.TypeShow, "PlayEpisode": playEpisode, "Seen": completedEpisodes(m, positions),
 		"PlayLabel": playLabel, "PlaySub": playSub, "PlayHref": playHref(m.ID, m.Season, playEpisode),
-		"IMDb": m.IMDbID, "SEO": a.mediaSEO(m), "Card": a.mediaCard(m), "Fetching": m.MetadataSyncedAt == nil,
+		"IMDb": m.IMDbID, "SEO": a.mediaSEO(m), "Card": a.mediaCard(m), "Fetching": m.Fetching(),
 		"Login": "/auth/login?redirect=" + url.QueryEscape(mediaHref(m.ID)),
 	}
 	// 收录这部作品的片单：所有人都直接写在页面里（一次走索引的小查询）。读不出来不影响页面，只是不显示这一行。

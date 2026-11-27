@@ -12,9 +12,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"moovie/internal/httpx"
-	"moovie/internal/ingest"
 	"moovie/internal/media"
-	"moovie/internal/providers"
 )
 
 // 公开页面（不登录也能看）的搜索引擎优化、相似推荐、热搜榜。
@@ -332,7 +330,7 @@ func (a *App) mediaReady(c *gin.Context) {
 		return
 	}
 	attempt := httpx.QueryInt(c, "n", 0)
-	if m.MetadataSyncedAt != nil {
+	if !m.Fetching() {
 		c.Header("HX-Refresh", "true")
 		c.Status(http.StatusOK)
 		return
@@ -358,7 +356,7 @@ func (a *App) robots(c *gin.Context) {
 // legacyRedirect 接住老站（moovie.c2v2.com）用豆瓣 ID 的地址，跳到新站的作品页。老站 nginx 把没登录的访问
 // 原路径 301 过来，搜索引擎的收录和外链就转到新站，不需要新旧 ID 对照表。suffix 是作品页之后的路径。
 //
-// 已有资料的作品永久跳转；库里没有的先收录、排队抓资料，再临时跳转到"正在获取资料"的作品页，
+// 已有资料的作品永久跳转；库里没有的先收录、排队建档，再临时跳转到"正在获取资料"的作品页，
 // 豆瓣确认没有这个条目时，老地址就返回 404，不会被永久指向一个空页面。
 func (a *App) legacyRedirect(suffix string) gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -370,7 +368,7 @@ func (a *App) legacyRedirect(suffix string) gin.HandlerFunc {
 		m, err := a.Media.ByDoubanID(ctx, doubanID)
 		switch {
 		case errors.Is(err, media.ErrNotFound):
-			id, err := a.Ingest.EnsureDouban(ctx, providers.DoubanItem{ID: doubanID}, "", ingest.PriorityDiscover)
+			id, err := a.Ingest.EnsureLegacyDouban(ctx, doubanID)
 			if err != nil {
 				a.fail(c, err)
 				return

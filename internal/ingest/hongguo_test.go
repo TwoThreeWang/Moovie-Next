@@ -263,7 +263,7 @@ func TestShortStaysInItsChannel(t *testing.T) {
 	service, _ := newShortService(t)
 	ctx := context.Background()
 	movie, _ := service.Media.Create(ctx)
-	service.Media.ApplyPatch(ctx, movie, media.ProviderManual, media.Patch{"title": "一部电影", "media_type": media.TypeMovie, "genres": []string{"剧情"}})
+	service.Media.ApplyPatch(ctx, movie, media.Patch{"title": "一部电影", "media_type": media.TypeMovie, "genres": []string{"剧情"}})
 	service.Media.MarkSynced(ctx, movie, "complete")
 	for index, item := range []struct {
 		id, title string
@@ -314,7 +314,7 @@ func TestShortStaysInItsChannel(t *testing.T) {
 		}
 	}
 	// 搜索：同样匹配时长剧在前。
-	service.Media.ApplyPatch(ctx, movie, media.ProviderManual, media.Patch{"title": "热门甜宠"})
+	service.Media.ApplyPatch(ctx, movie, media.Patch{"title": "热门甜宠"})
 	found, _ := service.Media.Search(ctx, "热门甜宠", 5)
 	if len(found) < 2 || found[0].ID != movie || found[1].Type != media.TypeShort {
 		t.Errorf("同名时长剧应该排在短剧前面: %+v", found)

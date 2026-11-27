@@ -106,7 +106,7 @@ go run ./cmd/testclean
 | 站点 | `SITE_NAME`、`SITE_URL`（正式环境必须是 HTTPS 域名）、`APP_SECRET`（会话和图片签名，必须修改）、`TRUSTED_PROXIES` |
 | 数据库 | `DATABASE_URL` 或 `DB_*`、`DB_SCHEMA`、`TEST_DATABASE_URL` |
 | 后台任务 | `JOBS_IN_WEB`、`WORKER_CONCURRENCY`、`HONGGUO_SYNC` |
-| 资料来源 | `TMDB_API_TOKEN`、`WIKIDATA_*`、`DOUBAN_PROXY` |
+| 资料来源 | `TMDB_API_TOKEN`、`WIKIDATA_*`、`NEODB_URL`、`DOUBAN_PROXY`、`DOUBAN_COOKIE`、`DOUBAN_MOBILE_UA`、`DOUBAN_DESKTOP_UA` |
 | AI | `AI_BASE_URL`、`AI_API_KEY`、`AI_MODEL`、`EMBEDDING_*`；不配时不写描述，相似推荐改按类型重合度 |
 | 邮件 | `SMTP_*`、`CONTACT_EMAIL`、`MAIL_HOURLY_LIMIT` |
 | 可选服务 | `TELEGRAM_*`（图床）、`DANMU_API_*`（弹幕）、`POW_BITS`（人机校验难度） |

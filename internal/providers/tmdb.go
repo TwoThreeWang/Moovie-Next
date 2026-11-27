@@ -55,6 +55,7 @@ type TMDBDetails struct {
 // TMDBSeason 是一季的概况。
 type TMDBSeason struct {
 	Number       int
+	Name         string
 	EpisodeCount int
 	AirDate      *time.Time
 }
@@ -88,6 +89,7 @@ func parseDate(value string) *time.Time {
 type TMDBEpisode struct {
 	Number  int
 	Title   string
+	Type    string
 	AirDate *time.Time
 	Runtime int
 }
@@ -114,8 +116,15 @@ func (t *TMDB) FindByIMDb(ctx context.Context, imdbID string) (id int, kind stri
 	return 0, "", ErrNotFound
 }
 
-// Search 按片名和年份搜索，返回第一个结果。kind 取 movie 或 tv。
-func (t *TMDB) Search(ctx context.Context, kind, title string, year int) (int, error) {
+// TMDBSearchResult 是一次标题搜索返回的候选，电影和剧集的片名字段已统一。
+type TMDBSearchResult struct {
+	ID            int
+	Title         string
+	OriginalTitle string
+}
+
+// Search 按片名和年份搜索。调用方从候选里确认匹配项。
+func (t *TMDB) Search(ctx context.Context, kind, title string, year int) ([]TMDBSearchResult, error) {
 	query := url.Values{"query": {title}, "language": {"zh-CN"}}
 	if year > 0 {
 		if kind == "movie" {
@@ -126,16 +135,25 @@ func (t *TMDB) Search(ctx context.Context, kind, title string, year int) (int, e
 	}
 	var response struct {
 		Results []struct {
-			ID int `json:"id"`
+			ID            int    `json:"id"`
+			Title         string `json:"title"`
+			OriginalTitle string `json:"original_title"`
+			Name          string `json:"name"`
+			OriginalName  string `json:"original_name"`
 		} `json:"results"`
 	}
 	if err := t.getJSON(ctx, "/3/search/"+kind+"?"+query.Encode(), &response); err != nil {
-		return 0, err
+		return nil, err
 	}
-	if len(response.Results) == 0 {
-		return 0, ErrNotFound
+	results := make([]TMDBSearchResult, 0, len(response.Results))
+	for _, hit := range response.Results {
+		title, original := hit.Title, hit.OriginalTitle
+		if kind == "tv" {
+			title, original = hit.Name, hit.OriginalName
+		}
+		results = append(results, TMDBSearchResult{ID: hit.ID, Title: title, OriginalTitle: original})
 	}
-	return response.Results[0].ID, nil
+	return results, nil
 }
 
 // Details 读取一个条目的资料，连同剧照和 IMDb ID。
@@ -158,6 +176,7 @@ func (t *TMDB) Details(ctx context.Context, kind string, id int) (*TMDBDetails, 
 		Popularity    float64 `json:"popularity"`
 		Seasons       []struct {
 			Number       int    `json:"season_number"`
+			Name         string `json:"name"`
 			EpisodeCount int    `json:"episode_count"`
 			AirDate      string `json:"air_date"`
 		} `json:"seasons"`
@@ -201,7 +220,7 @@ func (t *TMDB) Details(ctx context.Context, kind string, id int) (*TMDBDetails, 
 		details.Backdrops = append(details.Backdrops, tmdbImageBase+image.Path)
 	}
 	for _, season := range response.Seasons {
-		details.Seasons = append(details.Seasons, TMDBSeason{Number: season.Number, EpisodeCount: season.EpisodeCount, AirDate: parseDate(season.AirDate)})
+		details.Seasons = append(details.Seasons, TMDBSeason{Number: season.Number, Name: season.Name, EpisodeCount: season.EpisodeCount, AirDate: parseDate(season.AirDate)})
 	}
 	return details, nil
 }
@@ -212,6 +231,7 @@ func (t *TMDB) Season(ctx context.Context, id, season int) ([]TMDBEpisode, error
 		Episodes []struct {
 			Number  int    `json:"episode_number"`
 			Name    string `json:"name"`
+			Type    string `json:"episode_type"`
 			AirDate string `json:"air_date"`
 			Runtime int    `json:"runtime"`
 		} `json:"episodes"`
@@ -221,7 +241,7 @@ func (t *TMDB) Season(ctx context.Context, id, season int) ([]TMDBEpisode, error
 	}
 	episodes := make([]TMDBEpisode, 0, len(response.Episodes))
 	for _, entry := range response.Episodes {
-		episode := TMDBEpisode{Number: entry.Number, Title: entry.Name, Runtime: entry.Runtime}
+		episode := TMDBEpisode{Number: entry.Number, Title: entry.Name, Type: entry.Type, Runtime: entry.Runtime}
 		if parsed, err := time.Parse("2006-01-02", entry.AirDate); err == nil {
 			episode.AirDate = &parsed
 		}

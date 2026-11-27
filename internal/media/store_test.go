@@ -19,7 +19,7 @@ func seed(t *testing.T, store *media.Store, doubanID, title string, year int, me
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.ApplyPatch(context.Background(), id, media.ProviderDouban, patch); err != nil {
+	if err := store.ApplyPatch(context.Background(), id, patch); err != nil {
 		t.Fatal(err)
 	}
 	return id
@@ -47,8 +47,6 @@ func TestEnsureDoubanIsIdempotent(t *testing.T) {
 	}
 }
 
-// 字段合并的规则：豆瓣是主要来源，给的值总是写入；TMDB 是辅助来源，只补空着的字段，
-// TMDB 独有的字段（剧照、TMDB 评分、连载状态）直接写。
 func TestApplyPatchMergeRule(t *testing.T) {
 	store := media.NewStore(testdb.Pool(t))
 	ctx := context.Background()
@@ -56,53 +54,40 @@ func TestApplyPatchMergeRule(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tmdb := media.Patch{}
-	tmdb.Set("title", "Fog Harbor")
-	tmdb.Set("summary", "TMDB 的简介")
-	tmdb.Set("backdrops", []string{"https://image.tmdb.org/t/p/original/a.jpg"})
-	if err := store.ApplyPatch(ctx, id, media.ProviderTMDB, tmdb); err != nil {
+	first := media.Patch{"title": "Fog Harbor", "summary": "TMDB 的简介", "episode_count": 6}
+	if err := store.FillMetadata(ctx, id, first); err != nil {
 		t.Fatal(err)
 	}
-	douban := media.Patch{}
-	douban.Set("title", "雾港")
-	douban.Set("rating_douban", 8.9)
-	if err := store.ApplyPatch(ctx, id, media.ProviderDouban, douban); err != nil {
+	douban := media.Patch{"title": "雾港", "rating_douban": 8.9}
+	douban.Set("summary", " ")
+	if err := store.ApplyPatch(ctx, id, douban); err != nil {
 		t.Fatal(err)
 	}
-	// TMDB 再来一次：片名和简介都已经有值，不会被改；剧照和连载状态是 TMDB 独有的，直接更新。
-	again := media.Patch{}
-	again.Set("title", "Fog Harbor 2")
-	again.Set("summary", "TMDB 的新简介")
-	again.Set("year", 2024)
-	again.Set("backdrops", []string{"https://image.tmdb.org/t/p/original/b.jpg", "https://image.tmdb.org/t/p/original/c.jpg"})
-	again.Set("series_status", "ended")
-	if err := store.ApplyPatch(ctx, id, media.ProviderTMDB, again); err != nil {
+	// 后续外源保留已有片名和简介，补年份，并更新 TMDB 维护的字段。
+	again := media.Patch{
+		"title": "Fog Harbor 2", "summary": "外源新简介", "year": 2024, "episode_count": 8,
+		"backdrops": []string{"https://image.tmdb.org/t/p/original/b.jpg"}, "series_status": "ended",
+	}
+	if err := store.FillMetadata(ctx, id, again); err != nil {
 		t.Fatal(err)
 	}
 	m, err := store.Get(ctx, id)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if m.Title != "雾港" {
-		t.Errorf("片名应该保持豆瓣的值，实际 %q", m.Title)
+	if m.Title != "雾港" || m.SeriesKey != "雾港" || m.Summary != "TMDB 的简介" || m.Year != 2024 {
+		t.Errorf("外源应补空并保留已有资料: %+v", m)
 	}
-	if m.Summary != "TMDB 的简介" || m.Year != 2024 {
-		t.Errorf("TMDB 只补空着的字段：简介保持第一次的值，年份补上。实际 %q %d", m.Summary, m.Year)
+	if m.RatingDouban < 8.89 || len(m.Backdrops) != 1 || m.SeriesStatus != "ended" || m.EpisodeCount != 8 {
+		t.Errorf("评分、剧照、连载状态或集数没有更新: %+v", m)
 	}
-	if m.RatingDouban < 8.89 || len(m.Backdrops) != 2 || m.SeriesStatus != "ended" {
-		t.Errorf("评分、剧照、连载状态没有写入: %+v", m)
-	}
-	// 豆瓣给了简介：覆盖 TMDB 的
-	if err := store.ApplyPatch(ctx, id, media.ProviderDouban, media.Patch{"summary": "豆瓣的简介"}); err != nil {
+	if err := store.ApplyPatch(ctx, id, media.Patch{"summary": "豆瓣的简介"}); err != nil {
 		t.Fatal(err)
 	}
-	if m, _ := store.Get(ctx, id); m.Summary != "豆瓣的简介" || m.Title != "雾港" {
-		t.Errorf("豆瓣给的值应该总是写入: %q", m.Summary)
+	if m, _ := store.Get(ctx, id); m.Summary != "豆瓣的简介" {
+		t.Errorf("豆瓣给的值应覆盖现有值: %q", m.Summary)
 	}
-	if err := store.ApplyPatch(ctx, id, "resource-site", media.Patch{"title": "x"}); err == nil {
-		t.Error("未知来源应该被拒绝")
-	}
-	if err := store.ApplyPatch(ctx, 999999, media.ProviderDouban, douban); err != media.ErrNotFound {
+	if err := store.ApplyPatch(ctx, 999999, douban); err != media.ErrNotFound {
 		t.Errorf("不存在的作品应该返回 ErrNotFound，实际 %v", err)
 	}
 }
@@ -189,7 +174,7 @@ func TestChartSeriesUnitsAndAiring(t *testing.T) {
 	s1 := seed(t, store, "30000030", "雾港", 2024, media.TypeTV)
 	s2 := seed(t, store, "30000031", "雾港 第二季", 2026, media.TypeTV)
 	film := seed(t, store, "30000032", "雾港", 2020, media.TypeMovie)
-	store.ApplyPatch(ctx, s2, media.ProviderDouban, media.Patch{"season": 2})
+	store.ApplyPatch(ctx, s2, media.Patch{"season": 2})
 
 	if err := store.ReplaceChart(ctx, "tv", []int64{s2, s1}); err != nil {
 		t.Fatal(err)
@@ -260,9 +245,9 @@ func TestSimilarFallsBackToGenres(t *testing.T) {
 	base := seed(t, store, "30000050", "雾港", 2026, media.TypeTV)
 	close1 := seed(t, store, "30000051", "白夜", 2025, media.TypeTV)
 	far := seed(t, store, "30000052", "山海食堂", 2025, media.TypeTV)
-	store.ApplyPatch(ctx, base, media.ProviderDouban, media.Patch{"genres": []string{"悬疑", "犯罪"}})
-	store.ApplyPatch(ctx, close1, media.ProviderDouban, media.Patch{"genres": []string{"悬疑", "犯罪", "剧情"}})
-	store.ApplyPatch(ctx, far, media.ProviderDouban, media.Patch{"genres": []string{"美食"}})
+	store.ApplyPatch(ctx, base, media.Patch{"genres": []string{"悬疑", "犯罪"}})
+	store.ApplyPatch(ctx, close1, media.Patch{"genres": []string{"悬疑", "犯罪", "剧情"}})
+	store.ApplyPatch(ctx, far, media.Patch{"genres": []string{"美食"}})
 	m, _ := store.Get(ctx, base)
 	cards, err := store.Similar(ctx, m, 10)
 	if err != nil || len(cards) != 1 || cards[0].ID != close1 {
@@ -379,10 +364,14 @@ func TestReleaseAndPopularityUpdates(t *testing.T) {
 		t.Fatalf("应该挑出有 TMDB 编号、没查过的: %v %v", pending, err)
 	}
 	released := time.Date(2020, 5, 1, 0, 0, 0, 0, time.UTC)
-	if err := store.SetRelease(ctx, movie, &released, 12.5); err != nil {
+	m, err := store.Get(ctx, movie)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.SetRelease(ctx, movie, nil, 0); err != nil {
+	if err := store.SetRelease(ctx, m, &released, 12.5); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetRelease(ctx, m, nil, 0); err != nil {
 		t.Fatal(err)
 	}
 	var date time.Time
@@ -420,4 +409,33 @@ func equalIDs(got, want []int64) bool {
 		}
 	}
 	return true
+}
+
+func TestSaveTMDBSeasonSkipsChangedSeason(t *testing.T) {
+	store := media.NewStore(testdb.Pool(t))
+	ctx := context.Background()
+	id := seed(t, store, "30002801", "雾港", 2026, media.TypeTV)
+	if err := store.SetExternalID(ctx, id, media.ProviderTMDB, "tv/4455"); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := store.Get(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ApplyPatch(ctx, id, media.Patch{"season": 2, "episode_count": 12}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SaveTMDBSeason(ctx, snapshot, time.Now(), media.TMDBSeasonUpdate{
+		EpisodeCount: 6, Status: "ended", Units: []media.Unit{{Season: 1, Episode: 1}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	m, err := store.Get(ctx, id)
+	if err != nil || m.Season != 2 || m.EpisodeCount != 12 || m.SeriesStatus == "ended" || m.TMDBSeriesCheckedAt != nil {
+		t.Fatalf("季号改变后应丢弃旧快照: %+v %v", m, err)
+	}
+	units, err := store.Units(ctx, id)
+	if err != nil || len(units) != 0 {
+		t.Fatalf("季号改变后不应写入旧分集: %+v %v", units, err)
+	}
 }

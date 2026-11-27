@@ -166,7 +166,7 @@ func (s *Service) SaveShort(ctx context.Context, m media.Media, series *provider
 	} else {
 		patch.Set("series_status", "ongoing")
 	}
-	if err := s.Media.ApplyPatch(ctx, m.ID, media.ProviderHongguo, patch); err != nil {
+	if err := s.Media.ApplyPatch(ctx, m.ID, patch); err != nil {
 		return err
 	}
 	if err := s.Media.MarkSynced(ctx, m.ID, "complete"); err != nil {

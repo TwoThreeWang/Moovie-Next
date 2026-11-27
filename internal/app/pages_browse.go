@@ -518,7 +518,7 @@ func (a *App) searchPage(c *gin.Context) {
 	})
 }
 
-// searchResults 在作品库里搜索。结果太少时去豆瓣查一次联想，把新条目收进作品库再搜一遍。
+// searchResults 在作品库里搜索。登录后本站结果太少时，用豆瓣联想收录新条目。
 func (a *App) searchResults(c *gin.Context) {
 	query := strings.TrimSpace(c.Query("q"))
 	if query == "" || len([]rune(query)) > 60 {
@@ -531,7 +531,7 @@ func (a *App) searchResults(c *gin.Context) {
 		a.fail(c, err)
 		return
 	}
-	if len(cards) < 3 && len([]rune(query)) >= 2 && a.discover.Allow(visitorKey(c)) {
+	if len(cards) < 3 && len([]rune(query)) >= 2 && viewerID(c) != 0 && a.discover.Allow(visitorKey(c)) {
 		probeCtx, cancel := context.WithTimeout(ctx, 4*time.Second)
 		if err := a.Ingest.Discover(probeCtx, query); err == nil {
 			if again, err := a.Media.Search(ctx, query, 36); err == nil {

@@ -52,15 +52,18 @@ func TypeLabel(mediaType string) string {
 // ValidType 判断是不是合法的作品类型。
 func ValidType(mediaType string) bool { return TypeLabel(mediaType) != "" }
 
-// 元数据来源。数值越大优先级越高，高优先级来源的字段不会被低优先级来源覆盖。
+// 元数据来源。
 const (
-	ProviderManual   = "manual"
 	ProviderDouban   = "douban"
 	ProviderTMDB     = "tmdb"
 	ProviderIMDb     = "imdb"
 	ProviderWikidata = "wikidata"
 	ProviderHongguo  = "hongguo" // 短剧的唯一来源
 )
+
+// PartialSemanticAfter 是豆瓣详情一直没补上的作品，建档多久以后就按现有的资料写语义描述。
+// 豆瓣补上以后资料变了，描述会再写一遍；等一等，大部分作品只用写一次。
+const PartialSemanticAfter = 72 * time.Hour
 
 // ErrNotFound 表示作品不存在。
 var ErrNotFound = errors.New("作品不存在")
@@ -73,46 +76,77 @@ type Picture struct {
 
 // Media 是一部作品的完整资料。
 type Media struct {
-	ID               int64
-	Type             string
-	DoubanID         string
-	TMDBID           string // 带类型前缀，如 "movie/603"、"tv/1399"
-	IMDbID           string
-	WikidataID       string
-	HongguoID        string // 红果的 series_id，只有短剧有
-	Title            string
-	OriginalTitle    string
-	Year             int
-	Season           int
-	EpisodeCount     int
-	Poster           string
-	Backdrops        []string
-	Summary          string
-	Genres           []string
-	Countries        []string
-	Directors        []string
-	Actors           []string
-	DurationMinutes  int
-	RatingDouban     float64
-	RatingTMDB       float64
-	VotesTMDB        int
-	RatingHongguo    float64
-	Heat             int64
-	SeriesStatus     string
-	SeriesKey        string
-	Hidden           bool
-	MetadataStatus   string
-	MetadataSyncedAt *time.Time
-	EnrichedAt       *time.Time
-	SemanticText     string
-	SemanticHash     string
-	HasEmbedding     bool
-	UpdatedAt        time.Time
+	ID              int64
+	Type            string
+	DoubanID        string
+	TMDBID          string // 带类型前缀，如 "movie/603"、"tv/1399"
+	IMDbID          string
+	WikidataID      string
+	HongguoID       string // 红果的 series_id，只有短剧有
+	Title           string
+	OriginalTitle   string
+	Year            int
+	Season          int
+	EpisodeCount    int
+	Poster          string
+	Backdrops       []string
+	Summary         string
+	Genres          []string
+	Countries       []string
+	Directors       []string
+	Actors          []string
+	DurationMinutes int
+	RatingDouban    float64
+	RatingTMDB      float64
+	VotesTMDB       int
+	RatingHongguo   float64
+	Heat            int64
+	SeriesStatus    string
+	SeriesKey       string
+	Hidden          bool
+	// MetadataStatus 是豆瓣详情的状态：partial 还没从豆瓣同步过（资料来自豆瓣列表和其他来源），
+	// complete 同步过，not_found 豆瓣确认没有这个条目。短剧是红果的状态。
+	MetadataStatus      string
+	MetadataSyncedAt    *time.Time // 最近一次从豆瓣（短剧是红果）同步成功或确认没有的时间
+	EnrichedAt          *time.Time // 最近一次从 Wikidata、NeoDB、TMDB 补资料开始的时间
+	TMDBSeriesCheckedAt *time.Time // 最近一次 TMDB 季资料检查的开始时间
+	TMDBSeasonUnmatched bool       // 最近一次检查未能匹配到具体季
+	SemanticText        string
+	SemanticHash        string
+	HasEmbedding        bool
+	CreatedAt           time.Time
+	UpdatedAt           time.Time
 }
 
-// SemanticReady 表示资料够不够让 AI 写语义描述：豆瓣的资料已经同步，至少有片名和简介（或原名）。
+// SemanticReady 表示资料够不够让 AI 写语义描述：至少有片名和简介（或原名），而且豆瓣详情已经同步，
+// 或者补过其他来源、建档超过 PartialSemanticAfter 还没等到豆瓣。
 func (m Media) SemanticReady() bool {
-	return m.MetadataStatus == "complete" && !m.Hidden && m.Title != "" && (m.Summary != "" || m.OriginalTitle != "")
+	settled := m.MetadataStatus == "complete" ||
+		(m.MetadataStatus == "partial" && m.EnrichedAt != nil && time.Since(m.CreatedAt) >= PartialSemanticAfter)
+	return settled && !m.Hidden && m.Title != "" && (m.Summary != "" || m.OriginalTitle != "")
+}
+
+const (
+	tmdbSeasonRefreshInterval = 24 * time.Hour
+	tmdbSeasonRetryInterval   = 7 * tmdbSeasonRefreshInterval
+)
+
+// TMDBSeasonCheckDue 判断当前季是否到下一次 TMDB 检查时间。
+func (m Media) TMDBSeasonCheckDue(now time.Time) bool {
+	interval := tmdbSeasonRefreshInterval
+	if m.TMDBSeasonUnmatched {
+		interval = tmdbSeasonRetryInterval
+	}
+	return m.TMDBSeriesCheckedAt == nil || !m.TMDBSeriesCheckedAt.After(now.Add(-interval))
+}
+
+// Fetching 表示作品页还要显示"资料获取中"：还没有片名，或者豆瓣（短剧是红果）和其他来源一次都还没补过。
+// 补过其他来源就能正常展示，豆瓣详情在后台慢慢补。
+func (m Media) Fetching() bool {
+	if m.IsShort() {
+		return m.MetadataSyncedAt == nil
+	}
+	return m.Title == "" || (m.MetadataSyncedAt == nil && m.EnrichedAt == nil)
 }
 
 // SemanticInput 是发给 AI 的资料。格式和老系统一字不差：老系统迁移过来的语义描述是按这个格式生成的，
@@ -222,7 +256,7 @@ type Patch map[string]any
 func (p Patch) Set(field string, value any) {
 	switch typed := value.(type) {
 	case string:
-		if typed == "" {
+		if strings.TrimSpace(typed) == "" {
 			return
 		}
 	case int:

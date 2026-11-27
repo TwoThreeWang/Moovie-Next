@@ -100,10 +100,11 @@ type App struct {
 type Options struct {
 	// HTTP 是访问外部来源用的客户端，默认带 60 秒超时。
 	HTTP *http.Client
-	// Douban、TMDB、Wikidata、AI、Embedder、Danmu、Hongguo 为 nil 时按配置创建。
+	// Douban、TMDB、Wikidata、NeoDB、AI、Embedder、Danmu、Hongguo 为 nil 时按配置创建。
 	Douban   *providers.Douban
 	TMDB     *providers.TMDB
 	Wikidata *providers.Wikidata
+	NeoDB    *providers.NeoDB
 	AI       *providers.OpenAI
 	Embedder *providers.OpenAI
 	Danmu    *providers.Danmu
@@ -175,6 +176,13 @@ func New(cfg config.Config, pool *db.Pool, log *slog.Logger, options Options) (*
 		}
 		douban = providers.NewDouban(doubanClient)
 		douban.Rotating = cfg.DoubanProxy != ""
+		douban.Cookie = cfg.DoubanCookie
+		if cfg.DoubanMobileUA != "" {
+			douban.MobileUA = cfg.DoubanMobileUA
+		}
+		if cfg.DoubanDesktopUA != "" {
+			douban.DesktopUA = cfg.DoubanDesktopUA
+		}
 	}
 	tmdb := options.TMDB
 	if tmdb == nil {
@@ -183,6 +191,10 @@ func New(cfg config.Config, pool *db.Pool, log *slog.Logger, options Options) (*
 	wikidata := options.Wikidata
 	if wikidata == nil && cfg.WikidataEndpoint != "" {
 		wikidata = &providers.Wikidata{HTTP: client, Endpoint: cfg.WikidataEndpoint, UserAgent: cfg.WikidataUserAgent}
+	}
+	neodb := options.NeoDB
+	if neodb == nil && cfg.NeoDBURL != "" {
+		neodb = providers.NewNeoDB(client, cfg.NeoDBURL, cfg.WikidataUserAgent)
 	}
 	ai := options.AI
 	if ai == nil {
@@ -205,7 +217,7 @@ func New(cfg config.Config, pool *db.Pool, log *slog.Logger, options Options) (*
 	if hongguo == nil {
 		hongguo = providers.NewHongguo(client)
 	}
-	app.Ingest = &ingest.Service{Media: app.Media, Queue: app.Queue, Douban: douban, Wikidata: wikidata, TMDB: tmdb, AI: ai, Embedder: embedder,
+	app.Ingest = &ingest.Service{Media: app.Media, Queue: app.Queue, Douban: douban, Wikidata: wikidata, NeoDB: neodb, TMDB: tmdb, AI: ai, Embedder: embedder,
 		Hongguo: hongguo, ShortSync: cfg.HongguoSync, Log: log}
 	app.Danmaku = danmaku.NewService(danmaku.NewStore(pool), app.Media, danmu)
 	app.Danmaku.Log = log

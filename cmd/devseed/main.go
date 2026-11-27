@@ -128,7 +128,7 @@ func main() {
 		} else {
 			patch["duration_minutes"] = 96 + index*3
 		}
-		must(store.ApplyPatch(ctx, id, media.ProviderManual, patch))
+		must(store.ApplyPatch(ctx, id, patch))
 		must(store.MarkSynced(ctx, id, "complete"))
 		key := entry.title
 		if _, taken := ids[key]; taken {
@@ -142,7 +142,7 @@ func main() {
 	}
 	// 《雾港 第二季》正在更新：前 8 集已播（第 8 集今天更新），第 9 集下周。
 	second := ids["雾港 第二季"]
-	must(store.ApplyPatch(ctx, second, media.ProviderManual, media.Patch{"series_status": "ongoing"}))
+	must(store.ApplyPatch(ctx, second, media.Patch{"series_status": "ongoing"}))
 	titles := []string{"雾起", "旧码头", "第二个证人", "潮声", "沉船", "灯塔守夜人", "回南天", "失踪的账本", "无人认领", "台风眼", "风停之后", "归港"}
 	units := []media.Unit{}
 	for number, title := range titles {
@@ -152,7 +152,7 @@ func main() {
 	must(store.ReplaceUnits(ctx, second, 2, units))
 	// 《周末厨房 第三季》是综艺，正在更新：资料里只录了前 3 期，演示源里已经到第 4 期，还分上下、加更，各个源写法不一样。
 	weekend := ids["周末厨房 第三季"]
-	must(store.ApplyPatch(ctx, weekend, media.ProviderManual, media.Patch{"series_status": "ongoing"}))
+	must(store.ApplyPatch(ctx, weekend, media.Patch{"series_status": "ongoing"}))
 	issues := []media.Unit{}
 	for number := 1; number <= 3; number++ {
 		aired := today.AddDate(0, 0, (number-3)*7)

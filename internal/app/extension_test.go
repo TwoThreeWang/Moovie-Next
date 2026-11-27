@@ -157,7 +157,7 @@ func TestExtensionContributions(t *testing.T) {
 	token := s.connectExtension()
 
 	// 用户自己标记的、还没有资料的作品，先给他自己的插件去取，服务器那边的任务推迟
-	id, _, err := s.app.Media.EnsureDouban(ctx, "36000020", media.Patch{"title": "占位片名"})
+	id, _, err := s.app.Media.EnsureDouban(ctx, "36000020", media.Patch{"title": "雾中的港城", "year": 2025})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -192,12 +192,20 @@ func TestExtensionContributions(t *testing.T) {
 		Applied bool  `json:"applied"`
 		MediaID int64 `json:"media_id"`
 	}
+	// 豆瓣详情还没同步、但已经有片名（列表、其他来源给的）的作品，交来的资料也要对得上
+	wrong := map[string]any{"id": "36000020", "type": "tv", "title": "另一部片子", "year": "2025"}
+	if r := s.ext(token, http.MethodPost, "/api/ext/douban/subject", map[string]any{"douban_id": "36000020", "kind": "tv", "response": wrong}); r.status != http.StatusConflict {
+		t.Errorf("和建档资料对不上的应该拒绝: %d %s", r.status, r.body)
+	}
+	if err := s.app.Media.ApplyPatch(ctx, id, media.Patch{"season": 2}); err != nil {
+		t.Fatal(err)
+	}
 	decode(t, s.ext(token, http.MethodPost, "/api/ext/douban/subject", map[string]any{"douban_id": "36000020", "kind": "tv", "response": subject}), &applied)
 	if !applied.Applied || applied.MediaID != id {
 		t.Fatalf("交上来的详情应该被采用: %+v", applied)
 	}
 	m, _ := s.app.Media.Get(ctx, id)
-	if m.Title != "雾中的港城" || m.MetadataStatus != "complete" || m.EpisodeCount != 12 || m.Type != media.TypeTV {
+	if m.Title != "雾中的港城" || m.MetadataStatus != "complete" || m.EpisodeCount != 12 || m.Type != media.TypeTV || m.Season != 2 {
 		t.Errorf("资料没有写进去: %+v", m)
 	}
 	if job, found, _ := s.app.Queue.Latest(ctx, "media.refresh", itoa(id)); found && job.Status == "queued" {

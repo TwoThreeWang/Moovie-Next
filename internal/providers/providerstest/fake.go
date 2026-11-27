@@ -1,4 +1,4 @@
-// Package providerstest 提供模拟豆瓣、TMDB、Wikidata 的假服务器，只给测试用。
+// Package providerstest 提供模拟豆瓣、TMDB、Wikidata、NeoDB 的假服务器，只给测试用。
 package providerstest
 
 import (
@@ -38,6 +38,8 @@ type Fake struct {
 	Wikidata map[string][]map[string]string
 	// TMDB：路径 → 响应 JSON。
 	TMDB map[string]any
+	// NeoDB：搜索的关键词 → 搜索结果里的条目（/api/catalog/search 的 data）。没有配置时返回空结果。
+	NeoDB map[string][]map[string]any
 	// Exports：TMDB 每日导出文件名（如 "movie_ids_11_22_2026.json.gz"）→ 文件里的每一行。
 	Exports map[string][]map[string]any
 	// AIDown、EmbedDown 为 true 时，AI 对话接口、向量接口返回 500。
@@ -54,7 +56,7 @@ type Fake struct {
 func New(t *testing.T) *Fake {
 	fake := &Fake{
 		Subjects: map[string]map[string]any{}, Pages: map[string]string{}, Refuse: map[string]bool{}, Suggest: map[string][]map[string]any{}, Popular: map[string][]map[string]any{},
-		WebPopular: map[string][]map[string]any{}, Interests: map[string][]map[string]any{}, Feeds: map[string][]map[string]string{}, Wikidata: map[string][]map[string]string{}, TMDB: map[string]any{},
+		WebPopular: map[string][]map[string]any{}, Interests: map[string][]map[string]any{}, Feeds: map[string][]map[string]string{}, Wikidata: map[string][]map[string]string{}, TMDB: map[string]any{}, NeoDB: map[string][]map[string]any{},
 		Exports: map[string][]map[string]any{},
 	}
 	fake.Server = httptest.NewServer(http.HandlerFunc(fake.serve))
@@ -75,6 +77,11 @@ func (f *Fake) TMDBClient() *providers.TMDB {
 // WikidataClient 返回指向假服务器的 Wikidata 客户端。
 func (f *Fake) WikidataClient() *providers.Wikidata {
 	return &providers.Wikidata{HTTP: f.Server.Client(), Endpoint: f.Server.URL + "/sparql", UserAgent: "test"}
+}
+
+// NeoDBClient 返回指向假服务器的 NeoDB 客户端（不限速）。
+func (f *Fake) NeoDBClient() *providers.NeoDB {
+	return &providers.NeoDB{HTTP: f.Server.Client(), Base: f.Server.URL, UserAgent: "test"}
 }
 
 // AI 返回指向假服务器的 AI 客户端。它把收到的资料原样包进"《》"里当作描述返回。
@@ -128,6 +135,12 @@ func (f *Fake) serve(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		writeJSON(w, map[string]any{"results": map[string]any{"bindings": bindings}})
+	case path == "/api/catalog/search":
+		items := f.NeoDB[r.URL.Query().Get("query")]
+		if items == nil {
+			items = []map[string]any{}
+		}
+		writeJSON(w, map[string]any{"data": items, "pages": 1, "count": len(items)})
 	case path == "/j/subject_suggest":
 		items := f.Suggest[r.URL.Query().Get("q")]
 		if items == nil {

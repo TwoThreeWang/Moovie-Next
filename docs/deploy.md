@@ -55,7 +55,7 @@ cp .env.example .env
 
 `DB_SCHEMA` 留空（表建在 `public`）。`.env` 由 Compose 在创建容器时读取并注入环境变量，不打进镜像，也不挂载进容器。修改后用 `docker compose up -d` 更新容器，单纯 `restart` 不会重新加载环境变量。
 
-可选的：`SITE_NAME`（站点名，默认 `Moovie 影牛`，网页标题后缀、首页标题、分享卡片、邮件和桌面图标名都用它）、`TELEGRAM_*`（图片备份）、`DOUBAN_PROXY`（豆瓣出站代理）、`TRUSTED_PROXIES`、`WEB_BIND`、`OUTBOUND_PROXY`、`HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY`，见 `.env.example`。
+可选的：`SITE_NAME`（站点名，默认 `Moovie 影牛`，网页标题后缀、首页标题、分享卡片、邮件和桌面图标名都用它）、`TELEGRAM_*`（图片备份）、`DOUBAN_PROXY`（豆瓣出站代理）、`DOUBAN_COOKIE`（豆瓣请求带的 Cookie）、`NEODB_URL`、`TRUSTED_PROXIES`、`WEB_BIND`、`OUTBOUND_PROXY`、`HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY`，见 `.env.example`。
 
 ### 3. 导入已有的数据（可选）
 

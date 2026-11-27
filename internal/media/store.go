@@ -22,14 +22,14 @@ func NewStore(pool *db.Pool) *Store { return &Store{pool: pool} }
 const mediaColumns = `m.id, m.media_type, m.douban_id, m.tmdb_id, m.imdb_id, m.wikidata_id, m.hongguo_id, m.title, m.original_title, m.year, m.season, m.episode_count,
 m.poster, m.backdrops, m.summary, m.genres, m.countries, m.directors, m.actors, m.duration_minutes,
 m.rating_douban, m.rating_tmdb, m.votes_tmdb, m.rating_hongguo, m.heat, m.series_status, m.series_key, m.hidden, m.metadata_status,
-m.metadata_synced_at, m.enriched_at, m.semantic_text, m.semantic_hash, m.embedding IS NOT NULL, m.updated_at`
+m.metadata_synced_at, m.enriched_at, m.tmdb_series_checked_at, m.tmdb_season_unmatched, m.semantic_text, m.semantic_hash, m.embedding IS NOT NULL, m.created_at, m.updated_at`
 
 func scanMedia(row pgx.Row) (Media, error) {
 	var m Media
 	err := row.Scan(&m.ID, &m.Type, &m.DoubanID, &m.TMDBID, &m.IMDbID, &m.WikidataID, &m.HongguoID, &m.Title, &m.OriginalTitle, &m.Year, &m.Season, &m.EpisodeCount,
 		&m.Poster, &m.Backdrops, &m.Summary, &m.Genres, &m.Countries, &m.Directors, &m.Actors, &m.DurationMinutes,
 		&m.RatingDouban, &m.RatingTMDB, &m.VotesTMDB, &m.RatingHongguo, &m.Heat, &m.SeriesStatus, &m.SeriesKey, &m.Hidden, &m.MetadataStatus,
-		&m.MetadataSyncedAt, &m.EnrichedAt, &m.SemanticText, &m.SemanticHash, &m.HasEmbedding, &m.UpdatedAt)
+		&m.MetadataSyncedAt, &m.EnrichedAt, &m.TMDBSeriesCheckedAt, &m.TMDBSeasonUnmatched, &m.SemanticText, &m.SemanticHash, &m.HasEmbedding, &m.CreatedAt, &m.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return m, ErrNotFound
 	}
@@ -84,6 +84,7 @@ func ValidDoubanID(value string) bool {
 }
 
 // EnsureDouban 保证一个豆瓣条目在作品库里有一行，返回作品 ID 和是不是新建的。
+// seed 是豆瓣列表（榜单、联想、用户的标记）里带的资料，新建时按豆瓣的值写入。
 func (s *Store) EnsureDouban(ctx context.Context, doubanID string, seed Patch) (id int64, created bool, err error) {
 	if !ValidDoubanID(doubanID) {
 		return 0, false, fmt.Errorf("豆瓣 ID 不合法: %q", doubanID)
@@ -98,8 +99,7 @@ ON CONFLICT (douban_id) WHERE douban_id <> '' DO NOTHING RETURNING id`, doubanID
 		return 0, false, err
 	}
 	if len(seed) > 0 {
-		// 刚建的空行：seed 直接写入，之后豆瓣的资料会覆盖它。
-		if err := s.applyPatch(ctx, id, ProviderManual, seed); err != nil {
+		if err := s.ApplyPatch(ctx, id, seed); err != nil {
 			return id, true, err
 		}
 	}
@@ -108,7 +108,7 @@ ON CONFLICT (douban_id) WHERE douban_id <> '' DO NOTHING RETURNING id`, doubanID
 
 // ApplyListing 用豆瓣列表（热门榜、用户的标记列表）里顺手带的资料更新已有的作品，不用为此再请求详情。
 // 评分是豆瓣当前的值，给了就写；年份和海报只补空着的：列表里的海报可能比详情里的小一档，不能覆盖。
-// 给了评分就记下 douban_listed_at，近期电影的详情因此可以隔得更久再抓（见 Stale）。
+// 给了评分就记下 douban_listed_at，近期作品的详情因此可以隔得更久再抓（见 Stale）。
 func (s *Store) ApplyListing(ctx context.Context, id int64, rating float64, year int, poster string) error {
 	if rating <= 0 && year <= 0 && poster == "" {
 		return nil
@@ -123,89 +123,64 @@ WHERE id = $1 AND douban_id <> ''`, id, float32(rating), year, poster)
 	return err
 }
 
-// ApplyPatch 把某个来源的字段合并进作品。合并规则固定，不需要逐字段记录来源：
-//   - 豆瓣是主要来源（manual 是演示数据和新建时的初始信息），给的值总是写入；
-//   - 红果是短剧唯一的来源，给的值也总是写入；
-//   - TMDB 是辅助来源，只补空着的字段；TMDB 独有的字段（TMDB 评分和票数、剧照、连载状态）直接写。
-//
-// Patch 里只放有值的字段（Set 会跳过空值），所以豆瓣没给的字段不会把已有的值清掉。
-func (s *Store) ApplyPatch(ctx context.Context, id int64, provider string, patch Patch) error {
-	if provider != ProviderDouban && provider != ProviderTMDB && provider != ProviderManual && provider != ProviderHongguo {
-		return fmt.Errorf("未知的元数据来源: %q", provider)
-	}
-	return s.applyPatch(ctx, id, provider, patch)
+// ApplyPatch 写入详情给出的字段。来源缺失的值用 Patch.Set 跳过。
+func (s *Store) ApplyPatch(ctx context.Context, id int64, patch Patch) error {
+	return s.applyPatch(ctx, id, patch, nil)
 }
 
-// tmdbOwned 是只有 TMDB 提供的字段：TMDB 给了就直接写。
-var tmdbOwned = map[string]bool{"rating_tmdb": true, "votes_tmdb": true, "backdrops": true, "series_status": true}
-
-// emptyCheck 返回"这个字段还是空的"的 SQL 条件（辅助来源只补空字段）。
-func emptyCheck(field string) string {
-	switch field {
-	case "backdrops", "genres", "countries", "directors", "actors":
-		return "cardinality(" + field + ") = 0"
-	case "year", "season", "episode_count", "duration_minutes", "rating_douban", "rating_tmdb", "votes_tmdb", "rating_hongguo", "heat":
-		return field + " = 0"
-	}
-	return field + " = ''"
+// fillConditions 让外源只补当前仍缺的共有字段。外部编号可以确认建档时被暂记为电影的剧集类型。
+var fillConditions = map[string]string{
+	"media_type": "media_type = 'movie' AND metadata_status = 'partial'",
+	"title":      "title = ''", "original_title": "original_title = ''", "year": "year = 0", "season": "season = 1",
+	"poster": "poster = ''", "summary": "summary = ''", "duration_minutes": "duration_minutes = 0",
+	"genres": "cardinality(genres) = 0", "countries": "cardinality(countries) = 0",
+	"directors": "cardinality(directors) = 0", "actors": "cardinality(actors) = 0",
 }
 
-func (s *Store) applyPatch(ctx context.Context, id int64, provider string, patch Patch) error {
-	if len(patch) == 0 {
+// FillMetadata 原子地补空字段。TMDB 的剧照、评分随刷新更新。
+func (s *Store) FillMetadata(ctx context.Context, id int64, patch Patch) error {
+	return s.applyPatch(ctx, id, patch, fillConditions)
+}
+
+func (s *Store) applyPatch(ctx context.Context, id int64, patch Patch, conditions map[string]string) error {
+	sets := []string{"updated_at = now()"}
+	args := []any{id}
+	for _, field := range patchFields {
+		value, ok := patch[field]
+		if !ok {
+			continue
+		}
+		args = append(args, value)
+		expr := "$" + strconv.Itoa(len(args))
+		condition := conditions[field]
+		if condition != "" {
+			expr = "CASE WHEN " + condition + " THEN " + expr + " ELSE " + field + " END"
+		}
+		sets = append(sets, field+" = "+expr)
+		if _, explicit := patch["series_key"]; field == "title" && !explicit {
+			args = append(args, SeriesKey(value.(string)))
+			expr = "$" + strconv.Itoa(len(args))
+			if condition != "" {
+				expr = "CASE WHEN " + condition + " THEN " + expr + " ELSE series_key END"
+			}
+			sets = append(sets, "series_key = "+expr)
+		}
+	}
+	if len(args) == 1 {
 		return nil
 	}
 	return db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
-		var exists bool
-		if err := tx.QueryRow(ctx, `SELECT true FROM media WHERE id = $1 FOR UPDATE`, id).Scan(&exists); err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
-				return ErrNotFound
-			}
-			return err
-		}
-		fillOnly := provider == ProviderTMDB
-		sets := []string{"updated_at = now()"}
-		args := []any{id}
-		for _, field := range patchFields {
-			value, ok := patch[field]
-			if !ok {
-				continue
-			}
-			args = append(args, value)
-			placeholder := "$" + strconv.Itoa(len(args))
-			condition := ""
-			if fillOnly && !tmdbOwned[field] {
-				condition = emptyCheck(field)
-			}
-			if condition == "" {
-				sets = append(sets, field+" = "+placeholder)
-			} else {
-				sets = append(sets, field+" = CASE WHEN "+condition+" THEN "+placeholder+" ELSE "+field+" END")
-			}
-			if _, explicit := patch["series_key"]; field == "title" && !explicit {
-				args = append(args, SeriesKey(value.(string)))
-				key := "$" + strconv.Itoa(len(args))
-				if condition == "" {
-					sets = append(sets, "series_key = "+key)
-				} else {
-					sets = append(sets, "series_key = CASE WHEN "+condition+" THEN "+key+" ELSE series_key END")
-				}
-			}
-		}
-		if len(sets) == 1 {
-			return nil
-		}
-		if _, err := tx.Exec(ctx, `UPDATE media SET `+strings.Join(sets, ", ")+` WHERE id = $1`, args...); err != nil {
+		result, err := tx.Exec(ctx, "UPDATE media SET "+strings.Join(sets, ", ")+" WHERE id = $1", args...)
+		if err != nil {
 			return fmt.Errorf("写入作品字段: %w", err)
 		}
-		// 片名和原名自动成为别名，这样搜索和匹配都能找到。
-		for _, field := range []string{"title", "original_title"} {
-			if value, ok := patch[field].(string); ok && value != "" {
-				if err := addAliases(ctx, tx, id, value); err != nil {
-					return err
-				}
-			}
+		if result.RowsAffected() == 0 {
+			return ErrNotFound
 		}
-		return nil
+		// 未采用的片名也保留为别名，便于搜索和匹配。
+		title, _ := patch["title"].(string)
+		original, _ := patch["original_title"].(string)
+		return addAliases(ctx, tx, id, title, original)
 	})
 }
 
@@ -301,14 +276,48 @@ func (s *Store) SetExternalID(ctx context.Context, id int64, provider, externalI
 // ReplaceUnits 用新的分集列表替换某一季的分集。
 func (s *Store) ReplaceUnits(ctx context.Context, id int64, season int, units []Unit) error {
 	return db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
-		if _, err := tx.Exec(ctx, `DELETE FROM media_units WHERE media_id = $1 AND season = $2`, id, season); err != nil {
+		return replaceUnits(ctx, tx, id, season, units)
+	})
+}
+
+func replaceUnits(ctx context.Context, tx pgx.Tx, id int64, season int, units []Unit) error {
+	if _, err := tx.Exec(ctx, `DELETE FROM media_units WHERE media_id = $1 AND season = $2`, id, season); err != nil {
+		return err
+	}
+	for _, unit := range units {
+		if _, err := tx.Exec(ctx, `INSERT INTO media_units (media_id, season, episode, title, air_date, runtime_minutes)
+VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT DO NOTHING`, id, season, unit.Episode, unit.Title, unit.AirDate, unit.RuntimeMinutes); err != nil {
 			return err
 		}
-		for _, unit := range units {
-			if _, err := tx.Exec(ctx, `INSERT INTO media_units (media_id, season, episode, title, air_date, runtime_minutes)
-VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT DO NOTHING`, id, season, unit.Episode, unit.Title, unit.AirDate, unit.RuntimeMinutes); err != nil {
-				return err
-			}
+	}
+	return nil
+}
+
+// TMDBSeasonUpdate 是匹配到同一季后可更新的数据。缺失的字段保留现有值。
+type TMDBSeasonUpdate struct {
+	Unmatched    bool
+	EpisodeCount int
+	Status       string
+	Units        []Unit
+}
+
+// SaveTMDBSeason 同时存季状态和分集。查资料期间关联或季信息变了，或者已有更新结果时，丢弃本次写入。
+func (s *Store) SaveTMDBSeason(ctx context.Context, m Media, checkedAt time.Time, season TMDBSeasonUpdate) error {
+	return db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
+		result, err := tx.Exec(ctx, `UPDATE media SET
+tmdb_series_checked_at = $5,
+tmdb_season_unmatched = $8,
+episode_count = COALESCE(NULLIF($6::int, 0), episode_count),
+series_status = COALESCE(NULLIF($7::text, ''), series_status),
+updated_at = CASE WHEN ($6 > 0 AND $6 <> episode_count) OR ($7 <> '' AND $7 <> series_status) THEN now() ELSE updated_at END
+WHERE id = $1 AND tmdb_id = $2 AND season = $3 AND year = $4 AND NOT hidden AND metadata_status <> 'not_found'
+  AND (tmdb_series_checked_at IS NULL OR tmdb_series_checked_at <= $5)`,
+			m.ID, m.TMDBID, m.Season, m.Year, checkedAt, season.EpisodeCount, season.Status, season.Unmatched)
+		if err != nil {
+			return err
+		}
+		if result.RowsAffected() != 0 && len(season.Units) != 0 {
+			return replaceUnits(ctx, tx, m.ID, m.Season, season.Units)
 		}
 		return nil
 	})
@@ -428,10 +437,11 @@ func (s *Store) Discover(ctx context.Context, filter Filter) ([]Card, error) {
 
 // SetRelease 记下 TMDB 给的上映日期和近期关注度，并标记这部作品已经向 TMDB 查过日期（查不到也算查过）。
 // released 为 nil 时保留原来的日期；popularity 为 0 时保留原来的关注度。
-func (s *Store) SetRelease(ctx context.Context, id int64, released *time.Time, popularity float64) error {
+func (s *Store) SetRelease(ctx context.Context, m Media, released *time.Time, popularity float64) error {
 	_, err := s.pool.Exec(ctx, `UPDATE media SET release_date = COALESCE($2::date, release_date),
-popularity_tmdb = CASE WHEN $3::float8 > 0 THEN $3::float8 ELSE popularity_tmdb END, release_checked = true WHERE id = $1`,
-		id, released, popularity)
+popularity_tmdb = CASE WHEN $3::float8 > 0 THEN $3::float8 ELSE popularity_tmdb END, release_checked = true
+WHERE id = $1 AND tmdb_id = $4 AND season = $5 AND year = $6`,
+		m.ID, released, popularity, m.TMDBID, m.Season, m.Year)
 	return err
 }
 
@@ -745,9 +755,10 @@ func (s *Store) SetEmbedding(ctx context.Context, id int64, text string, vector 
 	return err
 }
 
-// MarkEnriched 记下这一轮的 Wikidata、TMDB 资料已经补好。
-func (s *Store) MarkEnriched(ctx context.Context, id int64) error {
-	_, err := s.pool.Exec(ctx, `UPDATE media SET enriched_at = now() WHERE id = $1`, id)
+// MarkEnriched 记下这一轮的 Wikidata、NeoDB、TMDB 资料已经补好。started 是这一轮开始的时间：
+// 补的过程中豆瓣刚好同步完的话，enriched_at 早于 metadata_synced_at，巡检会按豆瓣的资料再补一轮。
+func (s *Store) MarkEnriched(ctx context.Context, id int64, started time.Time) error {
+	_, err := s.pool.Exec(ctx, `UPDATE media SET enriched_at = $2 WHERE id = $1`, id, started)
 	return err
 }
 
@@ -755,22 +766,32 @@ func (s *Store) MarkEnriched(ctx context.Context, id int64) error {
 // 巡检只挑这样的作品：否则一批一直失败的作品每次都排在最前面，后面的永远轮不到。
 const idle = `NOT EXISTS (SELECT 1 FROM jobs j WHERE j.kind = $1 AND j.subject = m.id::text AND j.status <> 'done')`
 
-// Stale 返回需要从豆瓣同步的作品 ID（短剧不在内，见 StaleShort）。只同步资料还会变的，其余的同步一次就够了：
+// doubanDue 是一部作品（m）现在该不该去豆瓣读详情。豆瓣的请求很金贵，只为豆瓣独有、还会变的资料去读：
 //   - 从没同步成功过的；
-//   - 还在连载的剧集（TMDB 标了连载中，或者没标状态但是近两年的），每天一次，为了集数和播出时间；
-//   - 近两年上映的，每周一次，因为评分还在变。
+//   - 近两年上映的（评分和简介还在变），每周最多一次；这一周已经从热门榜或用户的标记列表里拿到过评分的，放宽到 30 天。
 //
-// 更早的作品不再自动同步，后台仍然可以手动刷新。
+// 连载剧的集数和播出状态由 TMDB 更新，不为它们去读豆瓣；更早的作品同步一次就够了，后台仍然可以手动刷新。
+// $2 是"近两年"的起始年份。
+const doubanDue = `m.media_type <> 'short' AND m.metadata_status <> 'not_found' AND (
+  m.metadata_synced_at IS NULL
+  OR (m.year >= $2 AND m.metadata_synced_at < now() - interval '7 days'
+      AND (m.douban_listed_at IS NULL OR m.douban_listed_at <= now() - interval '7 days' OR m.metadata_synced_at <= now() - interval '30 days'))
+)`
+
+func recentYear() int { return time.Now().Year() - 1 }
+
+// Stale 返回该去豆瓣读详情的作品 ID（见 doubanDue），从没同步过的在前。短剧不在内，见 StaleShort。
 func (s *Store) Stale(ctx context.Context, jobKind string, limit int) ([]int64, error) {
-	return s.ids(ctx, `SELECT id FROM media m WHERE media_type <> 'short' AND metadata_status <> 'not_found' AND `+idle+` AND (
-  metadata_synced_at IS NULL
-  OR (media_type <> 'movie' AND metadata_synced_at < now() - interval '1 day'
-      AND (series_status = 'ongoing' OR (series_status = '' AND year >= $2)))
-  OR (year >= $2 AND metadata_synced_at < now() - interval '7 days'
-      -- 近期的电影每周重抓主要是为了评分；这一周已经从列表里拿到过评分的，放宽到 30 天
-      AND (media_type <> 'movie' OR douban_listed_at IS NULL OR douban_listed_at <= now() - interval '7 days'
-           OR metadata_synced_at <= now() - interval '30 days'))
-) ORDER BY metadata_synced_at NULLS FIRST, id LIMIT $3`, jobKind, time.Now().Year()-1, limit)
+	return s.ids(ctx, `SELECT id FROM media m WHERE `+doubanDue+` AND `+idle+`
+ORDER BY metadata_synced_at NULLS FIRST, id LIMIT $3`, jobKind, recentYear(), limit)
+}
+
+// DoubanDue 判断一部作品现在还该不该去豆瓣读详情（见 doubanDue）。排了很久的任务真要请求之前用它再确认一次：
+// 期间插件可能已经交来了资料，规则也可能变了。
+func (s *Store) DoubanDue(ctx context.Context, id int64) (bool, error) {
+	var due bool
+	err := s.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM media m WHERE m.id = $1 AND `+doubanDue+`)`, id, recentYear()).Scan(&due)
+	return due, err
 }
 
 // StaleShort 返回需要从红果重新抓的短剧：从没抓到过的，和连载中、一天没更新的（集数还在变）。
@@ -781,19 +802,32 @@ AND metadata_status <> 'not_found' AND (metadata_synced_at IS NULL OR metadata_s
 ORDER BY metadata_synced_at NULLS FIRST, id LIMIT $2`, jobKind, limit)
 }
 
-// NeedsEnrich 返回豆瓣同步过、但这一轮还没从 Wikidata、TMDB 补到资料的作品。
+// NeedsEnrich 返回还没从 Wikidata、NeoDB、TMDB 补过资料的作品，和豆瓣同步之后还没按新资料再补一轮的作品。
+// 建档不等豆瓣，所以不管豆瓣同步过没有；新收录的在前。
 func (s *Store) NeedsEnrich(ctx context.Context, jobKind string, limit int) ([]int64, error) {
-	return s.ids(ctx, `SELECT id FROM media m WHERE media_type <> 'short' AND metadata_status = 'complete' AND NOT hidden AND `+idle+`
-AND (enriched_at IS NULL OR enriched_at < metadata_synced_at) ORDER BY metadata_synced_at DESC, id LIMIT $2`, jobKind, limit)
+	return s.ids(ctx, `SELECT id FROM media m WHERE media_type <> 'short' AND metadata_status <> 'not_found' AND NOT hidden AND `+idle+`
+AND (enriched_at IS NULL OR enriched_at < metadata_synced_at) ORDER BY id DESC LIMIT $2`, jobKind, limit)
 }
 
-// NeedsSemantic 返回资料够了、但还没有语义描述的作品。正在补 Wikidata、TMDB 的先不挑，等它补完，
-// 免得 AI 先按不全的资料写一遍、补完又写一遍。
+// NeedsTMDBSeries 返回待查的长剧，最久没更新的优先。正在建档的会由建档任务顺手更新。
+func (s *Store) NeedsTMDBSeries(ctx context.Context, jobKind, enrichKind string, limit int) ([]int64, error) {
+	return s.ids(ctx, `SELECT id FROM media m WHERE media_type IN ('tv', 'show', 'anime') AND tmdb_id LIKE 'tv/%'
+AND series_status <> 'ended' AND NOT hidden AND metadata_status <> 'not_found'
+AND (tmdb_series_checked_at IS NULL OR tmdb_series_checked_at <= now() -
+    make_interval(secs => CASE WHEN tmdb_season_unmatched THEN $5::float8 ELSE $4::float8 END)) AND `+idle+`
+AND NOT EXISTS (SELECT 1 FROM jobs j WHERE j.kind = $2 AND j.subject = m.id::text AND j.status IN ('queued', 'running'))
+ORDER BY tmdb_series_checked_at NULLS FIRST, id LIMIT $3`,
+		jobKind, enrichKind, limit, tmdbSeasonRefreshInterval.Seconds(), tmdbSeasonRetryInterval.Seconds())
+}
+
+// NeedsSemantic 返回资料够了、但还没有语义描述的作品（条件和 Media.SemanticReady 一致）。
+// 正在补 Wikidata、NeoDB、TMDB 的先不挑，等它补完，免得 AI 先按不全的资料写一遍、补完又写一遍。
 func (s *Store) NeedsSemantic(ctx context.Context, jobKind, enrichKind string, limit int) ([]int64, error) {
-	return s.ids(ctx, `SELECT id FROM media m WHERE media_type <> 'short' AND metadata_status = 'complete' AND NOT hidden AND `+idle+`
+	return s.ids(ctx, `SELECT id FROM media m WHERE media_type <> 'short' AND NOT hidden AND `+idle+`
+AND (metadata_status = 'complete' OR (metadata_status = 'partial' AND enriched_at IS NOT NULL AND created_at <= now() - make_interval(secs => $4)))
 AND semantic_text = '' AND title <> '' AND (summary <> '' OR original_title <> '')
 AND NOT EXISTS (SELECT 1 FROM jobs e WHERE e.kind = $3 AND e.subject = m.id::text AND e.status IN ('queued', 'running'))
-ORDER BY id DESC LIMIT $2`, jobKind, limit, enrichKind)
+ORDER BY id DESC LIMIT $2`, jobKind, limit, enrichKind, PartialSemanticAfter.Seconds())
 }
 
 // MissingEmbedding 返回有语义描述、但还没有向量的作品。

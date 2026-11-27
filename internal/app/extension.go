@@ -470,9 +470,18 @@ func (a *App) applyContribution(c *gin.Context, doubanID string, subject *provid
 		c.JSON(http.StatusOK, gin.H{"applied": false, "reason": "hidden"})
 		return
 	}
-	if m.MetadataStatus == "complete" && !consistentSubject(m, subject) {
-		httpx.Error(c, http.StatusConflict, "和本站已有的资料对不上，没有采用")
-		return
+	// 已经有片名的作品（豆瓣列表、Wikidata、NeoDB、TMDB 给的，或者豆瓣同步过）要对得上才采用；
+	// 只有豆瓣 ID、还没有片名的，交来的就是第一份资料，照收。
+	if m.Title != "" {
+		names, err := a.Media.Aliases(ctx, m.ID, 200)
+		if err != nil {
+			a.fail(c, err)
+			return
+		}
+		if !consistentSubject(m, names, subject) {
+			httpx.Error(c, http.StatusConflict, "和本站已有的资料对不上，没有采用")
+			return
+		}
 	}
 	priority := ingest.PriorityImport
 	if urgent {
@@ -524,11 +533,17 @@ func doubanImage(value string) bool {
 	return err == nil && (parsed.Scheme == "https" || parsed.Scheme == "http") && strings.HasSuffix(parsed.Hostname(), ".doubanio.com")
 }
 
-// consistentSubject 判断交来的详情和已经有完整资料的作品是不是同一部：片名（或原名）对得上，年份最多差一年。
-// 对不上的不采用：多半是假资料；真是豆瓣改了片名，服务器自己的定期同步会更新。
-func consistentSubject(m media.Media, s *providers.DoubanSubject) bool {
-	sameTitle := media.Normalize(m.Title) == media.Normalize(s.Title) ||
-		(m.OriginalTitle != "" && media.Normalize(m.OriginalTitle) == media.Normalize(s.OriginalTitle))
+// consistentSubject 判断交来的详情和已有资料的作品是不是同一部：片名或原名是这部作品已知的名字之一
+// （片名、原名和各来源给的别名，names），年份最多差一年。
+// 对不上的不采用：多半是假资料；真是豆瓣改了片名，服务器自己的同步会更新。
+func consistentSubject(m media.Media, names []string, s *providers.DoubanSubject) bool {
+	known := map[string]bool{}
+	for _, name := range append([]string{m.Title, m.OriginalTitle}, names...) {
+		if normalized := media.Normalize(name); normalized != "" {
+			known[normalized] = true
+		}
+	}
+	sameTitle := known[media.Normalize(s.Title)] || known[media.Normalize(s.OriginalTitle)]
 	year := m.Year == 0 || s.Year == 0 || (m.Year-s.Year <= 1 && s.Year-m.Year <= 1)
 	return sameTitle && year
 }

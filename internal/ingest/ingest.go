@@ -1,11 +1,14 @@
-// Package ingest 把外部来源的元数据采集进作品库：豆瓣为主，TMDB、IMDb、Wikidata 辅助。
+// Package ingest 把外部来源的元数据采集进作品库：豆瓣列表、Wikidata、NeoDB、TMDB 先建档，豆瓣详情按需补齐。
 // 它不接触任何资源站；资源站的元数据不会进入作品库。
 //
-// 一部作品分四步，每一步是一个单独的任务，成功了马上保存、再排下一步；失败了只重试这一步：
+// 豆瓣详情的请求很少（被限流时一小时只有几十次），所以不让建档等它。一部作品收进来时同时排两条路：
 //
-//	豆瓣（media.refresh）→ Wikidata、TMDB（media.enrich）→ AI 写语义描述（media.semantic）→ 算向量（media.embed）
+//	建档：Wikidata、NeoDB、TMDB（media.enrich）→ AI 写语义描述（media.semantic）→ 算向量（media.embed）
+//	豆瓣详情（media.refresh），成功后再排一次 media.enrich，按豆瓣的资料补齐
 //
-// 这样 TMDB 出错不会让豆瓣再被请求一次，向量出错也不会让 AI 再被调用一次。
+// 建档时 NeoDB 优先、TMDB 补空；豆瓣详情给出的值可以覆盖。
+// 每一步是一个单独的任务，成功了马上保存、再排下一步；失败了只重试这一步：TMDB 出错不会让豆瓣再被请求一次，
+// 向量出错也不会让 AI 再被调用一次。
 package ingest
 
 import (
@@ -35,6 +38,8 @@ const (
 	KindSweep    = "media.sweep"
 	// KindRelease 给加上上映日期之前就入库的作品补日期，不在那条链上，subject 是作品 ID。
 	KindRelease = "media.release"
+	// KindTMDBSeries 独立刷新长剧的季状态和分集。
+	KindTMDBSeries = "media.tmdb_series"
 	// KindPopularity 每天用 TMDB 的导出文件更新全部作品的近期关注度。
 	KindPopularity = "tmdb.popularity"
 )
@@ -45,7 +50,7 @@ const maxSemanticRunes = 450
 // 全站后台任务共用的优先级（豆瓣同步 doubansync 也用这几档）。
 //
 // 豆瓣、红果允许的请求数有限，被限流时一小时只有几十次，排不完的总是最低的那几档，所以按这几条排：
-//  1. 有人正盯着屏幕等结果的最先。
+//  1. 有人正盯着屏幕等结果的最先。没登录的访客（包括爬虫）不算：他们打开作品页只会排建档，不会去请求豆瓣。
 //  2. 一次只有一个、只花几次请求、所有访客都看得到的周期任务（首页榜单）其次：先做几乎不占预算，晚了大家都看到旧榜单。
 //  3. 用户自己的数据（每天的豆瓣增量同步）排在补资料前面：没有新标记的用户每人每天只花两次请求，
 //     而且它不做，用户新标记的作品就根本不会出现；补资料不做，作品也已经有片名和海报能用。
@@ -53,11 +58,11 @@ const maxSemanticRunes = 450
 //
 // 优先级只决定空出来的执行位先拿哪个，不会打断正在跑的任务。
 const (
-	PriorityViewing   = 20 // 有人正开着这部作品的页面，显示着"资料获取中"
+	PriorityViewing   = 20 // 登录用户正开着这部作品的页面
 	PriorityManual    = 10 // 有人点了按钮在等：管理员手动刷新、用户点"同步豆瓣"
 	PriorityLists     = 8  // 首页的豆瓣热门榜、短剧频道的红果榜单
 	PriorityDailySync = 6  // 每天给每个绑定了豆瓣的用户做一次增量同步
-	PriorityDiscover  = 5  // 榜单、搜索、老链接带来的新作品：卡片上已有片名和海报，有人点开时会升到 PriorityViewing
+	PriorityDiscover  = 5  // 榜单、搜索带来的新作品：卡片上已有片名和海报，有人点开时会升到 PriorityViewing
 	PriorityImport    = 0  // 用户导入豆瓣标记带来的新作品：列表里已经有片名和海报，晚点补全不影响使用
 	PriorityRoutine   = -1 // 定期重新同步已有资料的作品
 	PriorityBackfill  = -2 // 巡检补漏：AI 描述、向量、上映日期（各有各的通道或不用豆瓣，排在最后也不挡别人）
@@ -66,13 +71,14 @@ const (
 // ChartKinds 是首页用到的榜单，和豆瓣的榜单类型一一对应。
 var ChartKinds = []string{media.TypeMovie, media.TypeTV, media.TypeShow, media.TypeAnime}
 
-// Service 是采集流程。Wikidata、TMDB、AI、Embedder 可以为 nil 或未配置，对应步骤会自动跳过。
+// Service 是采集流程。Wikidata、NeoDB、TMDB、AI、Embedder 可以为 nil 或未配置，对应步骤会自动跳过。
 // 没配 AI 时不写语义描述，新作品也就没有向量（相似推荐改按类型重合度）。
 type Service struct {
 	Media    *media.Store
 	Queue    *jobs.Queue
 	Douban   *providers.Douban
 	Wikidata *providers.Wikidata
+	NeoDB    *providers.NeoDB
 	TMDB     *providers.TMDB
 	AI       *providers.OpenAI  // 写语义描述
 	Embedder *providers.OpenAI  // 算向量
@@ -110,7 +116,7 @@ type Step struct {
 	Force bool `json:"force,omitempty"`
 }
 
-// next 排链上的下一步：优先级跟着上一步走（有人在等的作品，四步都优先）。
+// next 排链上的下一步：优先级跟着上一步走（有人在等的作品，每一步都优先）。
 func (s *Service) next(ctx context.Context, kind string, id int64, job jobs.Job) error {
 	var step Step
 	json.Unmarshal(job.Payload, &step)
@@ -122,6 +128,7 @@ func (s *Service) next(ctx context.Context, kind string, id int64, job jobs.Job)
 func (s *Service) Register(worker *jobs.Worker) {
 	for kind, run := range map[string]func(context.Context, int64, jobs.Job) error{
 		KindRefresh: s.Refresh, KindEnrich: s.Enrich, KindSemantic: s.Semantic, KindEmbed: s.Embed, KindRelease: s.Release,
+		KindTMDBSeries: s.RefreshTMDBSeries,
 	} {
 		worker.Handle(kind, func(ctx context.Context, job jobs.Job) error {
 			id, err := strconv.ParseInt(job.Subject, 10, 64)
@@ -161,9 +168,19 @@ func (s *Service) RefreshNow(ctx context.Context, id int64) error {
 	return err
 }
 
-// EnsureDouban 保证一个豆瓣条目在作品库里有一行。新建的作品会按 priority 排队等待补全资料。
+// EnsureDouban 保证一个豆瓣条目在作品库里有一行。新建的作品马上排建档（不用豆瓣），同时按 priority 排豆瓣详情。
+// 列表里带着片名时马上按屏蔽词检查一遍，命中的不等资料补齐就隐藏。
 // chartType 非空时作为作品类型的初始值（榜单类型比联想接口给的类型更细）。
 func (s *Service) EnsureDouban(ctx context.Context, item providers.DoubanItem, chartType string, priority int) (int64, error) {
+	return s.ensureDouban(ctx, item, chartType, priority, true)
+}
+
+// EnsureLegacyDouban 从旧链接收录只带豆瓣 ID 的作品，立即排建档，详情留给登录访问或巡检。
+func (s *Service) EnsureLegacyDouban(ctx context.Context, doubanID string) (int64, error) {
+	return s.ensureDouban(ctx, providers.DoubanItem{ID: doubanID}, "", PriorityBackfill, false)
+}
+
+func (s *Service) ensureDouban(ctx context.Context, item providers.DoubanItem, chartType string, priority int, refresh bool) (int64, error) {
 	seed := media.Patch{}
 	seed.Set("title", item.Title)
 	seed.Set("year", item.Year)
@@ -188,12 +205,46 @@ func (s *Service) EnsureDouban(ctx context.Context, item providers.DoubanItem, c
 			return id, err
 		}
 	}
-	if created {
-		if err := s.EnqueueRefresh(ctx, id, priority); err != nil {
+	if !created {
+		return id, nil
+	}
+	if item.Title != "" {
+		if err := s.Media.ApplyBlockedKeywords(ctx, id); err != nil {
 			return id, err
 		}
 	}
+	subject := strconv.FormatInt(id, 10)
+	if _, err := s.Queue.Enqueue(ctx, KindEnrich, subject, jobs.Options{Payload: Step{}, Priority: priority}); err != nil {
+		return id, err
+	}
+	if refresh {
+		return id, s.EnqueueRefresh(ctx, id, priority)
+	}
 	return id, nil
+}
+
+// Viewed 在有人打开作品页时调用：资料还没补过的，马上排建档；登录用户打开的、豆瓣详情还没同步过的，
+// 豆瓣详情提到最前面（PriorityViewing）。没登录的访客（包括爬虫）不触发豆瓣请求：他们看到的是建档的资料。
+func (s *Service) Viewed(ctx context.Context, m media.Media, signedIn bool) error {
+	if m.IsShort() {
+		// 短剧只有红果一个来源，不经过豆瓣。
+		if m.MetadataSyncedAt == nil {
+			return s.EnqueueRefresh(ctx, m.ID, PriorityViewing)
+		}
+		return nil
+	}
+	if m.MetadataStatus == "not_found" {
+		return nil
+	}
+	if m.EnrichedAt == nil {
+		if _, err := s.Queue.Enqueue(ctx, KindEnrich, strconv.FormatInt(m.ID, 10), jobs.Options{Payload: Step{}, Priority: PriorityViewing}); err != nil {
+			return err
+		}
+	}
+	if signedIn && m.MetadataSyncedAt == nil {
+		return s.EnqueueRefresh(ctx, m.ID, PriorityViewing)
+	}
+	return nil
 }
 
 // Discover 用关键词去豆瓣查联想，把查到的条目收进作品库。同一个关键词一天内只查一次。
@@ -238,7 +289,9 @@ func doubanType(subject *providers.DoubanSubject) string {
 	return media.TypeTV
 }
 
-// Refresh 是第一步：从豆瓣同步资料。成功后排第二步。
+// Refresh 从豆瓣读详情。成功后按豆瓣的资料再补一轮（media.enrich）。
+// 请求之前按 media.Store.DoubanDue 再确认一次还要不要去：任务可能排了很久，期间插件交来了资料、或者已经不需要了。
+// 管理员手动刷新（Force）不管这些。
 func (s *Service) Refresh(ctx context.Context, id int64, job jobs.Job) error {
 	m, err := s.Media.Get(ctx, id)
 	if errors.Is(err, media.ErrNotFound) {
@@ -254,20 +307,30 @@ func (s *Service) Refresh(ctx context.Context, id int64, job jobs.Job) error {
 		}
 		return s.RefreshShort(ctx, id)
 	}
+	var step Step
+	json.Unmarshal(job.Payload, &step)
+	if !step.Force {
+		due, err := s.Media.DoubanDue(ctx, id)
+		if err != nil {
+			return err
+		}
+		if !due {
+			return jobs.ErrSkip
+		}
+	}
 	if m.DoubanID != "" {
-		first := "tv"
+		first := ""
 		switch {
-		case m.Title == "":
-			// 只凭豆瓣 ID 收进来的（老链接、DiscoverDoubanID），类型是表里的默认值 movie，其实不知道。
-			// 告诉 Subject 不知道：电影详情被限流时还能试剧集详情。
-			first = ""
-		case m.Type == media.TypeMovie:
+		case m.Type != media.TypeMovie:
+			first = "tv"
+		case m.Title != "" || m.MetadataStatus == "complete":
 			first = "movie"
 		}
+		// 只有 ID、还没片名时可能是占位的电影类型，允许在电影接口暂停时尝试剧集。
 		subject, err := s.Douban.Subject(ctx, m.DoubanID, first)
 		if err != nil && job.Priority >= PriorityManual && (errors.Is(err, providers.ErrThrottled) || errors.Is(err, providers.ErrRefused)) {
-			// 有人在等：详情接口被限流或拒绝了这个条目，改打开详情网页。只给有人等的用，
-			// 后台批量的任务也来抢的话，网页这条路很快也会被限流。网页说没有这个条目时不算数，接口的结论还没出来。
+			// 有人在等（登录用户开着作品页、管理员手动刷新）：详情接口被限流或拒绝了这个条目，改打开详情网页。
+			// 只给有人等的用，后台批量的任务也来抢的话，网页这条路很快也会被限流。网页说没有这个条目时不算数，接口的结论还没出来。
 			page, pageErr := s.Douban.SubjectPage(ctx, m.DoubanID)
 			if pageErr == nil {
 				subject, err = page, nil
@@ -295,7 +358,20 @@ func (s *Service) Refresh(ctx context.Context, id int64, job jobs.Job) error {
 	if err := s.Media.ApplyBlockedKeywords(ctx, id); err != nil {
 		return err
 	}
-	return s.next(ctx, KindEnrich, id, job)
+	return s.afterDouban(ctx, id, job)
+}
+
+// afterDouban 在豆瓣的资料到了以后，按新资料再补一轮。补资料这一步正处在失败冷却期、排不上时，
+// 直接往下写描述：豆瓣的资料已经够了，不用等冷却期过去。
+func (s *Service) afterDouban(ctx context.Context, id int64, job jobs.Job) error {
+	if err := s.next(ctx, KindEnrich, id, job); err != nil {
+		return err
+	}
+	last, found, err := s.Queue.Latest(ctx, KindEnrich, strconv.FormatInt(id, 10))
+	if err != nil || !found || last.Status != "failed" {
+		return err
+	}
+	return s.nextSemantic(ctx, id, job)
 }
 
 // ApplyContributed 写入浏览器插件在用户的浏览器里取回的豆瓣详情（见 internal/app/extension.go），
@@ -311,12 +387,10 @@ func (s *Service) ApplyContributed(ctx context.Context, id int64, subject *provi
 	if err := s.Media.ApplyBlockedKeywords(ctx, id); err != nil {
 		return err
 	}
-	subjectID := strconv.FormatInt(id, 10)
-	if err := s.Queue.Drop(ctx, KindRefresh, subjectID); err != nil {
+	if err := s.Queue.Drop(ctx, KindRefresh, strconv.FormatInt(id, 10)); err != nil {
 		return err
 	}
-	_, err := s.Queue.Enqueue(ctx, KindEnrich, subjectID, jobs.Options{Payload: Step{}, Priority: priority})
-	return err
+	return s.afterDouban(ctx, id, jobs.Job{Payload: []byte("{}"), Priority: priority})
 }
 
 // saveDouban 把豆瓣的详情写进作品库。豆瓣给的值总是写入。
@@ -326,8 +400,11 @@ func (s *Service) saveDouban(ctx context.Context, id int64, subject *providers.D
 	patch.Set("title", subject.Title)
 	patch.Set("original_title", subject.OriginalTitle)
 	patch.Set("year", subject.Year)
-	_, season := media.SplitSeason(subject.Title)
-	patch.Set("season", season)
+	if base, season := media.SplitSeason(subject.Title); base != strings.TrimSpace(subject.Title) {
+		patch.Set("season", season)
+	} else if base, season := media.SplitSeason(subject.OriginalTitle); base != strings.TrimSpace(subject.OriginalTitle) {
+		patch.Set("season", season)
+	}
 	patch.Set("episode_count", subject.EpisodesCount)
 	patch.Set("poster", subject.Poster)
 	patch.Set("summary", subject.Intro)
@@ -337,16 +414,21 @@ func (s *Service) saveDouban(ctx context.Context, id int64, subject *providers.D
 	patch.Set("actors", limit(subject.Actors, 12))
 	patch.Set("duration_minutes", subject.DurationMinutes)
 	patch.Set("rating_douban", subject.Rating)
-	if err := s.Media.ApplyPatch(ctx, id, media.ProviderDouban, patch); err != nil {
+	if err := s.Media.ApplyPatch(ctx, id, patch); err != nil {
 		return err
 	}
 	return s.Media.AddAliases(ctx, id, subject.AKA...)
 }
 
-// Enrich 是第二步：从 Wikidata 拿外部 ID 和各语言片名，从 TMDB 拿剧照、分集和连载状态。
-// 两个来源各自的资料拿到就保存；任何一个出错（"没有这个条目"不算出错）这一步就算失败，稍后重试。
-// 最后一次重试也失败时，照样排下一步：AI 用现有的资料写描述，不必干等。
+// Enrich 按 Wikidata、NeoDB、TMDB 的顺序查询。Wikidata 提供外部编号、别名和查找用的片名，
+// NeoDB 的中文资料优先，TMDB 补齐这一轮剩余的字段，并更新剧照、集数等。
+// 豆瓣详情同步过以后不再查 NeoDB。
+//
+// Wikidata、TMDB 各自的资料拿到就保存；任何一个出错（"没有这个条目"不算出错）这一步就算失败，稍后重试。
+// NeoDB 只是补充，出错只记日志：不为它让 Wikidata、TMDB 再请求一遍。
+// 最后一次重试也失败时，照样往下排：AI 用现有的资料写描述，不必干等。
 func (s *Service) Enrich(ctx context.Context, id int64, job jobs.Job) error {
+	started := time.Now()
 	m, err := s.Media.Get(ctx, id)
 	if errors.Is(err, media.ErrNotFound) {
 		return jobs.ErrSkip
@@ -355,46 +437,120 @@ func (s *Service) Enrich(ctx context.Context, id int64, job jobs.Job) error {
 		return err
 	}
 	var failures []error
+	patch := media.Patch{}
+	wikidataTitle := ""
 	if s.Wikidata != nil && m.DoubanID != "" {
-		if err := s.enrichWikidata(ctx, m); err != nil && !errors.Is(err, providers.ErrNotFound) {
+		wikidataTitle, err = s.enrichWikidata(ctx, &m, patch)
+		if err != nil && !errors.Is(err, providers.ErrNotFound) {
 			failures = append(failures, fmt.Errorf("Wikidata: %w", err))
 		}
 	}
+	if s.NeoDB.Enabled() && m.MetadataStatus != "complete" {
+		searchTitle := m.Title
+		if searchTitle == "" {
+			searchTitle = wikidataTitle
+		}
+		if err := s.enrichNeoDB(ctx, &m, searchTitle, patch); err != nil && !errors.Is(err, providers.ErrNotFound) {
+			s.Log.Info("NeoDB 补资料没成功", "media", id, "error", err)
+		}
+	}
+	if _, hasTitle := patch["title"]; !hasTitle {
+		patch.Set("title", wikidataTitle)
+	}
+	if m.Title == "" {
+		m.Title, _ = patch["title"].(string)
+	}
 	if s.TMDB.Enabled() {
-		if err := s.refreshTMDB(ctx, id); err != nil && !errors.Is(err, providers.ErrNotFound) {
+		if err := s.enrichTMDB(ctx, m, started, patch); err != nil && !errors.Is(err, providers.ErrNotFound) {
 			failures = append(failures, fmt.Errorf("TMDB: %w", err))
 		}
 	}
+	if err := s.Media.FillMetadata(ctx, id, patch); err != nil {
+		failures = append(failures, err)
+	}
+	// 片名可能是这一步才有的（只凭豆瓣 ID 收进来的作品），屏蔽词现在就查，不等豆瓣。
+	if err := s.Media.ApplyBlockedKeywords(ctx, id); err != nil {
+		failures = append(failures, err)
+	}
 	if err := errors.Join(failures...); err != nil {
 		if job.Attempts >= jobs.MaxAttempts {
-			if nextErr := s.next(ctx, KindSemantic, id, job); nextErr != nil {
+			if nextErr := s.nextSemantic(ctx, id, job); nextErr != nil {
 				return errors.Join(err, nextErr)
 			}
 		}
 		return err
 	}
-	if err := s.Media.MarkEnriched(ctx, id); err != nil {
+	if err := s.Media.MarkEnriched(ctx, id, started); err != nil {
 		return err
+	}
+	return s.nextSemantic(ctx, id, job)
+}
+
+// nextSemantic 在资料够写语义描述时排下一步（见 media.Media.SemanticReady）。豆瓣还没同步、建档又不久的作品先不写：
+// 豆瓣的资料到了还得再写一遍。到时候由豆瓣那一步之后的补资料、或者巡检排上。
+func (s *Service) nextSemantic(ctx context.Context, id int64, job jobs.Job) error {
+	m, err := s.Media.Get(ctx, id)
+	if err != nil {
+		return err
+	}
+	if !m.SemanticReady() {
+		return nil
 	}
 	return s.next(ctx, KindSemantic, id, job)
 }
 
-func (s *Service) enrichWikidata(ctx context.Context, m media.Media) error {
+func (s *Service) enrichWikidata(ctx context.Context, m *media.Media, patch media.Patch) (string, error) {
 	entity, err := s.Wikidata.ByDoubanID(ctx, m.DoubanID)
+	if err != nil {
+		return "", err
+	}
+	tmdbID := ""
+	switch {
+	case entity.TMDBMovieID != "":
+		tmdbID = "movie/" + entity.TMDBMovieID
+	case entity.TMDBTVID != "":
+		tmdbID = "tv/" + entity.TMDBTVID
+	}
+	idErr := s.recordExternalIDs(ctx, m, tmdbID, entity.IMDbID)
+	if m.Type == media.TypeMovie && m.MetadataStatus == "partial" && strings.HasPrefix(m.TMDBID, "tv/") {
+		m.Type = media.TypeTV
+		patch.Set("media_type", media.TypeTV)
+	}
+	return entity.Title, errors.Join(
+		idErr,
+		s.Media.SetExternalID(ctx, m.ID, media.ProviderWikidata, entity.QID),
+		s.Media.AddAliases(ctx, m.ID, append(entity.Labels, entity.Title)...),
+	)
+}
+
+// enrichNeoDB 对上条目后，提供中文资料和补充编号。评分是 NeoDB 用户打的分，不取。
+func (s *Service) enrichNeoDB(ctx context.Context, m *media.Media, searchTitle string, patch media.Patch) error {
+	item, err := s.NeoDB.Find(ctx, providers.NeoDBQuery{DoubanID: m.DoubanID, IMDbID: m.IMDbID, Title: searchTitle, TV: m.IsSeries(), Season: m.Season})
 	if err != nil {
 		return err
 	}
-	s.Media.SetExternalID(ctx, m.ID, media.ProviderWikidata, entity.QID)
-	s.Media.SetExternalID(ctx, m.ID, media.ProviderIMDb, entity.IMDbID)
-	if entity.TMDBMovieID != "" {
-		s.Media.SetExternalID(ctx, m.ID, media.ProviderTMDB, "movie/"+entity.TMDBMovieID)
-	} else if entity.TMDBTVID != "" {
-		s.Media.SetExternalID(ctx, m.ID, media.ProviderTMDB, "tv/"+entity.TMDBTVID)
-	}
-	return s.Media.AddAliases(ctx, m.ID, entity.Labels...)
+	patch.Set("title", item.Title)
+	patch.Set("original_title", item.OriginalTitle)
+	patch.Set("summary", item.Summary)
+	patch.Set("genres", item.Genres)
+	patch.Set("directors", item.Directors)
+	patch.Set("actors", limit(item.Actors, 12))
+	return errors.Join(s.recordExternalIDs(ctx, m, item.TMDBID, item.IMDbID), s.Media.AddAliases(ctx, m.ID, item.AKA...))
 }
 
-// Semantic 是第三步：让 AI 把资料写成一段语义描述，写好马上保存，再排算向量的任务。
+func (s *Service) recordExternalIDs(ctx context.Context, m *media.Media, tmdbID, imdbID string) error {
+	tmdbErr := s.Media.SetExternalID(ctx, m.ID, media.ProviderTMDB, tmdbID)
+	imdbErr := s.Media.SetExternalID(ctx, m.ID, media.ProviderIMDb, imdbID)
+	if m.TMDBID == "" && tmdbErr == nil {
+		m.TMDBID = tmdbID
+	}
+	if m.IMDbID == "" && imdbErr == nil {
+		m.IMDbID = imdbID
+	}
+	return errors.Join(tmdbErr, imdbErr)
+}
+
+// Semantic 让 AI 把资料写成一段语义描述，写好马上保存，再排算向量的任务。
 // 资料和上次写描述时一样（哈希相同）就不再调用 AI。
 func (s *Service) Semantic(ctx context.Context, id int64, job jobs.Job) error {
 	if !s.AI.Enabled() {
@@ -430,7 +586,7 @@ func (s *Service) Semantic(ctx context.Context, id int64, job jobs.Job) error {
 	return s.next(ctx, KindEmbed, id, job)
 }
 
-// Embed 是第四步：用语义描述算向量。没有描述、或者已经有向量了就跳过。
+// Embed 是最后一步：用语义描述算向量。没有描述、或者已经有向量了就跳过。
 func (s *Service) Embed(ctx context.Context, id int64, _ jobs.Job) error {
 	if !s.Embedder.Enabled() {
 		return jobs.ErrSkip
@@ -452,93 +608,6 @@ func (s *Service) Embed(ctx context.Context, id int64, _ jobs.Job) error {
 	return s.Media.SetEmbedding(ctx, id, m.SemanticText, vector)
 }
 
-func (s *Service) refreshTMDB(ctx context.Context, id int64) error {
-	// 重新读一遍：豆瓣那一步可能刚更新了片名、类型和季数。
-	m, err := s.Media.Get(ctx, id)
-	if err != nil {
-		return err
-	}
-	kind := "tv"
-	if m.Type == media.TypeMovie {
-		kind = "movie"
-	}
-	tmdbID := 0
-	if m.TMDBID != "" {
-		if storedKind, storedID, ok := strings.Cut(m.TMDBID, "/"); ok {
-			kind = storedKind
-			tmdbID, _ = strconv.Atoi(storedID)
-		}
-	}
-	if tmdbID == 0 && m.IMDbID != "" {
-		foundID, foundKind, err := s.TMDB.FindByIMDb(ctx, m.IMDbID)
-		if err == nil {
-			tmdbID, kind = foundID, foundKind
-		} else if !errors.Is(err, providers.ErrNotFound) {
-			return err
-		}
-	}
-	if tmdbID == 0 {
-		// TMDB 把一部剧的所有季放在同一个条目下，所以搜索时去掉"第二季"，
-		// 并且只有第一季才带年份（后面几季的年份和首播年份不同）。
-		base, _ := media.SplitSeason(m.Title)
-		year := m.Year
-		if kind == "tv" && m.Season > 1 {
-			year = 0
-		}
-		if tmdbID, err = s.TMDB.Search(ctx, kind, base, year); err != nil {
-			return err
-		}
-	}
-	details, err := s.TMDB.Details(ctx, kind, tmdbID)
-	if err != nil {
-		return err
-	}
-	s.Media.SetExternalID(ctx, id, media.ProviderTMDB, kind+"/"+strconv.Itoa(tmdbID))
-	s.Media.SetExternalID(ctx, id, media.ProviderIMDb, details.IMDbID)
-
-	patch := media.Patch{}
-	patch.Set("original_title", details.OriginalTitle)
-	patch.Set("backdrops", details.Backdrops)
-	patch.Set("rating_tmdb", details.Rating)
-	patch.Set("votes_tmdb", details.Votes)
-	patch.Set("duration_minutes", details.Runtime)
-	patch.Set("summary", details.Overview)
-	patch.Set("poster", details.Poster)
-	if kind == "tv" {
-		if details.Ended {
-			patch.Set("series_status", "ended")
-		} else {
-			patch.Set("series_status", "ongoing")
-		}
-	}
-	if kind == "tv" {
-		for _, season := range details.Seasons {
-			if season.Number != m.Season {
-				continue
-			}
-			patch.Set("episode_count", season.EpisodeCount)
-			episodes, err := s.TMDB.Season(ctx, tmdbID, m.Season)
-			if err != nil {
-				return err
-			}
-			units := make([]media.Unit, 0, len(episodes))
-			for _, episode := range episodes {
-				units = append(units, media.Unit{Season: m.Season, Episode: episode.Number, Title: episode.Title, AirDate: episode.AirDate, RuntimeMinutes: episode.Runtime})
-			}
-			if err := s.Media.ReplaceUnits(ctx, id, m.Season, units); err != nil {
-				return err
-			}
-		}
-	}
-	if err := s.Media.ApplyPatch(ctx, id, media.ProviderTMDB, patch); err != nil {
-		return err
-	}
-	if err := s.Media.SetRelease(ctx, id, details.ReleaseOf(m.Season), details.Popularity); err != nil {
-		return err
-	}
-	return s.Media.AddAliases(ctx, id, details.Title, details.OriginalTitle)
-}
-
 // Release 给加上上映日期之前就入库的作品补日期和近期关注度：只按已知的 TMDB 编号读一次详情，别的资料都不动，
 // 所以不会引起重新写语义描述。TMDB 上没有这个条目时也记为查过，不再重试。
 func (s *Service) Release(ctx context.Context, id int64, _ jobs.Job) error {
@@ -555,16 +624,20 @@ func (s *Service) Release(ctx context.Context, id int64, _ jobs.Job) error {
 	kind, number, _ := strings.Cut(m.TMDBID, "/")
 	tmdbID, _ := strconv.Atoi(number)
 	if tmdbID <= 0 || (kind != "movie" && kind != "tv") {
-		return s.Media.SetRelease(ctx, id, nil, 0)
+		return s.Media.SetRelease(ctx, m, nil, 0)
 	}
 	details, err := s.TMDB.Details(ctx, kind, tmdbID)
 	if errors.Is(err, providers.ErrNotFound) {
-		return s.Media.SetRelease(ctx, id, nil, 0)
+		return s.Media.SetRelease(ctx, m, nil, 0)
 	}
 	if err != nil {
 		return err
 	}
-	return s.Media.SetRelease(ctx, id, details.ReleaseOf(m.Season), details.Popularity)
+	released := details.ReleaseOf(m.Season)
+	if kind == "tv" && matchingTMDBSeason(m, details) == nil {
+		released = nil
+	}
+	return s.Media.SetRelease(ctx, m, released, details.Popularity)
 }
 
 // RefreshPopularity 用 TMDB 每天的导出文件（全部电影、全部剧集各一个文件）更新作品库里所有作品的近期关注度。
@@ -712,7 +785,7 @@ func (s *Service) RefreshCharts(ctx context.Context) error {
 	return nil
 }
 
-// Sweep 是每小时一次的巡检：把四步里漏掉的补上，短剧把没抓到的、连载中的重新抓一遍。正在排队、运行或处在失败冷却期的作品不会被挑中。
+// Sweep 是每小时一次的巡检：把漏掉的建档、豆瓣详情（见 media.Store.Stale）、描述和向量补上，短剧把没抓到的、连载中的重新抓一遍。正在排队、运行或处在失败冷却期的作品不会被挑中。
 func (s *Service) Sweep(ctx context.Context) error {
 	type pick struct {
 		kind     string
@@ -722,10 +795,14 @@ func (s *Service) Sweep(ctx context.Context) error {
 	}
 	for _, item := range []pick{
 		{KindRefresh, true, PriorityRoutine, func() ([]int64, error) { return s.Media.Stale(ctx, KindRefresh, 200) }},
-		{KindEnrich, s.Wikidata != nil || s.TMDB.Enabled(), PriorityRoutine, func() ([]int64, error) { return s.Media.NeedsEnrich(ctx, KindEnrich, 200) }},
+		// 建档不用豆瓣，Wikidata、TMDB 给的额度也大，一次多挑一些。
+		{KindEnrich, s.Wikidata != nil || s.NeoDB.Enabled() || s.TMDB.Enabled(), PriorityRoutine, func() ([]int64, error) { return s.Media.NeedsEnrich(ctx, KindEnrich, 500) }},
 		{KindSemantic, s.AI.Enabled(), PriorityBackfill, func() ([]int64, error) { return s.Media.NeedsSemantic(ctx, KindSemantic, KindEnrich, 100) }},
 		{KindEmbed, s.Embedder.Enabled(), PriorityBackfill, func() ([]int64, error) { return s.Media.MissingEmbedding(ctx, KindEmbed, 200) }},
 		{KindShortRefresh, s.Hongguo != nil, PriorityRoutine, func() ([]int64, error) { return s.Media.StaleShort(ctx, KindShortRefresh, 300) }},
+		{KindTMDBSeries, s.TMDB.Enabled(), PriorityRoutine, func() ([]int64, error) {
+			return s.Media.NeedsTMDBSeries(ctx, KindTMDBSeries, KindEnrich, 100)
+		}},
 		// 补上映日期：每个作品只问 TMDB 一次，补完就不再挑中。
 		{KindRelease, s.TMDB.Enabled(), PriorityBackfill, func() ([]int64, error) { return s.Media.NeedsRelease(ctx, KindRelease, 1000) }},
 	} {
