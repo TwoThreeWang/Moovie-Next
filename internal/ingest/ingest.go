@@ -241,7 +241,7 @@ func (s *Service) Viewed(ctx context.Context, m media.Media, signedIn bool) erro
 			return err
 		}
 	}
-	if signedIn && m.MetadataSyncedAt == nil {
+	if signedIn && m.MetadataSyncedAt == nil && !m.DoubanRestricted() {
 		return s.EnqueueRefresh(ctx, m.ID, PriorityViewing)
 	}
 	return nil
@@ -328,15 +328,28 @@ func (s *Service) Refresh(ctx context.Context, id int64, job jobs.Job) error {
 		}
 		// 只有 ID、还没片名时可能是占位的电影类型，允许在电影接口暂停时尝试剧集。
 		subject, err := s.Douban.Subject(ctx, m.DoubanID, first)
-		if err != nil && job.Priority >= PriorityManual && (errors.Is(err, providers.ErrThrottled) || errors.Is(err, providers.ErrRefused)) {
+		if err != nil && job.Priority >= PriorityManual && (errors.Is(err, providers.ErrThrottled) || errors.Is(err, providers.ErrRefused)) && !errors.Is(err, providers.ErrPermission) {
 			// 有人在等（登录用户开着作品页、管理员手动刷新）：详情接口被限流或拒绝了这个条目，改打开详情网页。
 			// 只给有人等的用，后台批量的任务也来抢的话，网页这条路很快也会被限流。网页说没有这个条目时不算数，接口的结论还没出来。
+			// 遇到 need_permission（无论是单条被拒还是由此引起的接口暂停）都不去打网页兜底。
 			page, pageErr := s.Douban.SubjectPage(ctx, m.DoubanID)
 			if pageErr == nil {
 				subject, err = page, nil
 			} else {
 				s.Log.Info("豆瓣详情网页兜底也没成功", "douban", m.DoubanID, "error", pageErr)
 			}
+		}
+		if errors.Is(err, providers.ErrThrottled) {
+			// 限流或因连续 need_permission 触发的接口暂停：直接按限流/暂停延期，不记单条冷却。
+			return fmt.Errorf("豆瓣详情: %w", err)
+		}
+		if errors.Is(err, providers.ErrPermission) {
+			// 单条遇到 need_permission：首次先等 1 小时观察；复查且期间同类接口成功取到过其他详情，才按 1 天 → 7 天 → 30 天递增。
+			confirmed := m.DoubanRestrictedAt != nil && s.Douban.SubjectSucceededSince(err, *m.DoubanRestrictedAt)
+			if markErr := s.Media.MarkDoubanRestricted(ctx, id, confirmed); markErr != nil {
+				return markErr
+			}
+			return jobs.ErrSkip
 		}
 		if errors.Is(err, providers.ErrNotFound) {
 			// 豆瓣上没有这个条目：标记后不再自动同步，也不在站内展示。

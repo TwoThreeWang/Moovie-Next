@@ -396,11 +396,109 @@ func TestDoubanRefusalNamesEndpointAndReason(t *testing.T) {
 	douban := providers.NewDouban(server.Client())
 	douban.MobileBase, douban.MoviePace, douban.TVPace = server.URL, nil, nil
 	_, err := douban.Subject(context.Background(), "4067152", "movie")
-	if !errors.Is(err, providers.ErrRefused) || errors.Is(err, providers.ErrThrottled) {
-		t.Fatalf("个别条目的 403 只算它自己失败: %v", err)
+	if !errors.Is(err, providers.ErrPermission) || errors.Is(err, providers.ErrThrottled) || errors.Is(err, providers.ErrRefused) {
+		t.Fatalf("need_permission 应该返回 ErrPermission、不算限流也不算 ErrRefused: %v", err)
 	}
 	if want := "豆瓣 /rexxar/api/v2/tv/4067152 返回 HTTP 403 need_permission（code 1000）"; !strings.Contains(err.Error(), want) {
 		t.Errorf("错误信息里应该有 %q: %s", want, err)
+	}
+}
+
+// 403 need_permission（code 1000）：短时间窗口内不到 5 个不同条目时只算条目本身受限、不放慢也不暂停接口，
+// 知道类型的条目也不该再去白打另一个接口；重复请求同一部只算一次，404 也不清零计数；
+// 15 分钟内累计 5 个不同条目被拒时暂停该接口 10 分钟，并保留暂停原因；只有真正 200 成功才清零。
+func TestDoubanNeedPermissionWindowAndCircuitBreaker(t *testing.T) {
+	var mu sync.Mutex
+	var paths []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		paths = append(paths, r.URL.Path)
+		mu.Unlock()
+		if strings.HasSuffix(r.URL.Path, "/4040404") || strings.Contains(r.URL.Path, "/tv/1305088") {
+			http.NotFound(w, r)
+			return
+		}
+		if strings.HasSuffix(r.URL.Path, "/tv/37516033") {
+			w.Write([]byte(`{"id": "37516033", "title": "正常剧集", "type": "tv"}`))
+			return
+		}
+		if strings.HasSuffix(r.URL.Path, "/1292052") {
+			w.Write([]byte(`{"id": "1292052", "title": "肖申克的救赎", "type": "movie"}`))
+			return
+		}
+		w.WriteHeader(http.StatusForbidden)
+		w.Write([]byte(`{"msg": "need_permission", "code": 1000, "localized_message": ""}`))
+	}))
+	defer server.Close()
+	douban := providers.NewDouban(server.Client())
+	douban.MobileBase = server.URL
+	douban.MoviePace = providers.NewPacer(time.Millisecond)
+	douban.TVPace = providers.NewPacer(time.Millisecond)
+	ctx := context.Background()
+
+	// 4 个不同条目（其中 1305088 重复请求一次，外加一次 404）：都不应暂停接口。
+	for _, id := range []string{"1305088", "6727679", "1305088", "1292790", "4067152"} {
+		_, err := douban.Subject(ctx, id, "movie")
+		if !errors.Is(err, providers.ErrPermission) || errors.Is(err, providers.ErrThrottled) || errors.Is(err, providers.ErrRefused) {
+			t.Fatalf("%s 不到 5 个时应只返回 ErrPermission: %v", id, err)
+		}
+	}
+	// 错类型 404 不清零 need_permission 计数。
+	if _, err := douban.Subject(ctx, "4040404", "movie"); !errors.Is(err, providers.ErrNotFound) {
+		t.Fatalf("4040404 应返回 ErrNotFound: %v", err)
+	}
+	// 不知道类型的条目先试电影接口拿到 need_permission，剧集接口 404 时仍保留 ErrPermission；且不增加电影接口的计数。
+	_, err := douban.Subject(ctx, "1305088", "")
+	if !errors.Is(err, providers.ErrPermission) || errors.Is(err, providers.ErrThrottled) {
+		t.Fatalf("重复 1305088 应仍只返回 ErrPermission: %v", err)
+	}
+	if interval, paused := douban.MoviePace.Status(); interval != time.Millisecond || !paused.IsZero() {
+		t.Errorf("不到 5 个不同条目时不该放慢或暂停通道: interval=%s paused=%v", interval, paused)
+	}
+	// 明确知道是电影的请求，不应白打 /tv/。
+	for _, p := range paths {
+		if strings.Contains(p, "/tv/") && !strings.HasSuffix(p, "/tv/1305088") && !strings.HasSuffix(p, "/tv/4040404") {
+			t.Errorf("明确是电影遇到 need_permission 时不应再去请求剧集接口: %v", paths)
+		}
+	}
+
+	// 第 5 个不同条目触发电影接口暂停 10 分钟，同时保留 ErrPermission 原因。
+	_, err = douban.Subject(ctx, "36000001", "movie")
+	var paused *providers.PausedError
+	if !errors.As(err, &paused) || !errors.Is(err, providers.ErrThrottled) || !errors.Is(err, providers.ErrPermission) {
+		t.Fatalf("第 5 个不同条目应触发暂停并保留 ErrPermission 原因: %v", err)
+	}
+	if paused.RetryAfter() < 9*time.Minute {
+		t.Errorf("暂停时长应约为 10 分钟: %s", paused.RetryAfter())
+	}
+	// 暂停期间后续请求直接返回带着 ErrPermission 原因的 PausedError，且不发出 HTTP 请求。
+	before := len(paths)
+	_, err = douban.Subject(ctx, "36000002", "movie")
+	if !errors.As(err, &paused) || !errors.Is(err, providers.ErrThrottled) || !errors.Is(err, providers.ErrPermission) || len(paths) != before {
+		t.Fatalf("暂停期间应直接延期并保留 ErrPermission 原因，且不发请求: %v paths=%d->%d", err, before, len(paths))
+	}
+	// 电影接口暂停时，剧集接口照常工作。
+	if s, err := douban.Subject(ctx, "37516033", "tv"); err != nil || s.Title != "正常剧集" {
+		t.Fatalf("电影接口暂停不应影响剧集接口: %+v err=%v", s, err)
+	}
+
+	// 恢复后只要真正 200 成功一次，就清零计数并记录最近成功时间；再之后连续 5 个不同条目仍会再次触发暂停。
+	douban.MoviePace = providers.NewPacer(time.Millisecond)
+	t0 := time.Now()
+	time.Sleep(5 * time.Millisecond)
+	if s, err := douban.Subject(ctx, "1292052", "movie"); err != nil || s.Title != "肖申克的救赎" {
+		t.Fatalf("200 正常条目应成功: %+v err=%v", s, err)
+	}
+	// 第 1 个受限条目拿到 ErrPermission，可用来检验 SubjectSucceededSince。
+	_, permErr := douban.Subject(ctx, "1305088", "movie")
+	if !errors.Is(permErr, providers.ErrPermission) || errors.Is(permErr, providers.ErrThrottled) {
+		t.Fatalf("200 清零后的第 1 个受限条目不应触发限流: %v", permErr)
+	}
+	if !douban.SubjectSucceededSince(permErr, t0) {
+		t.Error("1292052 成功在 t0 之后，SubjectSucceededSince 应返回 true")
+	}
+	if douban.SubjectSucceededSince(permErr, time.Now()) {
+		t.Error("未来时间之后的成功记录应为 false")
 	}
 }
 

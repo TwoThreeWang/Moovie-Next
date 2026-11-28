@@ -22,14 +22,14 @@ func NewStore(pool *db.Pool) *Store { return &Store{pool: pool} }
 const mediaColumns = `m.id, m.media_type, m.douban_id, m.tmdb_id, m.imdb_id, m.wikidata_id, m.hongguo_id, m.title, m.original_title, m.year, m.season, m.episode_count,
 m.poster, m.backdrops, m.summary, m.genres, m.countries, m.directors, m.actors, m.duration_minutes,
 m.rating_douban, m.rating_tmdb, m.votes_tmdb, m.rating_hongguo, m.heat, m.series_status, m.series_key, m.hidden, m.metadata_status,
-m.metadata_synced_at, m.enriched_at, m.tmdb_series_checked_at, m.tmdb_season_unmatched, m.semantic_text, m.semantic_hash, m.embedding IS NOT NULL, m.created_at, m.updated_at`
+m.metadata_synced_at, m.douban_restricted_at, m.douban_restricted_until, m.enriched_at, m.tmdb_series_checked_at, m.tmdb_season_unmatched, m.semantic_text, m.semantic_hash, m.embedding IS NOT NULL, m.created_at, m.updated_at`
 
 func scanMedia(row pgx.Row) (Media, error) {
 	var m Media
 	err := row.Scan(&m.ID, &m.Type, &m.DoubanID, &m.TMDBID, &m.IMDbID, &m.WikidataID, &m.HongguoID, &m.Title, &m.OriginalTitle, &m.Year, &m.Season, &m.EpisodeCount,
 		&m.Poster, &m.Backdrops, &m.Summary, &m.Genres, &m.Countries, &m.Directors, &m.Actors, &m.DurationMinutes,
 		&m.RatingDouban, &m.RatingTMDB, &m.VotesTMDB, &m.RatingHongguo, &m.Heat, &m.SeriesStatus, &m.SeriesKey, &m.Hidden, &m.MetadataStatus,
-		&m.MetadataSyncedAt, &m.EnrichedAt, &m.TMDBSeriesCheckedAt, &m.TMDBSeasonUnmatched, &m.SemanticText, &m.SemanticHash, &m.HasEmbedding, &m.CreatedAt, &m.UpdatedAt)
+		&m.MetadataSyncedAt, &m.DoubanRestrictedAt, &m.DoubanRestrictedUntil, &m.EnrichedAt, &m.TMDBSeriesCheckedAt, &m.TMDBSeasonUnmatched, &m.SemanticText, &m.SemanticHash, &m.HasEmbedding, &m.CreatedAt, &m.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return m, ErrNotFound
 	}
@@ -342,12 +342,34 @@ WHERE media_id = $1 ORDER BY season, episode`, id)
 	return units, rows.Err()
 }
 
-// MarkSynced 记录一次元数据同步的结果。
+// MarkSynced 记录一次元数据同步的结果，并清掉豆瓣 need_permission 的冷却记录。
 func (s *Store) MarkSynced(ctx context.Context, id int64, status string) error {
 	// 以前确认过"豆瓣没有这个条目"（所以被隐藏了）、现在又同步成功了：恢复显示。
 	// 屏蔽词命中的作品随后会被 ApplyBlockedKeywords 重新隐藏。
 	_, err := s.pool.Exec(ctx, `UPDATE media SET metadata_status = $2, metadata_synced_at = now(),
+douban_restricted_at = NULL, douban_restricted_until = NULL, douban_restricted_strikes = 0,
 hidden = CASE WHEN metadata_status = 'not_found' AND $2 <> 'not_found' THEN false ELSE hidden END WHERE id = $1`, id, status)
+	return err
+}
+
+// MarkDoubanRestricted 记录一次豆瓣返回 need_permission（需要登录才能访问接口）：
+// 首次先冷却 1 小时观察；只有确认期间同类接口正常成功过（confirmed 为 true）时，
+// 才按 1 天 → 7 天 → 30 天递增，否则保持 1 小时冷却，避免出口异常时误把正常片库打进长冷却。
+func (s *Store) MarkDoubanRestricted(ctx context.Context, id int64, confirmed bool) error {
+	_, err := s.pool.Exec(ctx, `UPDATE media SET
+  douban_restricted_at = now(),
+  douban_restricted_strikes = CASE
+    WHEN douban_restricted_strikes = 0 THEN 1
+    WHEN NOT $2 THEN douban_restricted_strikes
+    ELSE douban_restricted_strikes + 1
+  END,
+  douban_restricted_until = now() + CASE
+    WHEN douban_restricted_strikes = 0 OR NOT $2 THEN interval '1 hour'
+    WHEN douban_restricted_strikes = 1 THEN interval '1 day'
+    WHEN douban_restricted_strikes = 2 THEN interval '7 days'
+    ELSE interval '30 days'
+  END
+WHERE id = $1`, id, confirmed)
 	return err
 }
 
@@ -772,7 +794,8 @@ const idle = `NOT EXISTS (SELECT 1 FROM jobs j WHERE j.kind = $1 AND j.subject =
 //
 // 连载剧的集数和播出状态由 TMDB 更新，不为它们去读豆瓣；更早的作品同步一次就够了，后台仍然可以手动刷新。
 // $2 是"近两年"的起始年份。
-const doubanDue = `m.media_type <> 'short' AND m.metadata_status <> 'not_found' AND (
+const doubanDue = `m.media_type <> 'short' AND m.metadata_status <> 'not_found'
+AND (m.douban_restricted_until IS NULL OR m.douban_restricted_until <= now()) AND (
   m.metadata_synced_at IS NULL
   OR (m.year >= $2 AND m.metadata_synced_at < now() - interval '7 days'
       AND (m.douban_listed_at IS NULL OR m.douban_listed_at <= now() - interval '7 days' OR m.metadata_synced_at <= now() - interval '30 days'))

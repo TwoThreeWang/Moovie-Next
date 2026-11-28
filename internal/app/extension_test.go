@@ -403,3 +403,45 @@ func (s *site) userID(name string) int64 {
 	}
 	return user.ID
 }
+
+func TestExtensionTasksSkipsDoubanRestricted(t *testing.T) {
+	s := newSite(t)
+	s.register("evan")
+	ctx := context.Background()
+	token := s.connectExtension()
+
+	// 用户自己标记的受限条目，和帮别人借任务的受限条目，都不该再下发给插件。
+	ownRestricted, _, err := s.app.Media.EnsureDouban(ctx, "1305088", media.Patch{"title": "受限自选"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.htmx(http.MethodPost, "/api/library/"+itoa(ownRestricted)+"/wish", nil)
+	if err := s.app.Media.MarkDoubanRestricted(ctx, ownRestricted, false); err != nil {
+		t.Fatal(err)
+	}
+
+	ownReady, _, err := s.app.Media.EnsureDouban(ctx, "1292052", media.Patch{"title": "正常自选"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.htmx(http.MethodPost, "/api/library/"+itoa(ownReady)+"/wish", nil)
+
+	helpRestricted := s.seedMedia("6727679", "受限公共", media.TypeMovie, nil)
+	s.app.Media.MarkSynced(ctx, helpRestricted, "partial")
+	s.app.Media.MarkDoubanRestricted(ctx, helpRestricted, false)
+	s.app.Ingest.EnqueueRefresh(ctx, helpRestricted, -1)
+
+	helpReady := s.seedMedia("36000030", "正常公共", media.TypeMovie, nil)
+	s.app.Media.MarkSynced(ctx, helpReady, "partial")
+	s.app.Ingest.EnqueueRefresh(ctx, helpReady, -1)
+
+	var resp struct {
+		Tasks []struct {
+			DoubanID string `json:"douban_id"`
+		} `json:"tasks"`
+	}
+	decode(t, s.ext(token, http.MethodGet, "/api/ext/tasks?help=1", nil), &resp)
+	if len(resp.Tasks) != 2 || resp.Tasks[0].DoubanID != "1292052" || resp.Tasks[1].DoubanID != "36000030" {
+		t.Fatalf("受限冷却期内的条目（自己的和帮别人的）都不应出现在 /api/ext/tasks 中: %+v", resp.Tasks)
+	}
+}

@@ -383,7 +383,7 @@ func (a *App) extTasks(c *gin.Context) {
 				continue
 			}
 			m, err := a.Media.Get(ctx, id)
-			if err != nil || !media.ValidDoubanID(m.DoubanID) || m.HongguoID != "" || m.Hidden {
+			if err != nil || !media.ValidDoubanID(m.DoubanID) || m.HongguoID != "" || m.Hidden || m.DoubanRestricted() {
 				continue
 			}
 			tasks = append(tasks, extapi.Task{MediaID: m.ID, DoubanID: m.DoubanID, Type: m.Type})

@@ -106,16 +106,18 @@ type Media struct {
 	Hidden          bool
 	// MetadataStatus 是豆瓣详情的状态：partial 还没从豆瓣同步过（资料来自豆瓣列表和其他来源），
 	// complete 同步过，not_found 豆瓣确认没有这个条目。短剧是红果的状态。
-	MetadataStatus      string
-	MetadataSyncedAt    *time.Time // 最近一次从豆瓣（短剧是红果）同步成功或确认没有的时间
-	EnrichedAt          *time.Time // 最近一次从 Wikidata、NeoDB、TMDB 补资料开始的时间
-	TMDBSeriesCheckedAt *time.Time // 最近一次 TMDB 季资料检查的开始时间
-	TMDBSeasonUnmatched bool       // 最近一次检查未能匹配到具体季
-	SemanticText        string
-	SemanticHash        string
-	HasEmbedding        bool
-	CreatedAt           time.Time
-	UpdatedAt           time.Time
+	MetadataStatus        string
+	MetadataSyncedAt      *time.Time // 最近一次从豆瓣（短剧是红果）同步成功或确认没有的时间
+	DoubanRestrictedAt    *time.Time // 最近一次因 need_permission 进入冷却的时间
+	DoubanRestrictedUntil *time.Time // 豆瓣返回 need_permission 后的冷却截止时间
+	EnrichedAt            *time.Time // 最近一次从 Wikidata、NeoDB、TMDB 补资料开始的时间
+	TMDBSeriesCheckedAt   *time.Time // 最近一次 TMDB 季资料检查的开始时间
+	TMDBSeasonUnmatched   bool       // 最近一次检查未能匹配到具体季
+	SemanticText          string
+	SemanticHash          string
+	HasEmbedding          bool
+	CreatedAt             time.Time
+	UpdatedAt             time.Time
 }
 
 // SemanticReady 表示资料够不够让 AI 写语义描述：至少有片名和简介（或原名），而且豆瓣详情已经同步，
@@ -130,6 +132,11 @@ const (
 	tmdbSeasonRefreshInterval = 24 * time.Hour
 	tmdbSeasonRetryInterval   = 7 * tmdbSeasonRefreshInterval
 )
+
+// DoubanRestricted 判断这部作品当前是否处在豆瓣 need_permission 冷却期内。
+func (m Media) DoubanRestricted() bool {
+	return m.DoubanRestrictedUntil != nil && m.DoubanRestrictedUntil.After(time.Now())
+}
 
 // TMDBSeasonCheckDue 判断当前季是否到下一次 TMDB 检查时间。
 func (m Media) TMDBSeasonCheckDue(now time.Time) bool {

@@ -165,7 +165,8 @@ type Task struct {
 // OwnPending 返回这个用户自己标记过、或者放进自己片单里的、还没有豆瓣资料的作品，最近加的在前。
 func (s *Store) OwnPending(ctx context.Context, userID int64, limit int) ([]Task, error) {
 	rows, err := s.pool.Query(ctx, `SELECT m.id, m.douban_id, m.media_type FROM media m
-WHERE m.metadata_status = 'partial' AND m.douban_id <> '' AND m.hongguo_id = '' AND NOT m.hidden AND m.id IN (
+WHERE m.metadata_status = 'partial' AND m.douban_id <> '' AND m.hongguo_id = '' AND NOT m.hidden
+  AND (m.douban_restricted_until IS NULL OR m.douban_restricted_until <= now()) AND m.id IN (
   SELECT media_id FROM user_movies WHERE user_id = $1
   UNION SELECT ci.media_id FROM collection_items ci JOIN collections c ON c.id = ci.collection_id WHERE c.owner_user_id = $1)
 ORDER BY m.id DESC LIMIT $2`, userID, limit)

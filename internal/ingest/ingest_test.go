@@ -804,3 +804,126 @@ func TestRefreshSkipsWhenNoLongerDue(t *testing.T) {
 		t.Error("跳过时不应该请求豆瓣")
 	}
 }
+
+// 403 need_permission（code 1000）：
+//   - 前 4 个不同条目：各自记 1 小时短冷却并 ErrSkip，不打网页兜底，不暂停通道；
+//   - 期间若同类接口没成功过，复查仍保持 1 小时；一旦有正常条目 200 成功后再复查被拒，才升为 1 天 → 7 天 → 30 天；
+//   - 短时间内第 5 个不同条目被拒：暂停对应接口 10 分钟并保留原因，第 5 个及暂停期间的任务只延期、不打网页兜底也不记冷却。
+func TestRefreshNeedPermissionCooldownWithoutPageOrCircuitBreak(t *testing.T) {
+	service, fake := newService(t)
+	service.Douban.MoviePace = providers.NewPacer(time.Millisecond)
+	service.Douban.TVPace = providers.NewPacer(time.Millisecond)
+	service.Douban.PagePace = providers.NewPacer(time.Millisecond)
+	page, err := os.ReadFile("../providers/testdata/subject_tv.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	pool := testdb.Pool(t)
+
+	// 前 4 个不同条目返回 need_permission，都用最高优先级触发：均只给 1 小时短冷却且不打网页。
+	var ids []int64
+	restricted := []string{"1305088", "6727679", "1292790", "4067152"}
+	for _, did := range restricted {
+		fake.Permission[did] = true
+		fake.Pages[did] = string(page)
+		id, err := service.EnsureDouban(ctx, providers.DoubanItem{ID: did, Title: "片-" + did, Kind: "movie"}, "", ingest.PriorityViewing)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, id)
+		if err := service.Refresh(ctx, id, jobs.Job{Priority: ingest.PriorityViewing}); !errors.Is(err, jobs.ErrSkip) {
+			t.Fatalf("%s 遇 need_permission 应返回 ErrSkip: %v", did, err)
+		}
+		if fake.Count("/subject/"+did+"/") != 0 {
+			t.Fatalf("%s 遇 need_permission 不应去打详情网页兜底", did)
+		}
+	}
+	if interval, paused := service.Douban.MoviePace.Status(); interval != time.Millisecond || !paused.IsZero() {
+		t.Fatalf("不到 5 个不同条目不应放慢或暂停豆瓣通道: interval=%s paused=%v", interval, paused)
+	}
+
+	// 第 1 个条目：首次冷却约为 1 小时，未隐藏，Stale 与 Viewed 在冷却期内都跳过。
+	m, err := service.Media.Get(ctx, ids[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.Hidden || m.MetadataStatus != "partial" || !m.DoubanRestricted() {
+		t.Fatalf("受限条目应保留可见并处在冷却期: %+v", m)
+	}
+	if rem := time.Until(*m.DoubanRestrictedUntil); rem < 59*time.Minute || rem > 61*time.Minute {
+		t.Fatalf("首次冷却应约为 1 小时，实际 %s", rem)
+	}
+	pool.Exec(ctx, `DELETE FROM jobs`)
+	if stale, err := service.Media.Stale(ctx, ingest.KindRefresh, 50); err != nil || len(stale) != 0 {
+		t.Fatalf("冷却期内 Stale 不应再挑出受限条目: %v err=%v", stale, err)
+	}
+	if err := service.Viewed(ctx, m, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, found, _ := service.Queue.Latest(ctx, ingest.KindRefresh, strconv.FormatInt(m.ID, 10)); found {
+		t.Fatal("冷却期内登录用户打开页面不应再排 media.refresh")
+	}
+
+	// 冷却过期后，若期间电影接口没有 200 成功过，复查仍只给 1 小时、不升级到 1 天。
+	pool.Exec(ctx, `UPDATE media SET douban_restricted_until = now() - interval '1 minute' WHERE id = $1`, m.ID)
+	if stale, err := service.Media.Stale(ctx, ingest.KindRefresh, 50); err != nil || len(stale) != 1 || stale[0] != m.ID {
+		t.Fatalf("冷却过期后 Stale 应重新挑出受限条目: %v err=%v", stale, err)
+	}
+	if err := service.Refresh(ctx, m.ID, jobs.Job{Priority: ingest.PriorityViewing}); !errors.Is(err, jobs.ErrSkip) {
+		t.Fatalf("未确认成功过的复查也应 ErrSkip: %v", err)
+	}
+	m, _ = service.Media.Get(ctx, m.ID)
+	if rem := time.Until(*m.DoubanRestrictedUntil); rem < 59*time.Minute || rem > 61*time.Minute {
+		t.Fatalf("期间接口未成功过，复查冷却仍应为 1 小时，实际 %s", rem)
+	}
+
+	// 第 5 个不同条目（此时窗口里已有 4 个）应触发接口暂停 10 分钟，不记该条目冷却也不打网页。
+	fake.Permission["36000015"] = true
+	fake.Pages["36000015"] = string(page)
+	fifthID, err := service.EnsureDouban(ctx, providers.DoubanItem{ID: "36000015", Title: "第五部", Kind: "movie"}, "", ingest.PriorityViewing)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = service.Refresh(ctx, fifthID, jobs.Job{Priority: ingest.PriorityViewing})
+	var paused *providers.PausedError
+	if !errors.As(err, &paused) || !errors.Is(err, providers.ErrThrottled) || !errors.Is(err, providers.ErrPermission) {
+		t.Fatalf("第 5 个不同条目应返回带着 ErrPermission 的 PausedError: %v", err)
+	}
+	if fake.Count("/subject/36000015/") != 0 {
+		t.Error("连续 need_permission 暂停时不应去打网页兜底")
+	}
+	if fifthM, _ := service.Media.Get(ctx, fifthID); fifthM.DoubanRestricted() || fifthM.DoubanRestrictedUntil != nil {
+		t.Errorf("触发接口暂停的第 5 部不应被记进单条冷却: %+v", fifthM)
+	}
+
+	// 暂停期间的新请求（即使是高优）也只延期，不打网页兜底、不记单条冷却。
+	fake.Permission["36000016"] = true
+	fake.Pages["36000016"] = string(page)
+	sixthID, _ := service.EnsureDouban(ctx, providers.DoubanItem{ID: "36000016", Title: "第六部", Kind: "movie"}, "", ingest.PriorityViewing)
+	if err := service.Refresh(ctx, sixthID, jobs.Job{Priority: ingest.PriorityViewing}); !errors.Is(err, providers.ErrThrottled) || errors.Is(err, jobs.ErrSkip) {
+		t.Fatalf("暂停期间应返回 ErrThrottled 延期，而不是 ErrSkip: %v", err)
+	}
+	if fake.Count("/subject/36000016/") != 0 {
+		t.Error("因 need_permission 暂停期间不应去打网页兜底")
+	}
+	if sixthM, _ := service.Media.Get(ctx, sixthID); sixthM.DoubanRestricted() || sixthM.DoubanRestrictedUntil != nil {
+		t.Errorf("暂停期间直接延期的条目不应被记进单条冷却: %+v", sixthM)
+	}
+
+	// 通道恢复后有一部正常电影 200 成功，之后再次复查第 1 个受限条目才升级为 1 天冷却。
+	service.Douban.MoviePace = providers.NewPacer(time.Millisecond)
+	fake.Subjects["1292052"] = map[string]any{"id": "1292052", "type": "movie", "title": "肖申克的救赎", "year": "1994"}
+	okID, _ := service.EnsureDouban(ctx, providers.DoubanItem{ID: "1292052", Title: "肖申克的救赎", Kind: "movie"}, "", ingest.PriorityViewing)
+	if err := service.Refresh(ctx, okID, jobs.Job{Priority: ingest.PriorityViewing}); err != nil {
+		t.Fatalf("正常条目恢复后应同步成功: %v", err)
+	}
+	pool.Exec(ctx, `UPDATE media SET douban_restricted_until = now() - interval '1 minute' WHERE id = $1`, m.ID)
+	if err := service.Refresh(ctx, m.ID, jobs.Job{Priority: ingest.PriorityViewing}); !errors.Is(err, jobs.ErrSkip) {
+		t.Fatalf("确认电影接口正常后，受限条目复查应 ErrSkip 并升级冷却: %v", err)
+	}
+	m, _ = service.Media.Get(ctx, m.ID)
+	if rem := time.Until(*m.DoubanRestrictedUntil); rem < 23*time.Hour || rem > 25*time.Hour {
+		t.Fatalf("同类接口成功过后再复查被拒，应升级到约 1 天冷却，实际 %s", rem)
+	}
+}

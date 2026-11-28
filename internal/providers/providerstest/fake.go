@@ -24,6 +24,8 @@ type Fake struct {
 	Pages map[string]string
 	// Refuse：这些豆瓣 ID 的详情接口返回 403（详情网页不受影响）。
 	Refuse map[string]bool
+	// Permission：这些豆瓣 ID 的详情接口返回 403 need_permission（code 1000）。
+	Permission map[string]bool
 	// Suggest：关键词 → 联想结果。
 	Suggest map[string][]map[string]any
 	// Popular：手机版榜单接口路径里的关键字（如 "hot_gaia"、"tv_domestic"）→ 条目列表。
@@ -55,7 +57,7 @@ type Fake struct {
 // New 启动假服务器，测试结束时自动关闭。
 func New(t *testing.T) *Fake {
 	fake := &Fake{
-		Subjects: map[string]map[string]any{}, Pages: map[string]string{}, Refuse: map[string]bool{}, Suggest: map[string][]map[string]any{}, Popular: map[string][]map[string]any{},
+		Subjects: map[string]map[string]any{}, Pages: map[string]string{}, Refuse: map[string]bool{}, Permission: map[string]bool{}, Suggest: map[string][]map[string]any{}, Popular: map[string][]map[string]any{},
 		WebPopular: map[string][]map[string]any{}, Interests: map[string][]map[string]any{}, Feeds: map[string][]map[string]string{}, Wikidata: map[string][]map[string]string{}, TMDB: map[string]any{}, NeoDB: map[string][]map[string]any{},
 		Exports: map[string][]map[string]any{},
 	}
@@ -201,6 +203,11 @@ func (f *Fake) serve(w http.ResponseWriter, r *http.Request) {
 	case strings.HasPrefix(path, "/rexxar/api/v2/movie/"), strings.HasPrefix(path, "/rexxar/api/v2/tv/"):
 		parts := strings.Split(strings.TrimPrefix(path, "/rexxar/api/v2/"), "/")
 		key := parts[1]
+		if f.Permission[key] {
+			w.WriteHeader(http.StatusForbidden)
+			writeJSON(w, map[string]any{"msg": "need_permission", "code": 1000, "localized_message": ""})
+			return
+		}
 		if f.Refuse[key] {
 			http.Error(w, "forbidden", http.StatusForbidden)
 			return

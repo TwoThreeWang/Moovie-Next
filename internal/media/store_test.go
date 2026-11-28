@@ -439,3 +439,73 @@ func TestSaveTMDBSeasonSkipsChangedSeason(t *testing.T) {
 		t.Fatalf("季号改变后不应写入旧分集: %+v %v", units, err)
 	}
 }
+
+func TestDoubanRestrictedCooldownEscalatesAndResets(t *testing.T) {
+	pool := testdb.Pool(t)
+	store := media.NewStore(pool)
+	ctx := context.Background()
+	id := seed(t, store, "30002901", "限制条目", 2025, media.TypeMovie)
+
+	// 第 1 次一律先冷却 1 小时（即使传 confirmed=true 也是 1 小时观察期）；
+	// 后续未确认期间接口成功（confirmed=false）保持 1 小时不升级；
+	// 确认成功过（confirmed=true）才按 1 天 → 7 天 → 30 天递增。
+	steps := []struct {
+		confirmed bool
+		want      time.Duration
+	}{
+		{true, time.Hour},
+		{false, time.Hour},
+		{true, 24 * time.Hour},
+		{true, 7 * 24 * time.Hour},
+		{true, 30 * 24 * time.Hour},
+		{true, 30 * 24 * time.Hour},
+	}
+	for i, step := range steps {
+		if err := store.MarkDoubanRestricted(ctx, id, step.confirmed); err != nil {
+			t.Fatal(err)
+		}
+		m, err := store.Get(ctx, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !m.DoubanRestricted() || m.DoubanRestrictedUntil == nil || m.DoubanRestrictedAt == nil {
+			t.Fatalf("第 %d 次标记后应进入冷却期: %+v", i+1, m)
+		}
+		rem := time.Until(*m.DoubanRestrictedUntil)
+		if rem < step.want-time.Minute || rem > step.want+time.Minute {
+			t.Fatalf("第 %d 次（confirmed=%v）冷却期应约为 %s，实际 %s", i+1, step.confirmed, step.want, rem)
+		}
+		due, err := store.DoubanDue(ctx, id)
+		if err != nil || due {
+			t.Fatalf("冷却期内 DoubanDue 应为 false: due=%v err=%v", due, err)
+		}
+	}
+
+	// 冷却过期后 DoubanDue 重新变为 true。
+	if _, err := pool.Exec(ctx, `UPDATE media SET douban_restricted_until = now() - interval '1 minute' WHERE id = $1`, id); err != nil {
+		t.Fatal(err)
+	}
+	due, err := store.DoubanDue(ctx, id)
+	if err != nil || !due {
+		t.Fatalf("冷却过期后 DoubanDue 应为 true: due=%v err=%v", due, err)
+	}
+
+	// MarkSynced 后清掉冷却时间与累计次数，下次再受限从 1 小时重新开始。
+	if err := store.MarkSynced(ctx, id, "complete"); err != nil {
+		t.Fatal(err)
+	}
+	m, err := store.Get(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.DoubanRestricted() || m.DoubanRestrictedUntil != nil || m.DoubanRestrictedAt != nil {
+		t.Fatalf("MarkSynced 后应清除冷却期: %+v", m)
+	}
+	if err := store.MarkDoubanRestricted(ctx, id, true); err != nil {
+		t.Fatal(err)
+	}
+	m, _ = store.Get(ctx, id)
+	if rem := time.Until(*m.DoubanRestrictedUntil); rem > 61*time.Minute || rem < 59*time.Minute {
+		t.Fatalf("重置后再次受限应从 1 小时重新开始，实际 %s", rem)
+	}
+}

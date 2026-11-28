@@ -43,14 +43,15 @@ const (
 // 像人翻几页停下来看一看。分毫不差的固定间隔一看就是程序。抖动只往上加，两次请求之间不会短于当前间隔。
 type Pacer struct {
 	// Name 是对方的名字，写在错误信息里（"豆瓣限流，暂停到 15:04"）。不填时是"对方"。
-	Name     string
-	mu       sync.Mutex
-	base     time.Duration
-	interval time.Duration
-	next     time.Time
-	strikes  int           // 连续被限流的次数
-	paused   time.Time     // 整体暂停到什么时候
-	flagged  time.Duration // 上一次因为 IP 被标记暂停了多久，成功一次后清零
+	Name        string
+	mu          sync.Mutex
+	base        time.Duration
+	interval    time.Duration
+	next        time.Time
+	strikes     int           // 连续被限流的次数
+	paused      time.Time     // 整体暂停到什么时候
+	pausedCause error         // 这次暂停的原因（比如连续 need_permission），让后续排队的请求也能认出原因
+	flagged     time.Duration // 上一次因为 IP 被标记暂停了多久，成功一次后清零
 }
 
 const (
@@ -69,8 +70,12 @@ var ErrThrottled = errors.New("被限流了")
 // ErrRefused 表示对方拒绝了这一个地址（豆瓣对个别条目返回 403），还不能算是在限流我们。
 var ErrRefused = errors.New("对方拒绝了这个地址")
 
+// ErrPermission 表示豆瓣要求登录后才能访问这个条目（HTTP 403 need_permission，code 1000）。
+// 这是条目本身的访问权限要求，不代表请求被限流，也不计入通道熔断。
+var ErrPermission = errors.New("豆瓣要求登录后才能访问这个条目")
+
 // PausedError 表示一条通道正在暂停，Until 之前不会再发请求。它算 ErrThrottled。
-// Cause 是让通道暂停的那个回答；暂停期间直接拒绝的请求没有 Cause。
+// Cause 是让通道暂停的那个回答；因连续 need_permission 暂停时，暂停期间直接拒绝的请求也会带上它，避免调用方改打网页兜底。
 // 任务队列用 RetryAfter 把任务推迟到恢复的时候，不用每分钟取出来再失败一次。
 type PausedError struct {
 	Name  string
@@ -119,7 +124,7 @@ func (p *Pacer) Wait(ctx context.Context) error {
 	p.mu.Lock()
 	now := time.Now()
 	if p.paused.After(now) {
-		err := &PausedError{Name: p.Name, Until: p.paused}
+		err := &PausedError{Name: p.Name, Until: p.paused, Cause: p.pausedCause}
 		p.mu.Unlock()
 		return err
 	}
@@ -148,7 +153,7 @@ func (p *Pacer) Wait(ctx context.Context) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.paused.After(time.Now()) {
-		return &PausedError{Name: p.Name, Until: p.paused}
+		return &PausedError{Name: p.Name, Until: p.paused, Cause: p.pausedCause}
 	}
 	return nil
 }
@@ -186,6 +191,20 @@ func (p *Pacer) Throttled() time.Time {
 	p.strikes = 0
 	if until := time.Now().Add(pauseFor); until.After(p.paused) {
 		p.paused = until
+		p.pausedCause = nil
+	}
+	return p.paused
+}
+
+// Pause 直接把通道暂停指定时长并记住暂停原因；已经在更长的暂停里时不缩短。
+func (p *Pacer) Pause(duration time.Duration, cause error) time.Time {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.strikes = 0
+	p.interval = min(p.interval*2, maxPaceInterval)
+	if until := time.Now().Add(duration); until.After(p.paused) {
+		p.paused = until
+		p.pausedCause = cause
 	}
 	return p.paused
 }
@@ -228,6 +247,7 @@ func (p *Pacer) flag() time.Time {
 	p.strikes = 0
 	p.interval = min(p.interval*2, maxPaceInterval)
 	p.paused = now.Add(p.flagged)
+	p.pausedCause = nil
 	return p.paused
 }
 
@@ -237,6 +257,7 @@ func (p *Pacer) Succeeded() {
 	defer p.mu.Unlock()
 	p.strikes = 0
 	p.flagged = 0
+	p.pausedCause = nil
 	if p.interval > p.base {
 		p.interval = max(p.base, p.interval*9/10)
 	}
@@ -278,7 +299,8 @@ type Douban struct {
 	// MobileUA、DesktopUA 是手机版接口和网页版用的 UA，NewDouban 填默认值。
 	MobileUA, DesktopUA string
 
-	refusals refusalState
+	refusals    refusalState
+	permissions permissionState
 }
 
 // exitTries 是出口会轮换时，一个请求最多换几个出口去试。每次都按节奏排队，不会因此请求得更快。
@@ -335,7 +357,64 @@ type refusalState struct {
 }
 
 // refusedLimit 是同一类接口上一次成功之后，有几个不同的对象被拒绝就算限流。
-const refusedLimit = 3
+const (
+	refusedLimit     = 3
+	permissionLimit  = 5
+	permissionWindow = 15 * time.Minute
+)
+
+// permissionState 在短时间窗口内分别统计电影、剧集等接口收到 need_permission（code 1000）的不同条目，
+// 并记住最近一次真正拿到 200 详情的时间。只有 200 成功才清零，404 和跳转不清零。
+type permissionState struct {
+	mu          sync.Mutex
+	denied      map[string]map[string]time.Time
+	lastSuccess map[string]time.Time
+}
+
+func (p *permissionState) succeed(class string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.lastSuccess == nil {
+		p.lastSuccess = map[string]time.Time{}
+	}
+	p.lastSuccess[class] = time.Now()
+	delete(p.denied, class)
+}
+
+func (p *permissionState) deny(class, object string) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	now := time.Now()
+	cutoff := now.Add(-permissionWindow)
+	if p.denied == nil {
+		p.denied = map[string]map[string]time.Time{}
+	}
+	seen := p.denied[class]
+	if seen == nil {
+		seen = map[string]time.Time{}
+		p.denied[class] = seen
+	}
+	for id, at := range seen {
+		if !at.After(cutoff) {
+			delete(seen, id)
+		}
+	}
+	if _, exists := seen[object]; !exists {
+		seen[object] = now
+	}
+	if len(seen) >= permissionLimit {
+		// 已经因为连续权限拒绝触发接口级暂停，清掉之前记录的成功时间，等真正再次 200 成功后再恢复确认。
+		delete(p.lastSuccess, class)
+		return true
+	}
+	return false
+}
+
+func (p *permissionState) lastSuccessAt(class string) time.Time {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.lastSuccess[class]
+}
 
 // refuse 记一次被拒绝，返回这一类接口是不是已经算限流了。
 func (r *refusalState) refuse(class, object string) bool {
@@ -459,6 +538,17 @@ type rexxarSubject struct {
 
 var leadingNumber = regexp.MustCompile(`[0-9]+`)
 
+// SubjectSucceededSince 判断在 since 之后，这个错误对应的那类详情接口（电影或剧集）有没有真正成功取到过详情。
+func (d *Douban) SubjectSucceededSince(err error, since time.Time) bool {
+	var de *doubanError
+	if !errors.As(err, &de) {
+		return false
+	}
+	class, _ := refusalKey(de.path)
+	last := d.permissions.lastSuccessAt(class)
+	return !last.IsZero() && last.After(since)
+}
+
 // Subject 读取一个条目的详情。豆瓣按电影和剧集分了两个接口，依次尝试。
 // first 是已经知道的类型（movie 或 tv），先试它对应的接口：猜对了就只发一次请求。
 // 知道类型时，这个接口被限流就不再试另一个：另一个多半是 404，白白多一次请求。
@@ -468,7 +558,7 @@ var leadingNumber = regexp.MustCompile(`[0-9]+`)
 // 用电影接口查剧集时，豆瓣会跳转到剧集接口。不跟着跳，改按剧集接口自己的节奏去查，见 movedError。
 // 类型以返回内容里的 type 为准，不能以请求的是哪个接口为准。
 func (d *Douban) Subject(ctx context.Context, id, first string) (*DoubanSubject, error) {
-	var lastErr, throttled error
+	var lastErr, throttled, permission error
 	notFound := 0
 	kinds := []string{"movie", "tv"}
 	if first == "tv" {
@@ -493,6 +583,15 @@ func (d *Douban) Subject(ctx context.Context, id, first string) (*DoubanSubject,
 			}
 			continue
 		}
+		if errors.Is(err, ErrPermission) {
+			if first != "" {
+				return nil, err
+			}
+			if permission == nil {
+				permission = err
+			}
+			continue
+		}
 		if err != nil {
 			lastErr = err
 			continue
@@ -505,6 +604,9 @@ func (d *Douban) Subject(ctx context.Context, id, first string) (*DoubanSubject,
 	}
 	if throttled != nil {
 		return nil, throttled // 另一个接口也没查到，等被限流的那个恢复了再查
+	}
+	if permission != nil {
+		return nil, permission
 	}
 	if notFound == 2 {
 		return nil, ErrNotFound
@@ -927,14 +1029,14 @@ func (d *Douban) get(ctx context.Context, call doubanCall, destination any) erro
 			return requestErr
 		}
 		err = d.do(request, call, destination)
-		if errors.Is(err, ErrThrottled) {
+		if errors.Is(err, ErrThrottled) || errors.Is(err, ErrPermission) {
 			answer = err
 		}
 		if !d.Rotating || try+1 >= exitTries || !exitFailed(ctx, err) {
 			break
 		}
 	}
-	if answer != nil && !errors.Is(err, ErrThrottled) && exitFailed(ctx, err) {
+	if answer != nil && !errors.Is(err, ErrThrottled) && !errors.Is(err, ErrPermission) && exitFailed(ctx, err) {
 		err = answer // 最后一个出口连不上：按前面豆瓣的回答算
 	}
 	return d.settle(class, object, pace, err)
@@ -947,18 +1049,48 @@ func exitFailed(ctx context.Context, err error) bool {
 		return false
 	}
 	var transport *url.Error // http.Client 连接、TLS、代理出错都是 *url.Error；跳到验证页、跳到别的接口在前面已经认出来了
-	return errors.Is(err, ErrThrottled) || errors.As(err, &transport)
+	return errors.Is(err, ErrThrottled) || errors.Is(err, ErrPermission) || errors.As(err, &transport)
 }
+
+type throttledPermissionError struct {
+	message string
+	cause   error
+}
+
+func (e *throttledPermissionError) Error() string   { return e.message }
+func (e *throttledPermissionError) Unwrap() []error { return []error{ErrThrottled, e.cause} }
 
 // settle 按请求的结果调节奏，返回给调用方的错误。让通道暂停了的是 *PausedError。
 func (d *Douban) settle(class, object string, pace *Pacer, err error) error {
 	var moved *movedError
-	if err == nil || errors.Is(err, ErrNotFound) || errors.As(err, &moved) { // 跳到另一类接口也是这个接口正常回答了
+	if err == nil {
+		d.refusals.succeed(class)
+		d.permissions.succeed(class)
+		if pace != nil {
+			pace.Succeeded()
+		}
+		return nil
+	}
+	if errors.Is(err, ErrNotFound) || errors.As(err, &moved) { // 跳到另一类接口或 404 不清零 need_permission 计数
 		d.refusals.succeed(class)
 		if pace != nil {
 			pace.Succeeded()
 		}
 		return err
+	}
+	if errors.Is(err, ErrPermission) {
+		if !d.permissions.deny(class, object) {
+			return err
+		}
+		d.HTTP.CloseIdleConnections()
+		wrapped := &throttledPermissionError{
+			message: fmt.Sprintf("豆瓣 15 分钟内连续 %d 个不同条目返回需要登录，最近一个: %v", permissionLimit, err),
+			cause:   err,
+		}
+		if pace != nil {
+			return &PausedError{Name: pace.Name, Until: pace.Pause(pauseFor, wrapped), Cause: wrapped}
+		}
+		return wrapped
 	}
 	if !errors.Is(err, ErrThrottled) {
 		return err // 网络错误、解析失败这些和限流无关，也不算成功，不改节奏
@@ -1169,11 +1301,19 @@ func (e *doubanError) flagged() bool {
 	return e.code == 1309 || strings.Contains(e.msg+" "+e.body, "ip_rate_limit")
 }
 
-// throttled 表示这个回答是在限流：IP 被标记，429、418、403（403 还要再分辨是不是个别对象，见 ambiguous），
-// 或者错误名里带 rate_limit（豆瓣限流常常用 400）。
+// permissionRequired 表示豆瓣要求登录后才能访问这个条目（HTTP 403 need_permission，code 1000）。
+func (e *doubanError) permissionRequired() bool {
+	return e.status == http.StatusForbidden && (e.code == 1000 || e.msg == "need_permission")
+}
+
+// throttled 表示这个回答是在限流：IP 被标记，429、418、其他 403（还要再分辨是不是个别对象，见 ambiguous），
+// 或者错误名里带 rate_limit（豆瓣限流常常用 400）。need_permission 不算限流。
 func (e *doubanError) throttled() bool {
 	if e.flagged() || e.saysRateLimit() {
 		return true
+	}
+	if e.permissionRequired() {
+		return false
 	}
 	switch e.status {
 	case http.StatusTooManyRequests, http.StatusTeapot, http.StatusForbidden:
@@ -1182,15 +1322,18 @@ func (e *doubanError) throttled() bool {
 	return false
 }
 
-// ambiguous 表示分不清是在限流我们，还是这个对象本身就不让看：403，又没说是限流（比如 need_permission）。
+// ambiguous 表示分不清是在限流我们，还是这个对象本身就不让看：非 need_permission 的 403，又没说是限流。
 // 这种按 refusalState 的办法分辨；明说了 rate_limit 的 403 直接算限流。
 func (e *doubanError) ambiguous() bool {
-	return e.status == http.StatusForbidden && !e.saysRateLimit() && !e.flagged()
+	return e.status == http.StatusForbidden && !e.saysRateLimit() && !e.flagged() && !e.permissionRequired()
 }
 
 func (e *doubanError) saysRateLimit() bool { return strings.Contains(e.msg+" "+e.body, "rate_limit") }
 
 func (e *doubanError) Unwrap() error {
+	if e.permissionRequired() {
+		return ErrPermission
+	}
 	if e.throttled() {
 		return ErrThrottled
 	}
