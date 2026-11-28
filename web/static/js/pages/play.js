@@ -765,10 +765,11 @@ v.addEventListener('progress', () => {
   if (!v.duration || !v.buffered.length) return;
   bar.style.setProperty('--buf', ((v.buffered.end(v.buffered.length - 1) / v.duration) * 100).toFixed(1) + '%');
 });
-v.addEventListener('ended', () => {
+function finishEpisode() {
   saveProgress({ ended: true, keepalive: true });
   if (state.next && prefs.autoNext && !state.nextDismissed) goEpisode(state.next);
-});
+}
+v.addEventListener('ended', finishEpisode);
 
 // 第一次开始播放时提醒：资源站常在视频里插博彩、贷款广告。
 v.addEventListener('playing', () => {
@@ -963,15 +964,30 @@ function offerNotAd(candidate) {
   setTimeout(() => { if (ads.prompt === 'undo') hideAdBox(); }, 8000);
 }
 
+/**
+ * 跳过一段广告，返回是不是片尾广告。
+ * 片尾广告后面没有正片，跳过去还会落回广告里（自动跳过会每一帧重跳一次；手动跳过会停在最后半秒的广告上缓冲）。
+ * 这种情况停在正片最后一帧、不露出广告画面，直接当作这一集播完。
+ */
+function skipAd(candidate) {
+  const target = afterAd(candidate);
+  const tail = target < candidate.end - 0.3;
+  if (!tail) { v.currentTime = target; return false; }
+  v.pause();
+  v.currentTime = Math.max(0, candidate.start - 0.1);
+  finishEpisode();
+  return true;
+}
+
 function checkAds(t) {
   if (!ads.candidates.length) return;
   const candidate = ads.candidates.find((c) => t >= c.start && t < c.end - 0.3);
   if (!candidate) { if (ads.prompt && ads.prompt !== 'line' && ads.prompt !== 'undo') hideAdBox(); return; }
   const confirmed = candidate.status === 'confirmed' || ads.yes.has(candidate.hex);
   if (confirmed && ads.enabled && !ads.undone.has(candidate.hex)) {
-    v.currentTime = afterAd(candidate);
-    adBox.replaceChildren(h('span', { text: `已跳过 ${Math.round(candidate.dur)} 秒广告` }),
-      h('button', { type: 'button', text: '撤销', onclick: () => { ads.undone.add(candidate.hex); v.currentTime = candidate.start; offerNotAd(candidate); } }));
+    const tail = skipAd(candidate);
+    adBox.replaceChildren(h('span', { text: tail ? `已跳过片尾 ${Math.round(candidate.dur)} 秒广告` : `已跳过 ${Math.round(candidate.dur)} 秒广告` }),
+      h('button', { type: 'button', text: '撤销', onclick: () => { ads.undone.add(candidate.hex); v.currentTime = candidate.start; if (tail) v.play().catch(() => {}); offerNotAd(candidate); } }));
     adBox.hidden = false;
     ads.prompt = null;
     setTimeout(() => { if (!ads.prompt) hideAdBox(); }, 5000);
@@ -982,7 +998,7 @@ function checkAds(t) {
   ads.asked.add(candidate.hex);
   ads.prompt = candidate.hex;
   adBox.replaceChildren(h('span', { text: '这一段是广告吗？' }),
-    h('button', { type: 'button', text: '是，跳过', onclick: () => { vote(candidate.hex, 'confirm'); ads.yes.add(candidate.hex); v.currentTime = afterAd(candidate); hideAdBox(); } }),
+    h('button', { type: 'button', text: '是，跳过', onclick: () => { vote(candidate.hex, 'confirm'); ads.yes.add(candidate.hex); hideAdBox(); skipAd(candidate); } }),
     h('button', { type: 'button', text: '不是', onclick: () => { vote(candidate.hex, 'reject'); hideAdBox(); } }),
     h('button', { type: 'button', 'aria-label': '关闭', text: '×', onclick: hideAdBox }));
   adBox.hidden = false;
